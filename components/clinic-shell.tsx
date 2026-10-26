@@ -3,6 +3,7 @@
 import { useActionState, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { ArrowLeft, PanelLeftClose, PanelLeftOpen, Plus, Search } from "lucide-react";
 import { sendMessage, type FormState } from "@/app/clinics/actions";
 import { botGreeting } from "@/lib/bot-greeting";
@@ -274,6 +275,12 @@ export function ClinicShell({
   const createButtonRef = useRef<HTMLButtonElement>(null);
 
   const active = chats.find((chat) => chat.id === activeChatId) ?? null;
+  const router = useRouter();
+  useEffect(() => {
+    if (!activeChatId || agendaOpen || patientsOpen || settingsOpen) return;
+    const timer = window.setInterval(() => router.refresh(), 3000);
+    return () => window.clearInterval(timer);
+  }, [activeChatId, agendaOpen, patientsOpen, settingsOpen, router]);
   const initial = (email.trim()[0] || "?").toUpperCase();
   const showPanel = agendaOpen || patientsOpen || settingsOpen || Boolean(active);
   const selectedListId = settingsOpen
@@ -393,7 +400,7 @@ export function ClinicShell({
         }`}
       >
         <div
-          className={`flex items-center gap-2 px-4 pt-4 pb-2 ${railClosed ? "md:justify-center md:px-2" : ""}`}
+          className={`relative flex items-center gap-2 px-4 pt-4 pb-2 ${railClosed ? "md:justify-center md:px-2" : ""}`}
         >
           <div className={railClosed ? "contents md:hidden" : "contents"}>
           <ClinicSwitcher
@@ -409,7 +416,7 @@ export function ClinicShell({
               }
             }}
           />
-          <div className="relative">
+          <div>
             <button
               ref={createButtonRef}
               type="button"

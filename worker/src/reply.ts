@@ -26,16 +26,15 @@ export async function replyToTurn(apiKey: string, turn: Turn): Promise<string> {
     throw new Error("The chat has no message to answer");
   }
 
-  const response = await fetch("https://api.x.ai/v1/chat/completions", {
+  const response = await fetch("https://api.mistral.ai/v1/chat/completions", {
     method: "POST",
     headers: {
       authorization: `Bearer ${apiKey}`,
       "content-type": "application/json",
     },
     body: JSON.stringify({
-      model: process.env.XAI_MODEL?.trim() || "grok-4.7",
-      max_completion_tokens: 800,
-      search_parameters: { mode: "off" },
+      model: process.env.MISTRAL_MODEL?.trim() || "ministral-3b-2512",
+      max_tokens: 800,
       messages: [
         {
           role: "system",
@@ -54,7 +53,7 @@ export async function replyToTurn(apiKey: string, turn: Turn): Promise<string> {
   });
 
   if (!response.ok) {
-    throw new Error(`Grok request failed (${response.status})`);
+    throw new Error(`Mistral request failed (${response.status})`);
   }
 
   const payload = (await response.json()) as {
@@ -62,7 +61,7 @@ export async function replyToTurn(apiKey: string, turn: Turn): Promise<string> {
   };
   const content = payload.choices?.[0]?.message?.content;
   if (typeof content !== "string" || content.trim() === "") {
-    throw new Error("Grok returned an empty reply");
+    throw new Error("Mistral returned an empty reply");
   }
   return content.trim().slice(0, 4000);
 }

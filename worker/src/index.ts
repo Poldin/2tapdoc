@@ -1,3 +1,4 @@
+import http from "node:http";
 import os from "node:os";
 import crypto from "node:crypto";
 import type pg from "pg";
@@ -9,13 +10,29 @@ let running = true;
 let wakeWait: (() => void) | null = null;
 
 const databaseUrl = process.env.DATABASE_URL;
-const apiKey = process.env.XAI_API_KEY;
+const apiKey = process.env.MISTRAL_API_KEY;
 if (!databaseUrl || !apiKey) {
-  console.error("DATABASE_URL and XAI_API_KEY are required");
+  console.error("DATABASE_URL and MISTRAL_API_KEY are required");
   process.exit(1);
 }
 
 const workerId = `${os.hostname()}-${process.pid}-${crypto.randomUUID().slice(0, 8)}`.slice(0, 80);
+
+const port = Number(process.env.PORT);
+if (port) {
+  http
+    .createServer((request, response) => {
+      const path = request.url?.split("?")[0];
+      if (path === "/" || path === "/health") {
+        response.writeHead(200, { "content-type": "text/plain" });
+        response.end("ok");
+        return;
+      }
+      response.writeHead(404);
+      response.end();
+    })
+    .listen(port, "0.0.0.0");
+}
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
