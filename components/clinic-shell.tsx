@@ -8,7 +8,7 @@ import { ArrowLeft, PanelLeftClose, PanelLeftOpen, Plus, Search } from "lucide-r
 import { sendMessage, type CreatedChat, type FormState } from "@/app/clinics/actions";
 import { botGreeting } from "@/lib/bot-greeting";
 import { AgendaListItem, agendaListId } from "@/components/agenda-list-item";
-import { AgendaView, type AgendaLane } from "@/components/agenda-view";
+import { AgendaView, type AgendaAppointment, type AgendaLane } from "@/components/agenda-view";
 import { PatientsListItem, patientsListId } from "@/components/patients-list-item";
 import { PatientPage } from "@/components/patient-page";
 import { PatientsView } from "@/components/patients-view";
@@ -223,6 +223,7 @@ export function ClinicShell({
   hasEvents,
   agendaOpen,
   lanes,
+  appointments = [],
   patientsOpen,
   patients,
   selectedPatient,
@@ -249,6 +250,7 @@ export function ClinicShell({
   hasEvents: boolean;
   agendaOpen: boolean;
   lanes: AgendaLane[];
+  appointments?: AgendaAppointment[];
   patientsOpen: boolean;
   patients: PatientRecord[];
   selectedPatient: PatientRecord | null;
@@ -787,7 +789,7 @@ export function ClinicShell({
         ) : showPatients ? (
           <PatientsView clinicId={clinicId} patients={patients} canWrite={canWritePatients} />
         ) : showAgenda ? (
-          <AgendaView clinicId={clinicId} lanes={lanes} />
+          <AgendaView clinicId={clinicId} lanes={lanes} appointments={appointments} />
         ) : active ? (
         <>
         <ChatTitle

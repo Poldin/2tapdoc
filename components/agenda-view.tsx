@@ -9,6 +9,17 @@ export type AgendaLane = {
   name: string;
 };
 
+export type AgendaAppointment = {
+  id: string;
+  title: string | null;
+  note: string | null;
+  startsAt: string;
+  endsAt: string;
+  doctorIds: string[];
+  objectIds: string[];
+  patientNames: string[];
+};
+
 const hourHeight = 56;
 const minColumnWidth = 176;
 const timeGutter = 56;
@@ -290,7 +301,15 @@ function EquipePicker({
   );
 }
 
-export function AgendaView({ clinicId, lanes }: { clinicId: string; lanes: AgendaLane[] }) {
+export function AgendaView({
+  clinicId,
+  lanes,
+  appointments = [],
+}: {
+  clinicId: string;
+  lanes: AgendaLane[];
+  appointments?: AgendaAppointment[];
+}) {
   const [day, setDay] = useState(() => startOfDay(new Date()));
   const [month, setMonth] = useState(() => startOfMonth(new Date()));
   const [panel, setPanel] = useState<"month" | "equipe" | null>(null);
@@ -460,9 +479,64 @@ export function AgendaView({ clinicId, lanes }: { clinicId: string; lanes: Agend
               ))}
               <div className="absolute right-0 bottom-0 left-0 border-t border-line" />
               <div className="absolute inset-0 flex">
-                {(columns.length > 0 ? columns : [{ id: "empty", kind: "specialist" as const, name: "" }]).map((lane) => (
-                  <div key={lane.id} className="min-w-[11rem] flex-1 border-l border-line" />
-                ))}
+                {(columns.length > 0 ? columns : [{ id: "empty", kind: "specialist" as const, name: "" }]).map((lane) => {
+                  const dayStartMs = day.getTime();
+                  const dayEndMs = addDays(day, 1).getTime();
+                  const laneItems =
+                    lane.id === "empty"
+                      ? []
+                      : appointments.filter((app) => {
+                          const assigned =
+                            lane.kind === "specialist"
+                              ? app.doctorIds.includes(lane.id)
+                              : app.objectIds.includes(lane.id);
+                          if (!assigned) return false;
+                          const startMs = Date.parse(app.startsAt);
+                          const endMs = Date.parse(app.endsAt);
+                          return startMs < dayEndMs && endMs > dayStartMs;
+                        });
+
+                  return (
+                    <div key={lane.id} className="relative min-w-[11rem] flex-1 border-l border-line">
+                      {laneItems.map((app) => {
+                        const startMs = Math.max(Date.parse(app.startsAt), dayStartMs);
+                        const endMs = Math.min(Date.parse(app.endsAt), dayEndMs);
+                        const startMin = (startMs - dayStartMs) / 60_000;
+                        const durationMin = Math.max(15, (endMs - startMs) / 60_000);
+                        const top = (startMin / (24 * 60)) * (24 * hourHeight);
+                        const height = (durationMin / (24 * 60)) * (24 * hourHeight);
+                        const timeRange = `${new Intl.DateTimeFormat("it-IT", {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        }).format(new Date(app.startsAt))} – ${new Intl.DateTimeFormat("it-IT", {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        }).format(new Date(app.endsAt))}`;
+                        const heading =
+                          app.patientNames.length > 0
+                            ? app.patientNames.join(", ")
+                            : app.title || "Appuntamento";
+                        const subtitle =
+                          app.patientNames.length > 0 && app.title ? app.title : app.note;
+
+                        return (
+                          <div
+                            key={`${lane.id}-${app.id}`}
+                            style={{ top: `${top}px`, height: `${height}px` }}
+                            className="absolute right-1 left-1 z-10 overflow-hidden rounded-xl border border-teal/30 bg-teal/15 px-2 py-1 text-xs leading-tight text-ink"
+                            title={`${timeRange} · ${heading}${subtitle ? ` — ${subtitle}` : ""}`}
+                          >
+                            <p className="truncate font-medium">{heading}</p>
+                            <p className="truncate text-[11px] text-muted">
+                              {timeRange}
+                              {subtitle ? ` · ${subtitle}` : ""}
+                            </p>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })}
               </div>
               {isToday ? (
                 <div

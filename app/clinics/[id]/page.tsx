@@ -1,6 +1,6 @@
 import { cookies } from "next/headers";
 import { notFound, redirect } from "next/navigation";
-import { type AgendaLane } from "@/components/agenda-view";
+import { type AgendaAppointment, type AgendaLane } from "@/components/agenda-view";
 import { ClinicShell, type BotMark, type ChatListItem, type ChatMessage } from "@/components/clinic-shell";
 import { asPatient, type PatientRecord } from "@/lib/patients";
 import { type ClinicAsset, type ClinicMember, type ClinicRole, type Specialist } from "@/components/settings-view";
@@ -319,8 +319,9 @@ export default async function ClinicPage({
     }
   }
   let lanes: AgendaLane[] = [];
+  let agendaAppointments: AgendaAppointment[] = [];
   if (agendaOpen) {
-    const [{ data: doctors }, { data: objects }] = await Promise.all([
+    const [{ data: doctors }, { data: objects }, { data: appointmentRows }] = await Promise.all([
       supabase
         .from("doctors")
         .select("id, given_name, family_name")
@@ -329,6 +330,13 @@ export default async function ClinicPage({
         .order("family_name")
         .order("given_name"),
       supabase.from("clinical_objects").select("id, name").eq("clinic_id", id).order("name"),
+      supabase
+        .from("appointments")
+        .select(
+          "id, title, note, starts_at, ends_at, appointment_doctors(doctor_id), appointment_objects(clinical_object_id), appointment_patients(patients(given_name, family_name))",
+        )
+        .eq("clinic_id", id)
+        .order("starts_at"),
     ]);
     lanes = [
       ...((doctors ?? []) as { id: string; given_name: string; family_name: string }[]).map((doctor) => ({
@@ -342,6 +350,39 @@ export default async function ClinicPage({
         name: object.name.trim(),
       })),
     ];
+    agendaAppointments = (
+      (appointmentRows ?? []) as {
+        id: string;
+        title: string | null;
+        note: string | null;
+        starts_at: string;
+        ends_at: string;
+        appointment_doctors: { doctor_id: string }[] | null;
+        appointment_objects: { clinical_object_id: string }[] | null;
+        appointment_patients:
+          | {
+              patients:
+                | { given_name: string; family_name: string }
+                | { given_name: string; family_name: string }[]
+                | null;
+            }[]
+          | null;
+      }[]
+    ).map((row) => ({
+      id: row.id,
+      title: row.title,
+      note: row.note,
+      startsAt: row.starts_at,
+      endsAt: row.ends_at,
+      doctorIds: (row.appointment_doctors ?? []).map((item) => item.doctor_id),
+      objectIds: (row.appointment_objects ?? []).map((item) => item.clinical_object_id),
+      patientNames: (row.appointment_patients ?? []).flatMap((item) => {
+        const patient = Array.isArray(item.patients) ? item.patients[0] : item.patients;
+        if (!patient) return [];
+        const full = `${patient.given_name} ${patient.family_name}`.replace(/\s+/g, " ").trim();
+        return full ? [full] : [];
+      }),
+    }));
   }
 
   const list: ChatListItem[] = chats.map(({ id: chatId, title, color, emoji, preview, activityAt, bot }) => ({
@@ -373,6 +414,7 @@ export default async function ClinicPage({
       hasEvents={active?.hasEvents ?? false}
       agendaOpen={agendaOpen}
       lanes={lanes}
+      appointments={agendaAppointments}
       patientsOpen={patientsOpen}
       patients={patients}
       selectedPatient={selectedPatient}

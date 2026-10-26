@@ -1,6 +1,38 @@
+import { createMistral } from "@ai-sdk/mistral";
+import { generateText, stepCountIs, tool } from "ai";
+import type pg from "pg";
+import { z } from "zod";
+import {
+  cancelServerAlerts,
+  listServerAlerts,
+  scheduleServerAlerts,
+} from "./alerts.js";
+import {
+  botCreateAppointments,
+  botCreatePatients,
+  botDeleteAppointments,
+  botListAppointments,
+  botSearchPatients,
+  botUpdateAppointments,
+} from "./db.js";
+
 export type TurnMessage = {
   role: "user" | "assistant";
   content: string;
+};
+
+export type ClinicDoctor = {
+  id: string;
+  name: string;
+  specialization: string | null;
+  active: boolean;
+};
+
+export type ClinicObject = {
+  id: string;
+  name: string;
+  kind: string;
+  description: string | null;
 };
 
 export type Turn = {
@@ -8,61 +40,357 @@ export type Turn = {
   botId: string;
   botName: string;
   chatId: string;
-  memoBody: string | null;
+  clinicId: string;
+  clinicName: string;
+  permissions: string[];
+  doctors: ClinicDoctor[];
+  clinicalObjects: ClinicObject[];
+  alertPrompt: string | null;
   messages: TurnMessage[];
 };
 
-const modelTimeoutMs = 25_000;
+const modelTimeoutMs = 45_000;
 
-export async function replyToTurn(apiKey: string, turn: Turn): Promise<string> {
+function formatRomeClock(now: Date): string {
+  const formatter = new Intl.DateTimeFormat("it-IT", {
+    timeZone: "Europe/Rome",
+    weekday: "long",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    timeZoneName: "longOffset",
+  });
+  return `${formatter.format(now)} (ISO UTC: ${now.toISOString()})`;
+}
+
+function buildSystemPrompt(turn: Turn, now: Date): string {
+  const doctorsList =
+    turn.doctors.length > 0
+      ? turn.doctors
+          .map(
+            (d) =>
+              `- ${d.name} (id: ${d.id}${d.specialization ? `, spec: ${d.specialization}` : ""}${d.active ? "" : ", non attivo"})`,
+          )
+          .join("\n")
+      : "Nessuno specialista configurato o visibile.";
+
+  const objectsList =
+    turn.clinicalObjects.length > 0
+      ? turn.clinicalObjects
+          .map(
+            (o) =>
+              `- ${o.name} (id: ${o.id}, tipo: ${o.kind}${o.description ? `, info: ${o.description}` : ""})`,
+          )
+          .join("\n")
+      : "Nessuna stanza o oggetto clinico configurato o visibile.";
+
+  return [
+    `Sei ${turn.botName}, un agente operativo di 2tapdoc nella clinica "${turn.clinicName}".`,
+    `Data e ora attuali (fuso Europe/Rome): ${formatRomeClock(now)}.`,
+    "Rispondi sempre in italiano, in modo breve, preciso e concreto.",
+    "Puoi usare Markdown semplice (grassetto, elenchi puntati, a capo). Niente HTML, niente tabelle larghe.",
+    "Non mostrare mai gli UUID interni all'utente a meno che non te li chieda esplicitamente: usa sempre i nomi di medici, stanze e pazienti.",
+    "",
+    "### Risorse della clinica (Specialisti / Dottori):",
+    doctorsList,
+    "",
+    "### Risorse della clinica (Stanze e Oggetti clinici):",
+    objectsList,
+    "",
+    "### Regole operative per i Tool:",
+    "- **Agenda**:",
+    "  - Ogni appuntamento può coinvolgere **uno o più dottori** (`doctorIds`), **una o più stanze/oggetti clinici** (`clinicalObjectIds`) e **uno o più pazienti** (`patientIds`). Almeno un dottore o un oggetto clinico è obbligatorio.",
+    "  - Con `createAppointments` puoi creare **uno o più appuntamenti in blocco** in una sola chiamata.",
+    "  - Con `updateAppointments` puoi modificare **uno o più appuntamenti in blocco** (orari, titolo, nota, dottori, oggetti clinici, pazienti). Prima di modificare o cancellare, se non conosci gli ID degli appuntamenti, cercali con `listAppointments`.",
+    "  - Con `deleteAppointments` puoi eliminare **uno o più appuntamenti in blocco** passando i loro ID.",
+    "  - Quando l'utente nomina un paziente, cercalo prima con `searchPatients` per collegare il suo `patientId`; se non esiste e hai i permessi, puoi crearlo con `createPatients` o indicarlo nel titolo.",
+    "  - Tutte le date/orari passati ai tool devono essere in formato ISO 8601 completo di offset (es. `2026-10-27T09:30:00+01:00`).",
+    "- **Alert del Server / Container**:",
+    "  - Usa `setServerAlerts` per programmare uno o più alert/sveglie direttamente nel container del server (specificando `delaySeconds` per attese relative come 'tra 5 minuti' oppure `firesAtIso` per un orario preciso).",
+    "  - Quando l'alert scatta sul server, ti risveglierà automaticamente con l'istruzione salvata in `prompt` e potrai scrivere in questa chat (anche controllando l'agenda in quel momento).",
+    "  - Usa `listServerAlerts` e `cancelServerAlerts` per vedere o annullare gli alert attivi nel server.",
+    "- Non inventare mai di aver eseguito un'azione se non hai chiamato il relativo tool con successo. Se manca un dato essenziale (es. quale medico o quale orario), chiedilo.",
+  ].join("\n");
+}
+
+export async function replyToTurn(
+  apiKey: string,
+  client: pg.Client,
+  workerId: string,
+  turn: Turn,
+): Promise<string> {
   const messages: TurnMessage[] = [...turn.messages];
-  if (turn.memoBody) {
+  if (turn.alertPrompt) {
     messages.push({
       role: "user",
-      content: `Promemoria scaduto:\n${turn.memoBody}`,
+      content: `[ALERT SERVER SCATTATO NEL CONTAINER]\nEsegui questa istruzione o avvisa in chat:\n${turn.alertPrompt}`,
     });
   }
   if (!messages.some((message) => message.role === "user")) {
     throw new Error("The chat has no message to answer");
   }
 
-  const response = await fetch("https://api.mistral.ai/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      authorization: `Bearer ${apiKey}`,
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      model: process.env.MISTRAL_MODEL?.trim() || "mistral-small-latest",
-      max_tokens: 800,
-      messages: [
-        {
-          role: "system",
-          content: [
-            `Sei ${turn.botName}, un bot di 2tapdoc dentro una clinica.`,
-            "Rispondi in italiano, breve e concreto.",
-            "Puoi usare Markdown semplice (grassetto, elenchi puntati, a capo): la chat lo renderizza. Niente HTML, niente tabelle lunghe.",
-            "Puoi solo scrivere in questa chat.",
-            "Non dire di aver prenotato, modificato o letto schede che non compaiono nel testo della conversazione: quelle azioni non sono ancora collegate.",
-            "Se manca un dato, chiedilo.",
-          ].join(" "),
-        },
-        ...messages,
-      ],
+  const now = new Date();
+  const perms = new Set(turn.permissions);
+  const canReadAgenda = perms.has("agenda.read") || perms.has("agenda.write");
+  const canWriteAgenda = perms.has("agenda.write");
+  const canReadPatients = perms.has("patients.read") || perms.has("patients.write");
+  const canWritePatients = perms.has("patients.write");
+
+  const tools = {
+    setServerAlerts: tool({
+      description:
+        "Imposta uno o più alert/timer direttamente nel container del server. Allo scadere, il server risveglia il bot in questa chat con il prompt indicato.",
+      inputSchema: z.object({
+        alerts: z
+          .array(
+            z.object({
+              delaySeconds: z
+                .number()
+                .int()
+                .positive()
+                .optional()
+                .describe("Secondi di attesa da adesso (usa questo per richieste tipo 'tra 10 minuti')"),
+              firesAtIso: z
+                .string()
+                .optional()
+                .describe("Data e ora ISO 8601 con offset (es. 2026-10-27T15:00:00+01:00)"),
+              prompt: z
+                .string()
+                .min(1)
+                .max(2000)
+                .describe("Cosa deve dire o controllare il bot quando scatta l'alert sul server"),
+            }),
+          )
+          .min(1)
+          .max(20),
+      }),
+      execute: async ({ alerts }) => {
+        const baseNow = Date.now();
+        const parsed = alerts.map((item) => {
+          let target: Date;
+          if (typeof item.delaySeconds === "number" && item.delaySeconds > 0) {
+            target = new Date(baseNow + item.delaySeconds * 1000);
+          } else if (item.firesAtIso) {
+            target = new Date(item.firesAtIso);
+            if (Number.isNaN(target.getTime())) {
+              throw new Error(`Data non valida: ${item.firesAtIso}`);
+            }
+          } else {
+            throw new Error("Specifica delaySeconds oppure firesAtIso per ogni alert");
+          }
+          return { firesAt: target, prompt: item.prompt };
+        });
+
+        const created = scheduleServerAlerts(turn.botId, turn.chatId, turn.clinicId, parsed);
+        return { scheduled: created };
+      },
     }),
-    signal: AbortSignal.timeout(modelTimeoutMs),
+
+    listServerAlerts: tool({
+      description: "Elenca tutti gli alert attualmente programmati nel container del server per questa chat.",
+      inputSchema: z.object({}),
+      execute: async () => {
+        return { alerts: listServerAlerts(turn.botId, turn.chatId) };
+      },
+    }),
+
+    cancelServerAlerts: tool({
+      description: "Annulla uno o più alert attivi nel container del server tramite i loro ID.",
+      inputSchema: z.object({
+        alertIds: z.array(z.string().uuid()).min(1).describe("Lista degli ID degli alert da cancellare"),
+      }),
+      execute: async ({ alertIds }) => {
+        const cancelled = cancelServerAlerts(turn.botId, turn.chatId, alertIds);
+        return { cancelledCount: cancelled.length, cancelled };
+      },
+    }),
+
+    listAppointments: tool({
+      description:
+        "Legge gli appuntamenti dell'agenda in un intervallo di tempo, con filtro opzionale per dottori, stanze/oggetti clinici o pazienti.",
+      inputSchema: z.object({
+        fromIso: z.string().describe("Inizio intervallo in formato ISO 8601 (es. 2026-10-27T00:00:00+01:00)"),
+        toIso: z.string().describe("Fine intervallo in formato ISO 8601 (es. 2026-10-28T00:00:00+01:00)"),
+        doctorIds: z.array(z.string().uuid()).optional().describe("Filtra per ID di uno o più dottori"),
+        clinicalObjectIds: z
+          .array(z.string().uuid())
+          .optional()
+          .describe("Filtra per ID di una o più stanze/oggetti clinici"),
+        patientIds: z.array(z.string().uuid()).optional().describe("Filtra per ID di uno o più pazienti"),
+      }),
+      execute: async ({ fromIso, toIso, doctorIds, clinicalObjectIds, patientIds }) => {
+        const items = await botListAppointments(client, workerId, turn.id, {
+          from: fromIso,
+          to: toIso,
+          doctorIds,
+          clinicalObjectIds,
+          patientIds,
+        });
+        return { appointments: items };
+      },
+    }),
+
+    createAppointments: tool({
+      description:
+        "Crea uno o più appuntamenti nell'agenda della clinica. Ogni appuntamento può avere più dottori (doctorIds), più stanze/oggetti clinici (clinicalObjectIds) e più pazienti (patientIds).",
+      inputSchema: z.object({
+        appointments: z
+          .array(
+            z.object({
+              startsAt: z.string().describe("Inizio appuntamento ISO 8601 (es. 2026-10-27T10:00:00+01:00)"),
+              endsAt: z.string().describe("Fine appuntamento ISO 8601 (es. 2026-10-27T11:00:00+01:00)"),
+              title: z.string().max(120).optional().describe("Titolo o motivo della visita"),
+              note: z.string().max(1000).optional().describe("Note operative opzionali"),
+              doctorIds: z
+                .array(z.string().uuid())
+                .default([])
+                .describe("ID dei dottori assegnati all'appuntamento (anche più di uno)"),
+              clinicalObjectIds: z
+                .array(z.string().uuid())
+                .default([])
+                .describe("ID delle stanze o oggetti clinici assegnati (anche più di uno)"),
+              patientIds: z
+                .array(z.string().uuid())
+                .default([])
+                .describe("ID dei pazienti assegnati all'appuntamento"),
+            }),
+          )
+          .min(1)
+          .max(50),
+      }),
+      execute: async ({ appointments }) => {
+        const created = await botCreateAppointments(client, workerId, turn.id, appointments);
+        return { created };
+      },
+    }),
+
+    updateAppointments: tool({
+      description:
+        "Modifica uno o più appuntamenti esistenti in blocco (orario di inizio/fine, titolo, note, lista di dottori, lista di stanze/oggetti clinici, lista di pazienti).",
+      inputSchema: z.object({
+        updates: z
+          .array(
+            z.object({
+              appointmentId: z.string().uuid().describe("ID dell'appuntamento da modificare"),
+              startsAt: z.string().optional().describe("Nuovo inizio ISO 8601"),
+              endsAt: z.string().optional().describe("Nuova fine ISO 8601"),
+              title: z.string().max(120).nullable().optional().describe("Nuovo titolo (o null per rimuoverlo)"),
+              note: z.string().max(1000).nullable().optional().describe("Nuova nota (o null per rimuoverla)"),
+              doctorIds: z
+                .array(z.string().uuid())
+                .optional()
+                .describe("Nuova lista completa di ID dottori per questo appuntamento"),
+              clinicalObjectIds: z
+                .array(z.string().uuid())
+                .optional()
+                .describe("Nuova lista completa di ID stanze/oggetti clinici per questo appuntamento"),
+              patientIds: z
+                .array(z.string().uuid())
+                .optional()
+                .describe("Nuova lista completa di ID pazienti per questo appuntamento"),
+            }),
+          )
+          .min(1)
+          .max(50),
+      }),
+      execute: async ({ updates }) => {
+        const updated = await botUpdateAppointments(client, workerId, turn.id, updates);
+        return { updated };
+      },
+    }),
+
+    deleteAppointments: tool({
+      description: "Elimina uno o più appuntamenti dall'agenda tramite i loro ID.",
+      inputSchema: z.object({
+        appointmentIds: z
+          .array(z.string().uuid())
+          .min(1)
+          .max(50)
+          .describe("Lista degli ID degli appuntamenti da eliminare"),
+      }),
+      execute: async ({ appointmentIds }) => {
+        const deleted = await botDeleteAppointments(client, workerId, turn.id, appointmentIds);
+        return { deleted };
+      },
+    }),
+
+    searchPatients: tool({
+      description: "Cerca pazienti nella clinica per nome, cognome, codice fiscale, telefono o email.",
+      inputSchema: z.object({
+        query: z
+          .string()
+          .optional()
+          .describe("Testo da cercare (nome, cognome, telefono, CF). Lascia vuoto per vedere i primi pazienti."),
+      }),
+      execute: async ({ query }) => {
+        const patients = await botSearchPatients(client, workerId, turn.id, query);
+        return { patients };
+      },
+    }),
+
+    createPatients: tool({
+      description: "Crea uno o più nuovi pazienti nell'anagrafica della clinica.",
+      inputSchema: z.object({
+        patients: z
+          .array(
+            z.object({
+              givenName: z.string().min(1).max(80).describe("Nome di battesimo"),
+              familyName: z.string().min(1).max(80).describe("Cognome"),
+              dateOfBirth: z
+                .string()
+                .regex(/^\d{4}-\d{2}-\d{2}$/)
+                .optional()
+                .describe("Data di nascita YYYY-MM-DD"),
+              fiscalCode: z.string().max(16).optional(),
+              phone: z.string().max(40).optional(),
+              email: z.string().max(120).optional(),
+              note: z.string().max(2000).optional(),
+            }),
+          )
+          .min(1)
+          .max(20),
+      }),
+      execute: async ({ patients }) => {
+        const created = await botCreatePatients(client, workerId, turn.id, patients);
+        return { created };
+      },
+    }),
+  };
+
+  type ToolName = keyof typeof tools;
+  const activeTools: ToolName[] = [
+    "setServerAlerts",
+    "listServerAlerts",
+    "cancelServerAlerts",
+  ];
+  if (canReadAgenda) activeTools.push("listAppointments");
+  if (canWriteAgenda) {
+    activeTools.push("createAppointments", "updateAppointments", "deleteAppointments");
+  }
+  if (canReadPatients) activeTools.push("searchPatients");
+  if (canWritePatients) activeTools.push("createPatients");
+
+  const mistral = createMistral({ apiKey });
+  const modelName = process.env.MISTRAL_MODEL?.trim() || "mistral-small-latest";
+
+  const result = await generateText({
+    model: mistral(modelName),
+    system: buildSystemPrompt(turn, now),
+    messages,
+    tools,
+    activeTools,
+    stopWhen: stepCountIs(6),
+    maxOutputTokens: 1000,
+    abortSignal: AbortSignal.timeout(modelTimeoutMs),
   });
 
-  if (!response.ok) {
-    throw new Error(`Mistral request failed (${response.status})`);
-  }
-
-  const payload = (await response.json()) as {
-    choices?: { message?: { content?: unknown } }[];
-  };
-  const content = payload.choices?.[0]?.message?.content;
-  if (typeof content !== "string" || content.trim() === "") {
+  const content = result.text.trim();
+  if (!content) {
     throw new Error("Mistral returned an empty reply");
   }
-  return content.trim().slice(0, 4000);
+  return content.slice(0, 4000);
 }

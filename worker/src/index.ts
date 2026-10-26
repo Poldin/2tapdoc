@@ -2,10 +2,17 @@ import http from "node:http";
 import os from "node:os";
 import crypto from "node:crypto";
 import type pg from "pg";
-import { claimTurn, completeTurn, failTurn, openDatabase } from "./db.js";
+import { claimDueServerAlerts } from "./alerts.js";
+import {
+  claimTurn,
+  completeTurn,
+  enqueueBotAlert,
+  failTurn,
+  openDatabase,
+} from "./db.js";
 import { replyToTurn } from "./reply.js";
 
-const idleMs = 2000;
+const idleMs = 1500;
 let running = true;
 let wakeWait: (() => void) | null = null;
 
@@ -38,6 +45,19 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function flushDueAlerts(client: pg.Client) {
+  const due = claimDueServerAlerts();
+  for (const alert of due) {
+    try {
+      await enqueueBotAlert(client, workerId, alert.botId, alert.chatId, alert.prompt);
+      console.log("fired server alert", alert.id, alert.chatId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "alert enqueue failed";
+      console.error("could not enqueue server alert", alert.id, message);
+    }
+  }
+}
+
 async function waitForWork(client: pg.Client) {
   const onNotify = () => wakeWait?.();
   client.on("notification", onNotify);
@@ -68,6 +88,8 @@ async function runSession() {
 
   try {
     while (running) {
+      await flushDueAlerts(client);
+
       const turn = await claimTurn(client, workerId);
       if (!turn) {
         await waitForWork(client);
@@ -76,7 +98,7 @@ async function runSession() {
 
       console.log("claimed", turn.id);
       try {
-        const body = await replyToTurn(apiKey as string, turn);
+        const body = await replyToTurn(apiKey as string, client, workerId, turn);
         await completeTurn(client, workerId, turn.id, body);
         console.log("finished", turn.id);
       } catch (error) {
