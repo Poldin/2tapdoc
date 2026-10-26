@@ -61,7 +61,7 @@ export function CreateMenu({
       ref={panelRef}
       role="menu"
       aria-label="Crea"
-      className="absolute top-12 right-0 z-20 w-64 rounded-2xl border border-line bg-paper p-1 shadow-sm"
+      className="absolute top-full right-4 z-20 w-64 max-w-[calc(100%-2rem)] rounded-2xl border border-line bg-paper p-1 shadow-sm"
     >
       {options.map((option) => (
         <button
