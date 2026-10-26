@@ -158,6 +158,54 @@ export async function botSearchPatients(
   return result.rows[0]?.patients ?? [];
 }
 
+export async function botRenameClinic(
+  client: pg.Client,
+  workerId: string,
+  jobId: string,
+  name: string,
+): Promise<unknown> {
+  const result = await client.query<{ clinic: unknown }>(
+    "select private.bot_rename_clinic($1, $2, $3) as clinic",
+    [workerId, jobId, name],
+  );
+  return result.rows[0]?.clinic ?? null;
+}
+
+export async function botRenameSelf(
+  client: pg.Client,
+  workerId: string,
+  jobId: string,
+  name: string,
+): Promise<unknown> {
+  const result = await client.query<{ bot: unknown }>(
+    "select private.bot_rename_self($1, $2, $3) as bot",
+    [workerId, jobId, name],
+  );
+  return result.rows[0]?.bot ?? null;
+}
+
+export async function botUpdatePatients(
+  client: pg.Client,
+  workerId: string,
+  jobId: string,
+  items: Array<{
+    patientId: string;
+    givenName?: string;
+    familyName?: string;
+    dateOfBirth?: string | null;
+    fiscalCode?: string | null;
+    phone?: string | null;
+    email?: string | null;
+    note?: string | null;
+  }>,
+): Promise<unknown> {
+  const result = await client.query<{ updated: unknown }>(
+    "select private.bot_update_patients($1, $2, $3::jsonb) as updated",
+    [workerId, jobId, JSON.stringify(items)],
+  );
+  return result.rows[0]?.updated ?? [];
+}
+
 export async function botCreatePatients(
   client: pg.Client,
   workerId: string,

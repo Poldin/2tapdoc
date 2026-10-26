@@ -12,8 +12,11 @@ import {
   botCreatePatients,
   botDeleteAppointments,
   botListAppointments,
+  botRenameClinic,
+  botRenameSelf,
   botSearchPatients,
   botUpdateAppointments,
+  botUpdatePatients,
 } from "./db.js";
 
 export type TurnMessage = {
@@ -165,8 +168,15 @@ function buildSystemPrompt(turn: Turn, now: Date): string {
     "  - Con `createAppointments` puoi creare **uno o più appuntamenti in blocco** in una sola chiamata.",
     "  - Con `updateAppointments` puoi modificare **uno o più appuntamenti in blocco** (orari, titolo, nota, dottori, oggetti clinici, pazienti). Prima di modificare o cancellare, se non conosci gli ID degli appuntamenti, cercali con `listAppointments`.",
     "  - Con `deleteAppointments` puoi eliminare **uno o più appuntamenti in blocco** passando i loro ID.",
-    "  - Quando l'utente nomina un paziente, cercalo prima con `searchPatients` per collegare il suo `patientId`; se non esiste e hai i permessi, puoi crearlo con `createPatients` o indicarlo nel titolo.",
+    "  - Quando un appuntamento riguarda un paziente, usa l'id trovato con `searchPatients`.",
+    "- **Pazienti**:",
+    "  - Con `searchPatients` leggi l'anagrafica: nome, cognome, data di nascita, codice fiscale, telefono, email e note.",
+    "  - Con `createPatients` puoi creare uno o più pazienti, se hai il permesso di scrittura.",
+    "  - Con `updatePatients` puoi modificare uno o più pazienti già esistenti. Prima cercali per avere l'id. I campi che non indichi restano invariati; passa null per svuotare data di nascita, codice fiscale, telefono, email o nota.",
     "  - Tutte le date/orari passati ai tool devono essere in formato ISO 8601 completo di offset (es. `2026-10-28T09:30:00+01:00`) e, accanto a ciascuna data, il nome del giorno in italiano nel fuso Europe/Rome (es. `mercoledì`). Il nome deve coincidere con la data: se non coincide, il tool rifiuta la chiamata.",
+    "- **Clinica e identità**:",
+    "  - Con `renameClinic` puoi cambiare il nome della clinica, se hai il permesso. Il nome sta entro 80 caratteri.",
+    "  - Con `renameSelf` puoi cambiare il tuo nome, entro 40 caratteri. Il titolo di questa chat viene allineato al nuovo nome.",
     "- **Alert del Server / Container**:",
     "  - Usa `setServerAlerts` per programmare uno o più alert/sveglie direttamente nel container del server (specificando `delaySeconds` per attese relative come 'tra 5 minuti' oppure `firesAtIso` per un orario preciso).",
     "  - Quando l'alert scatta sul server, ti risveglierà automaticamente con l'istruzione salvata in `prompt` e potrai scrivere in questa chat (anche controllando l'agenda in quel momento).",
@@ -198,6 +208,7 @@ export async function replyToTurn(
   const canWriteAgenda = perms.has("agenda.write");
   const canReadPatients = perms.has("patients.read") || perms.has("patients.write");
   const canWritePatients = perms.has("patients.write");
+  const canRenameClinic = perms.has("clinic.update");
 
   const tools = {
     setServerAlerts: tool({
@@ -429,7 +440,8 @@ export async function replyToTurn(
     }),
 
     searchPatients: tool({
-      description: "Cerca pazienti nella clinica per nome, cognome, codice fiscale, telefono o email.",
+      description:
+        "Legge i pazienti della clinica. Cerca per nome, cognome, codice fiscale, telefono o email; senza testo restituisce i primi pazienti.",
       inputSchema: z.object({
         query: z
           .string()
@@ -439,6 +451,29 @@ export async function replyToTurn(
       execute: async ({ query }) => {
         const patients = await botSearchPatients(client, workerId, turn.id, query);
         return { patients };
+      },
+    }),
+
+    renameClinic: tool({
+      description: "Rinomina la clinica di questa chat. Il nome sta entro 80 caratteri.",
+      inputSchema: z.object({
+        name: z.string().min(1).max(80).describe("Nuovo nome della clinica"),
+      }),
+      execute: async ({ name }) => {
+        const clinic = await botRenameClinic(client, workerId, turn.id, name);
+        return { clinic };
+      },
+    }),
+
+    renameSelf: tool({
+      description:
+        "Cambia il tuo nome di agente e allinea il titolo di questa chat. Il nome sta entro 40 caratteri.",
+      inputSchema: z.object({
+        name: z.string().min(1).max(40).describe("Nuovo nome dell'agente"),
+      }),
+      execute: async ({ name }) => {
+        const bot = await botRenameSelf(client, workerId, turn.id, name);
+        return { bot };
       },
     }),
 
@@ -469,6 +504,56 @@ export async function replyToTurn(
         return { created };
       },
     }),
+
+    updatePatients: tool({
+      description:
+        "Modifica uno o più pazienti esistenti: nome, cognome, data di nascita, codice fiscale, telefono, email e note.",
+      inputSchema: z.object({
+        updates: z
+          .array(
+            z
+              .object({
+                patientId: z.string().uuid().describe("ID del paziente da modificare"),
+                givenName: z.string().min(1).max(80).optional().describe("Nuovo nome"),
+                familyName: z.string().min(1).max(80).optional().describe("Nuovo cognome"),
+                dateOfBirth: z
+                  .string()
+                  .regex(/^\d{4}-\d{2}-\d{2}$/)
+                  .nullable()
+                  .optional()
+                  .describe("Nuova data di nascita YYYY-MM-DD, oppure null per rimuoverla"),
+                fiscalCode: z.string().max(16).nullable().optional().describe("Nuovo codice fiscale, oppure null"),
+                phone: z.string().max(40).nullable().optional().describe("Nuovo telefono, oppure null"),
+                email: z.string().max(120).nullable().optional().describe("Nuova email, oppure null"),
+                note: z.string().max(2000).nullable().optional().describe("Nuova nota, oppure null"),
+              })
+              .superRefine((value, ctx) => {
+                const fields = [
+                  value.givenName,
+                  value.familyName,
+                  value.dateOfBirth,
+                  value.fiscalCode,
+                  value.phone,
+                  value.email,
+                  value.note,
+                ];
+                if (fields.every((field) => field === undefined)) {
+                  ctx.addIssue({
+                    code: "custom",
+                    message: "Indica almeno un campo da modificare.",
+                    path: ["patientId"],
+                  });
+                }
+              }),
+          )
+          .min(1)
+          .max(20),
+      }),
+      execute: async ({ updates }) => {
+        const updated = await botUpdatePatients(client, workerId, turn.id, updates);
+        return { updated };
+      },
+    }),
   };
 
   type ToolName = keyof typeof tools;
@@ -476,13 +561,15 @@ export async function replyToTurn(
     "setServerAlerts",
     "listServerAlerts",
     "cancelServerAlerts",
+    "renameSelf",
   ];
+  if (canRenameClinic) activeTools.push("renameClinic");
   if (canReadAgenda) activeTools.push("listAppointments");
   if (canWriteAgenda) {
     activeTools.push("createAppointments", "updateAppointments", "deleteAppointments");
   }
   if (canReadPatients) activeTools.push("searchPatients");
-  if (canWritePatients) activeTools.push("createPatients");
+  if (canWritePatients) activeTools.push("createPatients", "updatePatients");
 
   const mistral = createMistral({ apiKey });
   const modelName = process.env.MISTRAL_MODEL?.trim() || "mistral-medium-latest";
