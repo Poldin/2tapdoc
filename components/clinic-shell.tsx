@@ -160,6 +160,28 @@ function fitField(field: HTMLTextAreaElement) {
   field.style.height = `${field.scrollHeight}px`;
 }
 
+function draftKey(clinicId: string, chatId: string) {
+  return `composer:${clinicId}:${chatId}`;
+}
+
+function readDraft(clinicId: string, chatId: string) {
+  try {
+    return sessionStorage.getItem(draftKey(clinicId, chatId)) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function writeDraft(clinicId: string, chatId: string, value: string) {
+  try {
+    const key = draftKey(clinicId, chatId);
+    if (value) sessionStorage.setItem(key, value);
+    else sessionStorage.removeItem(key);
+  } catch {
+    return;
+  }
+}
+
 function MessageComposer({ clinicId, chatId }: { clinicId: string; chatId: string }) {
   const formRef = useRef<HTMLFormElement>(null);
   const fieldRef = useRef<HTMLTextAreaElement>(null);
@@ -171,9 +193,15 @@ function MessageComposer({ clinicId, chatId }: { clinicId: string; chatId: strin
   useLayoutEffect(() => {
     const field = fieldRef.current;
     if (!field) return;
-    if (state.sent) formRef.current?.reset();
+    if (state.sent) {
+      writeDraft(clinicId, chatId, "");
+      formRef.current?.reset();
+    } else {
+      const saved = readDraft(clinicId, chatId);
+      if (saved) field.value = saved;
+    }
     fitField(field);
-  }, [state.sent]);
+  }, [state.sent, clinicId, chatId]);
 
   return (
     <form ref={formRef} action={action} className="flex flex-col gap-2 px-4 pb-3">
@@ -188,7 +216,11 @@ function MessageComposer({ clinicId, chatId }: { clinicId: string; chatId: strin
           placeholder="Scrivi qui..."
           aria-label="Messaggio"
           disabled={pending}
-          onInput={(event) => fitField(event.currentTarget)}
+          onInput={(event) => {
+            const field = event.currentTarget;
+            writeDraft(clinicId, chatId, field.value);
+            fitField(field);
+          }}
           onKeyDown={(event) => {
             if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
             event.preventDefault();
@@ -843,7 +875,7 @@ export function ClinicShell({
           </div>
         </div>
 
-        <MessageComposer clinicId={clinicId} chatId={active.id} />
+        <MessageComposer key={active.id} clinicId={clinicId} chatId={active.id} />
         </>
         ) : null}
       </section>
