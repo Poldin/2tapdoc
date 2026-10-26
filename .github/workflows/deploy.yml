@@ -1,6 +1,7 @@
 name: Deploy to Scaleway Registry
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - master
@@ -28,3 +29,18 @@ jobs:
           context: worker
           push: true
           tags: rg.it-mil.scw.eu/two-tap-bots/worker:latest
+
+      - name: Update and Deploy Scaleway Serverless Container
+        env:
+          SCW_SECRET_KEY: ${{ secrets.SCW_SECRET_KEY }}
+        run: |
+          curl -fsSL -X PATCH \
+            -H "X-Auth-Token: ${SCW_SECRET_KEY}" \
+            -H "Content-Type: application/json" \
+            -d '{"environment_variables":{"MISTRAL_MODEL":"mistral-small-latest"},"redeploy":true}' \
+            "https://api.scaleway.com/containers/v1/regions/fr-par/containers/3b4cd4a1-f79b-4b62-b085-e70947d557a9"
+          curl -fsSL -X POST \
+            -H "X-Auth-Token: ${SCW_SECRET_KEY}" \
+            -H "Content-Type: application/json" \
+            -d '{}' \
+            "https://api.scaleway.com/containers/v1/regions/fr-par/containers/3b4cd4a1-f79b-4b62-b085-e70947d557a9/deploy"
