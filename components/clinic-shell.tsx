@@ -5,7 +5,7 @@ import { flushSync } from "react-dom";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, PanelLeftClose, PanelLeftOpen, Plus, Search } from "lucide-react";
-import { sendMessage, type FormState } from "@/app/clinics/actions";
+import { sendMessage, type CreatedChat, type FormState } from "@/app/clinics/actions";
 import { botGreeting } from "@/lib/bot-greeting";
 import { AgendaListItem, agendaListId } from "@/components/agenda-list-item";
 import { AgendaView, type AgendaLane } from "@/components/agenda-view";
@@ -28,6 +28,7 @@ import {
   placeByRecency,
   type ClinicRecency,
 } from "@/lib/clinic-recency";
+import { createClient } from "@/lib/supabase/client";
 import { BotDialog, type BotDraft } from "@/components/bot-dialog";
 import { BotGlyph, ChannelMark } from "@/components/mark";
 import { ChatDialog, type ChatDraft } from "@/components/chat-dialog";
@@ -36,6 +37,7 @@ import { ChatTitle } from "@/components/chat-title";
 import { ClinicSwitcher, type ClinicOption } from "@/components/clinic-switcher";
 import { CreateMenu } from "@/components/create-menu";
 import { SearchDialog } from "@/components/search-dialog";
+import { Markdown } from "@/components/markdown";
 
 export type ChatListItem = {
   id: string;
@@ -125,14 +127,22 @@ function formatClock(iso: string) {
 }
 
 function formatActivity(iso: string) {
-  const date = new Date(iso);
-  const sameDay = date.toDateString() === new Date().toDateString();
-  return new Intl.DateTimeFormat(
-    "it-IT",
-    sameDay
-      ? { hour: "2-digit", minute: "2-digit" }
-      : { day: "numeric", month: "short" },
-  ).format(date);
+  const day = formatDay(iso);
+  if (day === "oggi") return formatClock(iso);
+  if (day === "ieri") return "ieri";
+  return new Intl.DateTimeFormat("it-IT", { day: "numeric", month: "short" }).format(new Date(iso));
+}
+
+function listItem(chat: CreatedChat): ChatListItem {
+  return {
+    id: chat.id,
+    title: chat.title,
+    color: chat.color,
+    emoji: chat.emoji,
+    preview: chat.preview,
+    activityAt: chat.activityAt,
+    bot: chat.bot,
+  };
 }
 
 function chatLabel(title: string | null) {
@@ -274,35 +284,45 @@ export function ClinicShell({
   const shownRecency = recencyTokenSeen === recencyToken ? recency : initialRecency;
   const createButtonRef = useRef<HTMLButtonElement>(null);
 
-  const active = chats.find((chat) => chat.id === activeChatId) ?? null;
   const router = useRouter();
-  useEffect(() => {
-    if (!activeChatId || agendaOpen || patientsOpen || settingsOpen) return;
-    const timer = window.setInterval(() => router.refresh(), 3000);
-    return () => window.clearInterval(timer);
-  }, [activeChatId, agendaOpen, patientsOpen, settingsOpen, router]);
   const initial = (email.trim()[0] || "?").toUpperCase();
-  const showPanel = agendaOpen || patientsOpen || settingsOpen || Boolean(active);
-  const selectedListId = settingsOpen
-    ? settingsListId
-    : patientsOpen
-      ? patientsListId
-      : agendaOpen
-        ? agendaListId
-        : active?.id ?? null;
   const listRef = useRef<HTMLUListElement>(null);
   const threadRef = useRef<HTMLDivElement>(null);
   const badgeRef = useRef<HTMLParagraphElement>(null);
-  const openedDay = messages.at(-1) ? formatDay(messages.at(-1)!.createdAt) : "oggi";
   const [dayChat, setDayChat] = useState(activeChatId);
-  const [dayLabel, setDayLabel] = useState(openedDay);
-  if (dayChat !== activeChatId) {
-    setDayChat(activeChatId);
-    setDayLabel(openedDay);
-  }
+  const [dayLabel, setDayLabel] = useState(() =>
+    messages.at(-1) ? formatDay(messages.at(-1)!.createdAt) : "oggi",
+  );
   const [focusBox, setFocusBox] = useState<{ top: number; height: number } | null>(null);
   const [slide, setSlide] = useState(false);
-  const rows = placeByRecency(chats, [
+  const [added, setAdded] = useState<ChatListItem[]>([]);
+  const [removed, setRemoved] = useState<string[]>([]);
+  const [opened, setOpened] = useState<{
+    id: string;
+    messages: ChatMessage[];
+    hasEvents: boolean;
+    from: string | null;
+  } | null>(null);
+  let openThread = opened;
+  if (openThread && activeChatId !== openThread.from) {
+    openThread = null;
+    setOpened(null);
+  }
+  const serverIds = new Set(chats.map((chat) => chat.id));
+  const hidden = new Set(removed.filter((id) => serverIds.has(id)));
+  const visibleChats = [
+    ...added.filter((chat) => !serverIds.has(chat.id) && !removed.includes(chat.id)),
+    ...chats.filter((chat) => !hidden.has(chat.id)),
+  ].sort((a, b) => b.activityAt.localeCompare(a.activityAt));
+  const viewingChat = Boolean(openThread);
+  const showAgenda = agendaOpen && !viewingChat;
+  const showPatients = patientsOpen && !viewingChat;
+  const showSettings = settingsOpen && !viewingChat;
+  const shownActiveId = openThread?.id ?? activeChatId;
+  const shownMessages = openThread?.messages ?? messages;
+  const shownHasEvents = openThread?.hasEvents ?? hasEvents;
+  const active = visibleChats.find((chat) => chat.id === shownActiveId) ?? null;
+  const rows = placeByRecency(visibleChats, [
     { id: agendaListId, at: shownRecency.agendaAt },
     { id: patientsListId, at: shownRecency.patientsAt },
     { id: settingsListId, at: shownRecency.settingsAt },
@@ -310,7 +330,113 @@ export function ClinicShell({
   const visibleKey = rows
     .map((row) => (row.kind === "chat" ? row.chat.id : row.id))
     .join(" ");
+  const showPanel = showAgenda || showPatients || showSettings || Boolean(active);
+  const selectedListId = openThread
+    ? openThread.id
+    : showSettings
+      ? settingsListId
+      : showPatients
+        ? patientsListId
+        : showAgenda
+          ? agendaListId
+          : active?.id ?? null;
+  const openedDay = shownMessages.at(-1) ? formatDay(shownMessages.at(-1)!.createdAt) : "oggi";
+  if (dayChat !== shownActiveId) {
+    setDayChat(shownActiveId);
+    setDayLabel(openedDay);
+  }
   const railClosed = navCollapsed && showPanel;
+  const refreshPage = useRef(router.refresh);
+  refreshPage.current = router.refresh;
+
+  useEffect(() => {
+    if (opened || !activeChatId || agendaOpen || patientsOpen || settingsOpen) return;
+
+    const supabase = createClient();
+    let timer = 0;
+    let stopped = false;
+    const refresh = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => refreshPage.current(), 50);
+    };
+    const channel = supabase.channel(`clinic:${clinicId}:${activeChatId}`);
+    channel.on(
+      "postgres_changes",
+      {
+        event: "INSERT",
+        schema: "public",
+        table: "chat_events",
+        filter: `chat_id=eq.${activeChatId}`,
+      },
+      refresh,
+    );
+    channel.on(
+      "postgres_changes",
+      {
+        event: "*",
+        schema: "public",
+        table: "chat_clinics",
+        filter: `clinic_id=eq.${clinicId}`,
+      },
+      refresh,
+    );
+    void supabase.auth.getSession().then(({ data }) => {
+      if (stopped) return;
+      const token = data.session?.access_token;
+      const ready = token ? supabase.realtime.setAuth(token) : Promise.resolve();
+      void ready.then(() => {
+        if (!stopped) channel.subscribe();
+      });
+    });
+
+    return () => {
+      stopped = true;
+      window.clearTimeout(timer);
+      void supabase.removeChannel(channel);
+    };
+  }, [opened, activeChatId, agendaOpen, patientsOpen, settingsOpen, clinicId]);
+
+  function onChatCreated(chat: CreatedChat) {
+    const item = listItem(chat);
+    setAdded((current) => [item, ...current.filter((entry) => entry.id !== item.id)]);
+    setRemoved((current) => current.filter((id) => id !== item.id));
+    setOpened({
+      id: chat.id,
+      messages: chat.messages,
+      hasEvents: chat.messages.length > 0,
+      from: activeChatId,
+    });
+    setChannelOpen(false);
+    setChannelDraft(null);
+    setBotOpen(false);
+    setBotDraft(null);
+    setListOpen(false);
+    router.replace(`/clinics/${clinicId}?chat=${chat.id}`, { scroll: false });
+  }
+
+  function onChatRemoved(chatId: string) {
+    setAdded((current) => current.filter((entry) => entry.id !== chatId));
+    setRemoved((current) => (current.includes(chatId) ? current : [...current, chatId]));
+    const currentId = opened?.id ?? activeChatId;
+    if (currentId !== chatId) {
+      if (opened?.id === chatId) setOpened(null);
+      router.refresh();
+      return;
+    }
+    const next = visibleChats.find((chat) => chat.id !== chatId);
+    if (!next) {
+      setOpened(null);
+      router.replace(`/clinics/${clinicId}`, { scroll: false });
+      return;
+    }
+    if (next.id === activeChatId) {
+      setOpened(null);
+      router.refresh();
+      return;
+    }
+    setOpened({ id: next.id, messages: [], hasEvents: true, from: activeChatId });
+    router.replace(`/clinics/${clinicId}?chat=${next.id}`, { scroll: false });
+  }
 
   useLayoutEffect(() => {
     if (localStorage.getItem(navKey) === "collapsed") setNavCollapsed(true);
@@ -377,7 +503,7 @@ export function ClinicShell({
     if (!thread) return;
     thread.scrollTop = thread.scrollHeight;
     syncDayBadge(thread, badgeRef.current, setDayLabel);
-  }, [activeChatId, messages]);
+  }, [shownActiveId, shownMessages]);
 
   useEffect(() => {
     const thread = threadRef.current;
@@ -390,7 +516,7 @@ export function ClinicShell({
       thread.removeEventListener("scroll", sync);
       observer.disconnect();
     };
-  }, [activeChatId, messages]);
+  }, [shownActiveId, shownMessages]);
 
   return (
     <div className="fixed inset-0 flex bg-background text-ink">
@@ -579,7 +705,7 @@ export function ClinicShell({
                         clinicId={clinicId}
                         chatId={chat.id}
                         name={chatName(chat)}
-                        stayOn={active && active.id !== chat.id ? active.id : null}
+                        onRemoved={onChatRemoved}
                         onEdit={() => {
                           setSearchOpen(false);
                           setMenuOpen(false);
@@ -610,7 +736,7 @@ export function ClinicShell({
                 );
             })}
           </ul>
-          {chats.length === 0 ? (
+          {visibleChats.length === 0 ? (
             <p className={`px-2 py-6 text-sm text-muted ${railClosed ? "md:hidden" : ""}`}>
               Nessuna chat o bot. <br /> Premi + per crearli.
             </p>
@@ -642,7 +768,7 @@ export function ClinicShell({
         >
           <ArrowLeft className="h-5 w-5" strokeWidth={2} />
         </button>
-        {settingsOpen ? (
+        {showSettings ? (
           <SettingsView
             clinicId={clinicId}
             clinicName={clinicName}
@@ -656,11 +782,11 @@ export function ClinicShell({
             specialists={specialists}
             assets={assets}
           />
-        ) : patientsOpen && selectedPatient ? (
+        ) : showPatients && selectedPatient ? (
           <PatientPage clinicId={clinicId} patient={selectedPatient} />
-        ) : patientsOpen ? (
+        ) : showPatients ? (
           <PatientsView clinicId={clinicId} patients={patients} canWrite={canWritePatients} />
-        ) : agendaOpen ? (
+        ) : showAgenda ? (
           <AgendaView clinicId={clinicId} lanes={lanes} />
         ) : active ? (
         <>
@@ -674,8 +800,8 @@ export function ClinicShell({
 
         <div ref={threadRef} className="thread-scroll flex min-h-0 flex-1 flex-col overflow-y-auto px-4 pt-14 pb-6">
           <div className="mt-auto flex flex-col gap-3">
-          {messages.length > 0 ? (
-            threadEntries(messages).map((entry) =>
+          {shownMessages.length > 0 ? (
+            threadEntries(shownMessages).map((entry) =>
               entry.kind === "day" ? (
                 <div key={entry.key} data-day={entry.label} className="self-center">
                   <span className="text-sm text-date">{entry.label}</span>
@@ -687,25 +813,30 @@ export function ClinicShell({
                     entry.message.mine ? "self-end" : "self-start"
                   }`}
                 >
-                  <p
-                    className={`whitespace-pre-line rounded-2xl px-4 py-3 text-sm leading-6 ${
+                  <div
+                    className={`rounded-2xl px-4 py-3 text-sm leading-6 ${
                       entry.message.mine ? "bg-ink text-paper" : "bg-paper"
                     }`}
                   >
-                    {active.bot && entry.message.botId === active.bot.id ? <BotLead bot={active.bot} /> : null}
-                    {entry.message.body}
-                  </p>
+                    <Markdown
+                      source={entry.message.body}
+                      lead={
+                        active.bot && entry.message.botId === active.bot.id ? (
+                          <BotLead bot={active.bot} />
+                        ) : undefined
+                      }
+                    />
+                  </div>
                   <time dateTime={entry.message.createdAt} className="px-1 text-xs text-muted">
                     {formatClock(entry.message.createdAt)}
                   </time>
                 </div>
               ),
             )
-          ) : hasEvents || !active.bot ? null : (
-            <p className="max-w-[36rem] self-start whitespace-pre-line rounded-2xl bg-paper px-4 py-3 text-sm leading-6">
-              <BotLead bot={active.bot} />
-              {botGreeting}
-            </p>
+          ) : shownHasEvents || !active.bot ? null : (
+            <div className="max-w-[36rem] self-start rounded-2xl bg-paper px-4 py-3 text-sm leading-6">
+              <Markdown source={botGreeting} lead={<BotLead bot={active.bot} />} />
+            </div>
           )}
           </div>
         </div>
@@ -716,20 +847,22 @@ export function ClinicShell({
       </section>
       ) : null}
       <ChatDialog
-        key={channelDraft?.chatId ?? "create-chat"}
+        key={channelDraft ? `chat-${channelDraft.chatId}` : channelOpen ? "chat-create-open" : "chat-create-closed"}
         open={channelOpen}
         clinicId={clinicId}
         draft={channelDraft}
+        onCreated={onChatCreated}
         onClose={() => {
           setChannelOpen(false);
           setChannelDraft(null);
         }}
       />
       <BotDialog
-        key={botDraft?.botId ?? "create-bot"}
+        key={botDraft ? `bot-${botDraft.botId}` : botOpen ? "bot-create-open" : "bot-create-closed"}
         open={botOpen}
         clinicId={clinicId}
         draft={botDraft}
+        onCreated={onChatCreated}
         onClose={() => {
           setBotOpen(false);
           setBotDraft(null);

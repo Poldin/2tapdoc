@@ -11,7 +11,18 @@ import { listedPermissions, roleSlug } from "@/lib/permissions";
 const uuidPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-export type FormState = { error?: string; sent?: number };
+export type CreatedChat = {
+  id: string;
+  title: string | null;
+  color: string;
+  emoji: string;
+  preview: string | null;
+  activityAt: string;
+  bot: { id: string; name: string; color: string; emoji: string } | null;
+  messages: { id: string; body: string; createdAt: string; mine: boolean; botId: string | null }[];
+};
+
+export type FormState = { error?: string; sent?: number; created?: CreatedChat; removed?: string };
 
 async function requireUser() {
   const user = await getSessionUser();
@@ -104,7 +115,19 @@ export async function createChat(
     await supabase.from("chats").delete().eq("id", data.id);
     return { error: "Non è stato possibile aprire la chat." };
   }
-  redirect(`/clinics/${clinicId}?chat=${data.id}`);
+  revalidatePath(`/clinics/${clinicId}`);
+  return {
+    created: {
+      id: data.id,
+      title: title || null,
+      color,
+      emoji,
+      preview: null,
+      activityAt: new Date().toISOString(),
+      bot: null,
+      messages: [],
+    },
+  };
 }
 
 async function clinicMember(clinicId: string, userId: string) {
@@ -204,7 +227,28 @@ export async function createBot(
   });
   if (greetError) return { error: "Il bot è entrato, ma il saluto no." };
 
-  redirect(`/clinics/${clinicId}?chat=${chat.id}`);
+  const activityAt = new Date().toISOString();
+  revalidatePath(`/clinics/${clinicId}`);
+  return {
+    created: {
+      id: chat.id,
+      title: name,
+      color,
+      emoji: "speechbubble",
+      preview: botGreeting.replace(/\s+/g, " "),
+      activityAt,
+      bot: { id: bot.id, name, color, emoji },
+      messages: [
+        {
+          id: `${chat.id}-greeting`,
+          body: botGreeting,
+          createdAt: activityAt,
+          mine: false,
+          botId: bot.id,
+        },
+      ],
+    },
+  };
 }
 
 export async function updateChat(
@@ -311,13 +355,11 @@ export async function addBot(
 export async function deleteChat(
   clinicId: string,
   chatId: string,
-  stayOn: string | null,
   _state: FormState,
   _formData: FormData,
 ): Promise<FormState> {
   const user = await requireUser();
   if (!uuidPattern.test(clinicId) || !uuidPattern.test(chatId)) return { error: "Chat non valida." };
-  if (stayOn && !uuidPattern.test(stayOn)) return { error: "Chat non valida." };
   if (!(await clinicMember(clinicId, user.id))) return { error: "Non fai parte di questo studio." };
   if (!(await chatInClinic(clinicId, chatId))) return { error: "Questa chat non è in questa clinica." };
 
@@ -325,8 +367,8 @@ export async function deleteChat(
   const { data, error } = await supabase.from("chats").delete().eq("id", chatId).select("id");
   if (error || !data?.length) return { error: "Non è stato possibile eliminare la chat." };
 
-  if (stayOn && stayOn !== chatId) redirect(`/clinics/${clinicId}?chat=${stayOn}`);
-  redirect(`/clinics/${clinicId}`);
+  revalidatePath(`/clinics/${clinicId}`);
+  return { removed: chatId };
 }
 
 export async function sendMessage(

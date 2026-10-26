@@ -10,15 +10,15 @@ export function ChatMenu({
   clinicId,
   chatId,
   name,
-  stayOn,
   onEdit,
+  onRemoved,
 }: {
   selected: boolean;
   clinicId: string;
   chatId: string;
   name: string;
-  stayOn: string | null;
   onEdit: () => void;
+  onRemoved: (chatId: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -78,8 +78,8 @@ export function ChatMenu({
           clinicId={clinicId}
           chatId={chatId}
           name={name}
-          stayOn={stayOn}
           onClose={() => setConfirming(false)}
+          onRemoved={onRemoved}
         />
       ) : null}
     </div>

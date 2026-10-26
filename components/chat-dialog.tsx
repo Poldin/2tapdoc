@@ -1,7 +1,7 @@
 "use client";
 
-import { useActionState, useEffect, useState } from "react";
-import { createChat, updateChat, type FormState } from "@/app/clinics/actions";
+import { useActionState, useEffect, useRef, useState } from "react";
+import { createChat, updateChat, type CreatedChat, type FormState } from "@/app/clinics/actions";
 import { ChannelMark } from "@/components/mark";
 import { channelSymbols, markColors } from "@/lib/marks";
 
@@ -17,11 +17,13 @@ export function ChatDialog({
   clinicId,
   draft = null,
   onClose,
+  onCreated,
 }: {
   open: boolean;
   clinicId: string;
   draft?: ChatDraft | null;
   onClose: () => void;
+  onCreated?: (chat: CreatedChat) => void;
 }) {
   const [color, setColor] = useState(draft?.color ?? "teal");
   const [emoji, setEmoji] = useState(draft?.emoji ?? "speechbubble");
@@ -29,6 +31,13 @@ export function ChatDialog({
     draft ? updateChat.bind(null, clinicId, draft.chatId) : createChat.bind(null, clinicId),
     {},
   );
+  const onCreatedRef = useRef(onCreated);
+  onCreatedRef.current = onCreated;
+
+  useEffect(() => {
+    if (!state.created) return;
+    onCreatedRef.current?.(state.created);
+  }, [state.created]);
 
   useEffect(() => {
     if (!open) return;

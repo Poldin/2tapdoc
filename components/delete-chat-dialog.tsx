@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useEffect } from "react";
+import { useActionState, useEffect, useRef } from "react";
 import { deleteChat, type FormState } from "@/app/clinics/actions";
 
 export function DeleteChatDialog({
@@ -8,20 +8,27 @@ export function DeleteChatDialog({
   clinicId,
   chatId,
   name,
-  stayOn,
   onClose,
+  onRemoved,
 }: {
   open: boolean;
   clinicId: string;
   chatId: string;
   name: string;
-  stayOn: string | null;
   onClose: () => void;
+  onRemoved: (chatId: string) => void;
 }) {
   const [state, action, pending] = useActionState<FormState, FormData>(
-    deleteChat.bind(null, clinicId, chatId, stayOn),
+    deleteChat.bind(null, clinicId, chatId),
     {},
   );
+  const onRemovedRef = useRef(onRemoved);
+  onRemovedRef.current = onRemoved;
+
+  useEffect(() => {
+    if (!state.removed) return;
+    onRemovedRef.current(state.removed);
+  }, [state.removed]);
 
   useEffect(() => {
     if (!open) return;

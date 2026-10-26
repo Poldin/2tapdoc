@@ -1,4 +1,3 @@
-import { Suspense } from "react";
 import { cookies } from "next/headers";
 import { notFound, redirect } from "next/navigation";
 import { type AgendaLane } from "@/components/agenda-view";
@@ -9,6 +8,9 @@ import { type ClinicOption } from "@/components/clinic-switcher";
 import { getSessionUser } from "@/lib/auth/session";
 import { clinicRecencyFromCookie, leadingPlace } from "@/lib/clinic-recency";
 import { createClient } from "@/lib/supabase/server";
+import { markdownToPlainText } from "@/lib/markdown";
+
+export const instant = false;
 
 const uuidPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -52,26 +54,7 @@ function soleBot(seats: SeatRow[] | null) {
   return bots.length === 1 ? bots[0] : null;
 }
 
-export default function ClinicPage({
-  params,
-  searchParams,
-}: {
-  params: Promise<{ id: string }>;
-  searchParams: Promise<{ chat?: string; view?: string; patient?: string }>;
-}) {
-  return (
-    <Suspense
-      fallback={
-        <main className="fixed inset-0 flex items-center px-6">
-        </main>
-      }
-    >
-      <ClinicScreen params={params} searchParams={searchParams} />
-    </Suspense>
-  );
-}
-
-async function ClinicScreen({
+export default async function ClinicPage({
   params,
   searchParams,
 }: {
@@ -136,7 +119,7 @@ async function ClinicScreen({
         title: row.title,
         color: row.color,
         emoji: row.emoji,
-        preview: messages.at(-1)?.body.replace(/\s+/g, " ") ?? null,
+        preview: messages.length > 0 ? markdownToPlainText(messages[messages.length - 1].body) : null,
         activityAt: last?.created_at ?? row.created_at,
         bot: soleBot(row.chat_participants),
         hasEvents: events.length > 0,

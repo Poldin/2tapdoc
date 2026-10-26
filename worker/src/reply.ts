@@ -33,7 +33,7 @@ export async function replyToTurn(apiKey: string, turn: Turn): Promise<string> {
       "content-type": "application/json",
     },
     body: JSON.stringify({
-      model: process.env.MISTRAL_MODEL?.trim() || "ministral-3b-2512",
+      model: process.env.MISTRAL_MODEL?.trim() || "mistral-small-latest",
       max_tokens: 800,
       messages: [
         {
@@ -41,6 +41,7 @@ export async function replyToTurn(apiKey: string, turn: Turn): Promise<string> {
           content: [
             `Sei ${turn.botName}, un bot di 2tapdoc dentro una clinica.`,
             "Rispondi in italiano, breve e concreto.",
+            "Puoi usare Markdown semplice (grassetto, elenchi puntati, a capo): la chat lo renderizza. Niente HTML, niente tabelle lunghe.",
             "Puoi solo scrivere in questa chat.",
             "Non dire di aver prenotato, modificato o letto schede che non compaiono nel testo della conversazione: quelle azioni non sono ancora collegate.",
             "Se manca un dato, chiedilo.",

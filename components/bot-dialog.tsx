@@ -1,7 +1,7 @@
 "use client";
 
-import { useActionState, useEffect, useState } from "react";
-import { createBot, updateBot, type FormState } from "@/app/clinics/actions";
+import { useActionState, useEffect, useRef, useState } from "react";
+import { createBot, updateBot, type CreatedChat, type FormState } from "@/app/clinics/actions";
 import { BotGlyph } from "@/components/mark";
 import { botFaces, markColors } from "@/lib/marks";
 
@@ -18,11 +18,13 @@ export function BotDialog({
   clinicId,
   draft = null,
   onClose,
+  onCreated,
 }: {
   open: boolean;
   clinicId: string;
   draft?: BotDraft | null;
   onClose: () => void;
+  onCreated?: (chat: CreatedChat) => void;
 }) {
   const [color, setColor] = useState(draft?.color ?? "teal");
   const [emoji, setEmoji] = useState(draft?.emoji ?? "smile");
@@ -30,6 +32,13 @@ export function BotDialog({
     draft ? updateBot.bind(null, clinicId, draft.chatId, draft.botId) : createBot.bind(null, clinicId),
     {},
   );
+  const onCreatedRef = useRef(onCreated);
+  onCreatedRef.current = onCreated;
+
+  useEffect(() => {
+    if (!state.created) return;
+    onCreatedRef.current?.(state.created);
+  }, [state.created]);
 
   useEffect(() => {
     if (!open) return;
