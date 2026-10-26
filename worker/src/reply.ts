@@ -11,6 +11,7 @@ import {
   botCreateAppointments,
   botCreatePatients,
   botDeleteAppointments,
+  botDeletePatients,
   botListAppointments,
   botRenameClinic,
   botRenameSelf,
@@ -169,11 +170,12 @@ function buildSystemPrompt(turn: Turn, now: Date): string {
     "  - Con `updateAppointments` puoi modificare **uno o più appuntamenti in blocco** (orari, titolo, nota, dottori, oggetti clinici, pazienti). Prima di modificare o cancellare, se non conosci gli ID degli appuntamenti, cercali con `listAppointments`.",
     "  - Con `deleteAppointments` puoi eliminare **uno o più appuntamenti in blocco** passando i loro ID.",
     "  - Quando un appuntamento riguarda un paziente, usa l'id trovato con `searchPatients`.",
+    "  - Tutte le date/orari passati ai tool devono essere in formato ISO 8601 completo di offset (es. `2026-10-28T09:30:00+01:00`) e, accanto a ciascuna data, il nome del giorno in italiano nel fuso Europe/Rome (es. `mercoledì`). Il nome deve coincidere con la data: se non coincide, il tool rifiuta la chiamata.",
     "- **Pazienti**:",
     "  - Con `searchPatients` leggi l'anagrafica: nome, cognome, data di nascita, codice fiscale, telefono, email, note e data di creazione del profilo (`createdAt`, sola lettura).",
     "  - Con `createPatients` puoi creare uno o più pazienti, se hai il permesso di scrittura.",
     "  - Con `updatePatients` puoi modificare uno o più pazienti già esistenti. Prima cercali per avere l'id. I campi che non indichi restano invariati; passa null per svuotare data di nascita, codice fiscale, telefono, email o nota.",
-    "  - Tutte le date/orari passati ai tool devono essere in formato ISO 8601 completo di offset (es. `2026-10-28T09:30:00+01:00`) e, accanto a ciascuna data, il nome del giorno in italiano nel fuso Europe/Rome (es. `mercoledì`). Il nome deve coincidere con la data: se non coincide, il tool rifiuta la chiamata.",
+    "  - Con `deletePatients` puoi eliminare uno o più pazienti, ma il sistema non esegue subito. La prima chiamata risponde `confirmation_required`: chiedi conferma citando i nomi e non dire che sono stati eliminati. Solo dopo un messaggio esplicito dell'utente (sì, confermo, procedi) richiama `deletePatients` con gli stessi id. `deleted` significa che l'eliminazione è avvenuta; `cancelled` che l'utente ha rifiutato. La conferma scade dopo 15 minuti.",
     "- **Clinica e identità**:",
     "  - Con `renameClinic` puoi cambiare il nome della clinica, se hai il permesso. Il nome sta entro 80 caratteri.",
     "  - Con `renameSelf` puoi cambiare il tuo nome, entro 40 caratteri. Il titolo di questa chat viene allineato al nuovo nome.",
@@ -554,6 +556,21 @@ export async function replyToTurn(
         return { updated };
       },
     }),
+
+    deletePatients: tool({
+      description:
+        "Chiede l'eliminazione di uno o più pazienti. Non cancella al primo invio: il server risponde confirmation_required finché l'utente, in un messaggio successivo, non conferma. Poi va richiamato con gli stessi id. Un no o un annulla annullano la richiesta.",
+      inputSchema: z.object({
+        patientIds: z
+          .array(z.string().uuid())
+          .min(1)
+          .max(20)
+          .describe("ID dei pazienti da eliminare, gli stessi della conferma in sospeso"),
+      }),
+      execute: async ({ patientIds }) => {
+        return await botDeletePatients(client, workerId, turn.id, patientIds);
+      },
+    }),
   };
 
   type ToolName = keyof typeof tools;
@@ -569,7 +586,7 @@ export async function replyToTurn(
     activeTools.push("createAppointments", "updateAppointments", "deleteAppointments");
   }
   if (canReadPatients) activeTools.push("searchPatients");
-  if (canWritePatients) activeTools.push("createPatients", "updatePatients");
+  if (canWritePatients) activeTools.push("createPatients", "updatePatients", "deletePatients");
 
   const mistral = createMistral({ apiKey });
   const modelName = process.env.MISTRAL_MODEL?.trim() || "mistral-medium-latest";

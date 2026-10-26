@@ -206,6 +206,19 @@ export async function botUpdatePatients(
   return result.rows[0]?.updated ?? [];
 }
 
+export async function botDeletePatients(
+  client: pg.Client,
+  workerId: string,
+  jobId: string,
+  patientIds: string[],
+): Promise<unknown> {
+  const result = await client.query<{ deleted: unknown }>(
+    "select private.bot_delete_patients($1, $2, $3::uuid[]) as deleted",
+    [workerId, jobId, patientIds],
+  );
+  return result.rows[0]?.deleted ?? null;
+}
+
 export async function botCreatePatients(
   client: pg.Client,
   workerId: string,
