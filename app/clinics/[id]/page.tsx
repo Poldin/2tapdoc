@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 import { notFound, redirect } from "next/navigation";
 import { type AgendaAppointment, type AgendaLane } from "@/components/agenda-view";
 import { ClinicShell, type BotMark, type ChatListItem, type ChatMessage } from "@/components/clinic-shell";
+import { type PatientDeletionRequest } from "@/components/patient-deletion-dialog";
 import { asPatient, type PatientRecord } from "@/lib/patients";
 import { type ClinicAsset, type ClinicMember, type ClinicRole, type Specialist } from "@/components/settings-view";
 import { type ClinicOption } from "@/components/clinic-switcher";
@@ -402,6 +403,26 @@ export default async function ClinicPage({
     botId: message.bot_id,
   }));
 
+  const { data: deletionRows } = await supabase
+    .from("bot_confirmations")
+    .select("id, patients")
+    .eq("clinic_id", clinic.id)
+    .eq("status", "pending")
+    .order("created_at");
+  const patientDeletions: PatientDeletionRequest[] = (deletionRows ?? []).flatMap((row) => {
+    const patients = Array.isArray(row.patients)
+      ? row.patients.flatMap((item) => {
+          if (!item || typeof item !== "object") return [];
+          const patient = item as { id?: unknown; fullName?: unknown };
+          if (typeof patient.id !== "string" || typeof patient.fullName !== "string" || !patient.fullName.trim()) {
+            return [];
+          }
+          return [{ id: patient.id, fullName: patient.fullName }];
+        })
+      : [];
+    return patients.length > 0 ? [{ id: row.id, patients }] : [];
+  });
+
   return (
     <ClinicShell
       clinicId={clinic.id}
@@ -430,6 +451,7 @@ export default async function ClinicPage({
       canManageAgenda={canManageAgenda}
       currentUserId={user.id}
       recency={recency}
+      patientDeletions={patientDeletions}
     />
   );
 }

@@ -175,7 +175,7 @@ function buildSystemPrompt(turn: Turn, now: Date): string {
     "  - Con `searchPatients` leggi l'anagrafica: nome, cognome, data di nascita, codice fiscale, telefono, email, note e data di creazione del profilo (`createdAt`, sola lettura).",
     "  - Con `createPatients` puoi creare uno o più pazienti, se hai il permesso di scrittura.",
     "  - Con `updatePatients` puoi modificare uno o più pazienti già esistenti. Prima cercali per avere l'id. I campi che non indichi restano invariati; passa null per svuotare data di nascita, codice fiscale, telefono, email o nota.",
-    "  - Con `deletePatients` puoi eliminare uno o più pazienti, ma il sistema non esegue subito. La prima chiamata risponde `confirmation_required`: chiedi conferma citando i nomi e non dire che sono stati eliminati. Solo dopo un messaggio esplicito dell'utente (sì, confermo, procedi) richiama `deletePatients` con gli stessi id. `deleted` significa che l'eliminazione è avvenuta; `cancelled` che l'utente ha rifiutato. La conferma scade dopo 15 minuti.",
+    "  - Con `deletePatients` puoi proporre l'eliminazione di uno o più pazienti. Il sistema non elimina e non affida a te la conferma: apre un dialog all'utente. La chiamata risponde `awaiting_user`. Non chiedere conferma in chat, non dire che l'eliminazione è avvenuta e non richiamare il tool. Se l'utente conferma, il sistema elimina e ti avvisa; se annulla, ti avvisa che non è stato eliminato nulla.",
     "- **Clinica e identità**:",
     "  - Con `renameClinic` puoi cambiare il nome della clinica, se hai il permesso. Il nome sta entro 80 caratteri.",
     "  - Con `renameSelf` puoi cambiare il tuo nome, entro 40 caratteri. Il titolo di questa chat viene allineato al nuovo nome.",
@@ -559,7 +559,7 @@ export async function replyToTurn(
 
     deletePatients: tool({
       description:
-        "Chiede l'eliminazione di uno o più pazienti. Non cancella al primo invio: il server risponde confirmation_required finché l'utente, in un messaggio successivo, non conferma. Poi va richiamato con gli stessi id. Un no o un annulla annullano la richiesta.",
+        "Propone l'eliminazione di uno o più pazienti. Non cancella: il sistema apre un dialog all'utente e risponde awaiting_user. Non chiedere conferma in chat. L'esito arriva dopo, quando l'utente ha scelto.",
       inputSchema: z.object({
         patientIds: z
           .array(z.string().uuid())

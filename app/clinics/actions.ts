@@ -22,7 +22,13 @@ export type CreatedChat = {
   messages: { id: string; body: string; createdAt: string; mine: boolean; botId: string | null }[];
 };
 
-export type FormState = { error?: string; sent?: number; created?: CreatedChat; removed?: string };
+export type FormState = {
+  error?: string;
+  sent?: number;
+  created?: CreatedChat;
+  removed?: string;
+  decided?: string;
+};
 
 async function requireUser() {
   const user = await getSessionUser();
@@ -419,6 +425,39 @@ export async function sendMessage(
   if (error) return { error: "Non è stato possibile inviare il messaggio." };
   revalidatePath(`/clinics/${clinicId}`);
   return { sent: Date.now() };
+}
+
+export async function decidePatientDeletion(
+  clinicId: string,
+  requestId: string,
+  _state: FormState,
+  formData: FormData,
+): Promise<FormState> {
+  const user = await requireUser();
+  if (!uuidPattern.test(clinicId) || !uuidPattern.test(requestId)) {
+    return { error: "Richiesta non valida." };
+  }
+  if (!(await clinicMember(clinicId, user.id))) {
+    return { error: "Non fai parte di questo studio." };
+  }
+
+  const decision = String(formData.get("decision") ?? "");
+  if (decision !== "confirmed" && decision !== "cancelled") {
+    return { error: "Scelta non valida." };
+  }
+
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("bot_confirmations")
+    .update({ status: decision })
+    .eq("id", requestId)
+    .eq("clinic_id", clinicId)
+    .eq("status", "pending")
+    .select("id");
+
+  if (error || !data?.length) return { error: "La richiesta non è più in attesa." };
+  revalidatePath(`/clinics/${clinicId}`);
+  return { decided: requestId };
 }
 
 function splitPersonName(value: string) {

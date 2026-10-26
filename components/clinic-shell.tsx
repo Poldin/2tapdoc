@@ -11,6 +11,7 @@ import { AgendaListItem, agendaListId } from "@/components/agenda-list-item";
 import { AgendaView, type AgendaAppointment, type AgendaLane } from "@/components/agenda-view";
 import { PatientsListItem, patientsListId } from "@/components/patients-list-item";
 import { PatientPage } from "@/components/patient-page";
+import { PatientDeletionDialog, type PatientDeletionRequest } from "@/components/patient-deletion-dialog";
 import { PatientsView } from "@/components/patients-view";
 import { type PatientRecord } from "@/lib/patients";
 import { SettingsListItem, settingsListId } from "@/components/settings-list-item";
@@ -271,6 +272,7 @@ export function ClinicShell({
   canManageAgenda,
   currentUserId,
   recency: initialRecency,
+  patientDeletions,
 }: {
   clinicId: string;
   clinicName: string;
@@ -298,6 +300,7 @@ export function ClinicShell({
   canManageAgenda: boolean;
   currentUserId: string;
   recency: ClinicRecency;
+  patientDeletions: PatientDeletionRequest[];
 }) {
   const [searchOpen, setSearchOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -382,6 +385,16 @@ export function ClinicShell({
   const railClosed = navCollapsed && showPanel;
   const refreshPage = useRef(router.refresh);
   refreshPage.current = router.refresh;
+  const deletionToken = patientDeletions
+    .map((item) => `${item.id}:${item.patients.map((patient) => patient.id).join(",")}`)
+    .join("|");
+  const [deletions, setDeletions] = useState(patientDeletions);
+  const [seenDeletionToken, setSeenDeletionToken] = useState(deletionToken);
+  if (seenDeletionToken !== deletionToken) {
+    setSeenDeletionToken(deletionToken);
+    setDeletions(patientDeletions);
+  }
+  const pendingDeletion = deletions[0] ?? null;
 
   useEffect(() => {
     if (opened || !activeChatId || agendaOpen || patientsOpen || settingsOpen) return;
@@ -429,6 +442,41 @@ export function ClinicShell({
       void supabase.removeChannel(channel);
     };
   }, [opened, activeChatId, agendaOpen, patientsOpen, settingsOpen, clinicId]);
+
+  useEffect(() => {
+    const supabase = createClient();
+    let timer = 0;
+    let stopped = false;
+    const refresh = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => refreshPage.current(), 50);
+    };
+    const channel = supabase.channel(`clinic-confirmations:${clinicId}`);
+    channel.on(
+      "postgres_changes",
+      {
+        event: "*",
+        schema: "public",
+        table: "bot_confirmations",
+        filter: `clinic_id=eq.${clinicId}`,
+      },
+      refresh,
+    );
+    void supabase.auth.getSession().then(({ data }) => {
+      if (stopped) return;
+      const token = data.session?.access_token;
+      const ready = token ? supabase.realtime.setAuth(token) : Promise.resolve();
+      void ready.then(() => {
+        if (!stopped) channel.subscribe();
+      });
+    });
+
+    return () => {
+      stopped = true;
+      window.clearTimeout(timer);
+      void supabase.removeChannel(channel);
+    };
+  }, [clinicId]);
 
   function onChatCreated(chat: CreatedChat) {
     const item = listItem(chat);
@@ -900,6 +948,15 @@ export function ClinicShell({
         onClose={() => {
           setBotOpen(false);
           setBotDraft(null);
+        }}
+      />
+      <PatientDeletionDialog
+        key={pendingDeletion?.id ?? "no-patient-deletion"}
+        open={Boolean(pendingDeletion)}
+        clinicId={clinicId}
+        request={pendingDeletion}
+        onDecided={(requestId) => {
+          setDeletions((current) => current.filter((item) => item.id !== requestId));
         }}
       />
       <SearchDialog open={searchOpen} onClose={() => setSearchOpen(false)} />
