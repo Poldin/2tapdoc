@@ -1,0 +1,18 @@
+services:
+  - type: worker
+    name: 2tapdoc-bots
+    runtime: node
+    plan: starter
+    region: frankfurt
+    rootDir: worker
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: DATABASE_URL
+        sync: false
+      - key: XAI_API_KEY
+        sync: false
+      - key: XAI_MODEL
+        value: grok-4.7

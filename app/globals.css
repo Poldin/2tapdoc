@@ -1,26 +1,88 @@
 @import "tailwindcss";
+@import "animated-fluent-emojis/style.css";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #f3efe6;
+  --foreground: #1c1915;
+  --paper: #fbf8f3;
+  --ink: #1c1915;
+  --muted: #6f675e;
+  --date: color-mix(in srgb, var(--muted) 46%, var(--paper));
+  --line: #e3dcd0;
+  --teal: #0e6e6b;
+  --teal-ink: #f7fffe;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-paper: var(--paper);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-date: var(--date);
+  --color-line: var(--line);
+  --color-teal: var(--teal);
+  --color-teal-ink: var(--teal-ink);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans), sans-serif;
+}
+
+.mark-glyph {
+  display: block;
+  width: 72%;
+  height: 72%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  flex: none;
+}
+
+.mark-glyph img {
+  max-width: none;
+  max-height: none;
+  height: auto;
+}
+
+.thread-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--muted) 50%, transparent) transparent;
+}
+
+.thread-scroll::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.thread-scroll::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background-color: color-mix(in srgb, var(--muted) 45%, var(--line));
+  background-clip: padding-box;
+}
+
+.composer-field {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--muted) 50%, transparent) transparent;
+}
+
+.composer-field::-webkit-scrollbar {
+  width: 10px;
+}
+
+.composer-field::-webkit-scrollbar-track {
+  margin-block: 12px;
+  background: transparent;
+}
+
+.composer-field::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background-color: color-mix(in srgb, var(--muted) 45%, var(--line));
+  background-clip: padding-box;
 }
