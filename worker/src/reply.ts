@@ -170,7 +170,7 @@ function buildSystemPrompt(turn: Turn, now: Date): string {
     "  - Con `deleteAppointments` puoi eliminare **uno o più appuntamenti in blocco** passando i loro ID.",
     "  - Quando un appuntamento riguarda un paziente, usa l'id trovato con `searchPatients`.",
     "- **Pazienti**:",
-    "  - Con `searchPatients` leggi l'anagrafica: nome, cognome, data di nascita, codice fiscale, telefono, email e note.",
+    "  - Con `searchPatients` leggi l'anagrafica: nome, cognome, data di nascita, codice fiscale, telefono, email, note e data di creazione del profilo (`createdAt`, sola lettura).",
     "  - Con `createPatients` puoi creare uno o più pazienti, se hai il permesso di scrittura.",
     "  - Con `updatePatients` puoi modificare uno o più pazienti già esistenti. Prima cercali per avere l'id. I campi che non indichi restano invariati; passa null per svuotare data di nascita, codice fiscale, telefono, email o nota.",
     "  - Tutte le date/orari passati ai tool devono essere in formato ISO 8601 completo di offset (es. `2026-10-28T09:30:00+01:00`) e, accanto a ciascuna data, il nome del giorno in italiano nel fuso Europe/Rome (es. `mercoledì`). Il nome deve coincidere con la data: se non coincide, il tool rifiuta la chiamata.",
@@ -441,7 +441,7 @@ export async function replyToTurn(
 
     searchPatients: tool({
       description:
-        "Legge i pazienti della clinica. Cerca per nome, cognome, codice fiscale, telefono o email; senza testo restituisce i primi pazienti.",
+        "Legge i pazienti della clinica, inclusa la data di creazione del profilo (`createdAt`). Cerca per nome, cognome, codice fiscale, telefono o email; senza testo restituisce i primi pazienti.",
       inputSchema: z.object({
         query: z
           .string()
@@ -507,7 +507,7 @@ export async function replyToTurn(
 
     updatePatients: tool({
       description:
-        "Modifica uno o più pazienti esistenti: nome, cognome, data di nascita, codice fiscale, telefono, email e note.",
+        "Modifica uno o più pazienti esistenti: nome, cognome, data di nascita, codice fiscale, telefono, email e note. La risposta include anche `createdAt`, che non si può modificare.",
       inputSchema: z.object({
         updates: z
           .array(
