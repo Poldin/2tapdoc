@@ -375,7 +375,7 @@ export async function replyToTurn(
   if (canWritePatients) activeTools.push("createPatients");
 
   const mistral = createMistral({ apiKey });
-  const modelName = process.env.MISTRAL_MODEL?.trim() || "mistral-small-latest";
+  const modelName = process.env.MISTRAL_MODEL?.trim() || "mistral-medium-latest";
 
   const result = await generateText({
     model: mistral(modelName),
