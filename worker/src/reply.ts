@@ -51,19 +51,78 @@ export type Turn = {
 
 const modelTimeoutMs = 45_000;
 
+const romeDateTime = new Intl.DateTimeFormat("it-IT", {
+  timeZone: "Europe/Rome",
+  weekday: "long",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  timeZoneName: "longOffset",
+});
+
+const romeWeekday = new Intl.DateTimeFormat("it-IT", {
+  timeZone: "Europe/Rome",
+  weekday: "long",
+});
+
 function formatRomeClock(now: Date): string {
-  const formatter = new Intl.DateTimeFormat("it-IT", {
-    timeZone: "Europe/Rome",
-    weekday: "long",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    timeZoneName: "longOffset",
-  });
-  return `${formatter.format(now)} (ISO UTC: ${now.toISOString()})`;
+  return `${romeDateTime.format(now)} (ISO UTC: ${now.toISOString()})`;
+}
+
+function normalizeWeekday(value: string): string {
+  return value
+    .trim()
+    .toLocaleLowerCase("it-IT")
+    .normalize("NFD")
+    .replace(/\p{M}/gu, "");
+}
+
+function weekdayInRome(iso: string): string | null {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return null;
+  return romeWeekday.format(date);
+}
+
+const weekdayName = z
+  .string()
+  .describe("Nome del giorno in italiano nel fuso Europe/Rome (es. mercoledì)");
+
+function sameWeekday(iso: string, day: string, ctx: z.RefinementCtx, isoPath: string, dayPath: string) {
+  const actual = weekdayInRome(iso);
+  if (!actual) {
+    ctx.addIssue({ code: "custom", message: `Data non valida: ${iso}`, path: [isoPath] });
+    return;
+  }
+  if (normalizeWeekday(day) !== normalizeWeekday(actual)) {
+    ctx.addIssue({
+      code: "custom",
+      message: `"${day.trim()}" non corrisponde a ${iso}: in Europe/Rome è ${actual}.`,
+      path: [dayPath],
+    });
+  }
+}
+
+function withDayNames(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(withDayNames);
+  if (!value || typeof value !== "object") return value;
+  const source = value as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(source)) {
+    out[key] = withDayNames(child);
+    if (typeof child !== "string") continue;
+    const dayKey = key.endsWith("At")
+      ? `${key.slice(0, -2)}Day`
+      : key.endsWith("_at")
+        ? `${key.slice(0, -3)}_day`
+        : null;
+    if (!dayKey || dayKey in source) continue;
+    const day = weekdayInRome(child);
+    if (day) out[dayKey] = day;
+  }
+  return out;
 }
 
 function buildSystemPrompt(turn: Turn, now: Date): string {
@@ -107,7 +166,7 @@ function buildSystemPrompt(turn: Turn, now: Date): string {
     "  - Con `updateAppointments` puoi modificare **uno o più appuntamenti in blocco** (orari, titolo, nota, dottori, oggetti clinici, pazienti). Prima di modificare o cancellare, se non conosci gli ID degli appuntamenti, cercali con `listAppointments`.",
     "  - Con `deleteAppointments` puoi eliminare **uno o più appuntamenti in blocco** passando i loro ID.",
     "  - Quando l'utente nomina un paziente, cercalo prima con `searchPatients` per collegare il suo `patientId`; se non esiste e hai i permessi, puoi crearlo con `createPatients` o indicarlo nel titolo.",
-    "  - Tutte le date/orari passati ai tool devono essere in formato ISO 8601 completo di offset (es. `2026-10-27T09:30:00+01:00`).",
+    "  - Tutte le date/orari passati ai tool devono essere in formato ISO 8601 completo di offset (es. `2026-10-28T09:30:00+01:00`) e, accanto a ciascuna data, il nome del giorno in italiano nel fuso Europe/Rome (es. `mercoledì`). Il nome deve coincidere con la data: se non coincide, il tool rifiuta la chiamata.",
     "- **Alert del Server / Container**:",
     "  - Usa `setServerAlerts` per programmare uno o più alert/sveglie direttamente nel container del server (specificando `delaySeconds` per attese relative come 'tra 5 minuti' oppure `firesAtIso` per un orario preciso).",
     "  - Quando l'alert scatta sul server, ti risveglierà automaticamente con l'istruzione salvata in `prompt` e potrai scrivere in questa chat (anche controllando l'agenda in quel momento).",
@@ -212,16 +271,23 @@ export async function replyToTurn(
     listAppointments: tool({
       description:
         "Legge gli appuntamenti dell'agenda in un intervallo di tempo, con filtro opzionale per dottori, stanze/oggetti clinici o pazienti.",
-      inputSchema: z.object({
-        fromIso: z.string().describe("Inizio intervallo in formato ISO 8601 (es. 2026-10-27T00:00:00+01:00)"),
-        toIso: z.string().describe("Fine intervallo in formato ISO 8601 (es. 2026-10-28T00:00:00+01:00)"),
+      inputSchema: z
+        .object({
+        fromIso: z.string().describe("Inizio intervallo in formato ISO 8601 (es. 2026-10-28T00:00:00+01:00)"),
+        fromDay: weekdayName.describe("Giorno di fromIso (es. mercoledì)"),
+        toIso: z.string().describe("Fine intervallo in formato ISO 8601 (es. 2026-10-29T00:00:00+01:00)"),
+        toDay: weekdayName.describe("Giorno di toIso (es. giovedì)"),
         doctorIds: z.array(z.string().uuid()).optional().describe("Filtra per ID di uno o più dottori"),
         clinicalObjectIds: z
           .array(z.string().uuid())
           .optional()
           .describe("Filtra per ID di una o più stanze/oggetti clinici"),
         patientIds: z.array(z.string().uuid()).optional().describe("Filtra per ID di uno o più pazienti"),
-      }),
+      })
+        .superRefine((value, ctx) => {
+          sameWeekday(value.fromIso, value.fromDay, ctx, "fromIso", "fromDay");
+          sameWeekday(value.toIso, value.toDay, ctx, "toIso", "toDay");
+        }),
       execute: async ({ fromIso, toIso, doctorIds, clinicalObjectIds, patientIds }) => {
         const items = await botListAppointments(client, workerId, turn.id, {
           from: fromIso,
@@ -230,7 +296,7 @@ export async function replyToTurn(
           clinicalObjectIds,
           patientIds,
         });
-        return { appointments: items };
+        return { appointments: withDayNames(items) };
       },
     }),
 
@@ -240,9 +306,12 @@ export async function replyToTurn(
       inputSchema: z.object({
         appointments: z
           .array(
-            z.object({
-              startsAt: z.string().describe("Inizio appuntamento ISO 8601 (es. 2026-10-27T10:00:00+01:00)"),
-              endsAt: z.string().describe("Fine appuntamento ISO 8601 (es. 2026-10-27T11:00:00+01:00)"),
+            z
+            .object({
+              startsAt: z.string().describe("Inizio appuntamento ISO 8601 (es. 2026-10-28T10:00:00+01:00)"),
+              startsDay: weekdayName.describe("Giorno di startsAt (es. mercoledì)"),
+              endsAt: z.string().describe("Fine appuntamento ISO 8601 (es. 2026-10-28T11:00:00+01:00)"),
+              endsDay: weekdayName.describe("Giorno di endsAt (es. mercoledì)"),
               title: z.string().max(120).optional().describe("Titolo o motivo della visita"),
               note: z.string().max(1000).optional().describe("Note operative opzionali"),
               doctorIds: z
@@ -257,14 +326,23 @@ export async function replyToTurn(
                 .array(z.string().uuid())
                 .default([])
                 .describe("ID dei pazienti assegnati all'appuntamento"),
+            })
+            .superRefine((value, ctx) => {
+              sameWeekday(value.startsAt, value.startsDay, ctx, "startsAt", "startsDay");
+              sameWeekday(value.endsAt, value.endsDay, ctx, "endsAt", "endsDay");
             }),
           )
           .min(1)
           .max(50),
       }),
       execute: async ({ appointments }) => {
-        const created = await botCreateAppointments(client, workerId, turn.id, appointments);
-        return { created };
+        const created = await botCreateAppointments(
+          client,
+          workerId,
+          turn.id,
+          appointments.map(({ startsDay: _startsDay, endsDay: _endsDay, ...item }) => item),
+        );
+        return { created: withDayNames(created) };
       },
     }),
 
@@ -274,10 +352,13 @@ export async function replyToTurn(
       inputSchema: z.object({
         updates: z
           .array(
-            z.object({
+            z
+            .object({
               appointmentId: z.string().uuid().describe("ID dell'appuntamento da modificare"),
               startsAt: z.string().optional().describe("Nuovo inizio ISO 8601"),
+              startsDay: weekdayName.optional().describe("Giorno di startsAt, obbligatorio se cambi l'inizio"),
               endsAt: z.string().optional().describe("Nuova fine ISO 8601"),
+              endsDay: weekdayName.optional().describe("Giorno di endsAt, obbligatorio se cambi la fine"),
               title: z.string().max(120).nullable().optional().describe("Nuovo titolo (o null per rimuoverlo)"),
               note: z.string().max(1000).nullable().optional().describe("Nuova nota (o null per rimuoverla)"),
               doctorIds: z
@@ -292,14 +373,43 @@ export async function replyToTurn(
                 .array(z.string().uuid())
                 .optional()
                 .describe("Nuova lista completa di ID pazienti per questo appuntamento"),
+            })
+            .superRefine((value, ctx) => {
+              if (value.startsAt) {
+                if (!value.startsDay) {
+                  ctx.addIssue({
+                    code: "custom",
+                    message: "Indica startsDay insieme a startsAt.",
+                    path: ["startsDay"],
+                  });
+                } else {
+                  sameWeekday(value.startsAt, value.startsDay, ctx, "startsAt", "startsDay");
+                }
+              }
+              if (value.endsAt) {
+                if (!value.endsDay) {
+                  ctx.addIssue({
+                    code: "custom",
+                    message: "Indica endsDay insieme a endsAt.",
+                    path: ["endsDay"],
+                  });
+                } else {
+                  sameWeekday(value.endsAt, value.endsDay, ctx, "endsAt", "endsDay");
+                }
+              }
             }),
           )
           .min(1)
           .max(50),
       }),
       execute: async ({ updates }) => {
-        const updated = await botUpdateAppointments(client, workerId, turn.id, updates);
-        return { updated };
+        const updated = await botUpdateAppointments(
+          client,
+          workerId,
+          turn.id,
+          updates.map(({ startsDay: _startsDay, endsDay: _endsDay, ...item }) => item),
+        );
+        return { updated: withDayNames(updated) };
       },
     }),
 
