@@ -250,6 +250,100 @@ export async function botRenameClinic(
   return result.rows[0]?.clinic ?? null;
 }
 
+export async function botListChats(client: pg.Client, workerId: string, jobId: string): Promise<unknown> {
+  const result = await client.query<{ items: unknown }>(
+    "select private.bot_list_chats($1, $2) as items",
+    [workerId, jobId],
+  );
+  return result.rows[0]?.items ?? [];
+}
+
+export async function botListBots(client: pg.Client, workerId: string, jobId: string): Promise<unknown> {
+  const result = await client.query<{ items: unknown }>(
+    "select private.bot_list_bots($1, $2) as items",
+    [workerId, jobId],
+  );
+  return result.rows[0]?.items ?? [];
+}
+
+export async function botCreateChats(
+  client: pg.Client,
+  workerId: string,
+  jobId: string,
+  items: unknown,
+): Promise<unknown> {
+  const result = await client.query<{ created: unknown }>(
+    "select private.bot_create_chats($1, $2, $3::jsonb) as created",
+    [workerId, jobId, JSON.stringify(items)],
+  );
+  return result.rows[0]?.created ?? [];
+}
+
+export async function botCreateBots(
+  client: pg.Client,
+  workerId: string,
+  jobId: string,
+  items: unknown,
+): Promise<unknown> {
+  const result = await client.query<{ created: unknown }>(
+    "select private.bot_create_bots($1, $2, $3::jsonb) as created",
+    [workerId, jobId, JSON.stringify(items)],
+  );
+  return result.rows[0]?.created ?? [];
+}
+
+export async function botUpdateChats(
+  client: pg.Client,
+  workerId: string,
+  jobId: string,
+  items: unknown,
+): Promise<unknown> {
+  const result = await client.query<{ updated: unknown }>(
+    "select private.bot_update_chats($1, $2, $3::jsonb) as updated",
+    [workerId, jobId, JSON.stringify(items)],
+  );
+  return result.rows[0]?.updated ?? null;
+}
+
+export async function botDeleteChats(
+  client: pg.Client,
+  workerId: string,
+  jobId: string,
+  chatIds: string[],
+): Promise<unknown> {
+  const result = await client.query<{ deleted: unknown }>(
+    "select private.bot_delete_chats($1, $2, $3::uuid[]) as deleted",
+    [workerId, jobId, chatIds],
+  );
+  return result.rows[0]?.deleted ?? null;
+}
+
+export async function botUpdateBots(
+  client: pg.Client,
+  workerId: string,
+  jobId: string,
+  items: unknown,
+): Promise<unknown> {
+  const result = await client.query<{ updated: unknown }>(
+    "select private.bot_update_bots($1, $2, $3::jsonb) as updated",
+    [workerId, jobId, JSON.stringify(items)],
+  );
+  return result.rows[0]?.updated ?? null;
+}
+
+export async function botDeleteBots(
+  client: pg.Client,
+  workerId: string,
+  jobId: string,
+  botIds: string[],
+): Promise<unknown> {
+  const result = await client.query<{ deleted: unknown }>(
+    "select private.bot_delete_bots($1, $2, $3::uuid[]) as deleted",
+    [workerId, jobId, botIds],
+  );
+  return result.rows[0]?.deleted ?? null;
+}
+
 export async function botRenameSelf(
   client: pg.Client,
   workerId: string,

@@ -10,19 +10,28 @@ import {
 import {
   botCreateAgendaBlocks,
   botCreateAppointments,
+  botCreateBots,
+  botCreateChats,
   botCreatePatients,
   botDeleteAgendaBlocks,
   botDeleteAppointments,
+  botDeleteBots,
+  botDeleteChats,
   botDeletePatients,
   botListAgendaBlocks,
   botListAppointments,
+  botListBots,
+  botListChats,
   botRenameClinic,
   botRenameSelf,
   botSearchPatients,
   botUpdateAgendaBlocks,
   botUpdateAppointments,
+  botUpdateBots,
+  botUpdateChats,
   botUpdatePatients,
 } from "./db.js";
+import { botColorIds, botFaceIds, channelSymbolIds } from "./marks.js";
 
 export type TurnMessage = {
   role: "user" | "assistant";
@@ -187,6 +196,12 @@ function buildSystemPrompt(turn: Turn, now: Date): string {
     "- **Dialog di conferma**:",
     "  - Le azioni che aspettano un sì non le esegui tu. Chiami il tool e il sistema mostra sempre lo stesso dialog: «[tuo nome] sta tentando di eseguire [azione]. Procedere?».",
     "  - Una chiamata, un dialog, tutti gli elementi di quella chiamata. Non spezzare la richiesta in conferme separate e non rifiutarla.",
+    "- **Conversazioni e bot**:",
+    "  - Puoi agire anche sulle altre conversazioni di questa clinica. Prima, se non conosci gli id, usa `listChats` e `listBots`.",
+    "  - `createChats` apre una o più conversazioni in una sola chiamata. `createBots` crea uno o più bot: ognuno nasce già dentro una conversazione sua.",
+    "  - `updateChats`, `deleteChats`, `updateBots` e `deleteBots` non eseguono. Una sola chiamata, anche con tanti id, apre un solo dialog e risponde `awaiting_user`. Non chiedere conferma in chat e non dire che è già fatto.",
+    "  - Puoi modificare le conversazioni di cui fai parte. Puoi eliminare solo quelle che hai creato tu (`createdByMe`). Non puoi eliminare te stesso. Per cambiare il tuo nome usa `renameSelf`.",
+    "  - Colori, facce e simboli vanno passati con il loro id.",
     "- **Clinica e identità**:",
     "  - Con `renameClinic` puoi cambiare il nome della clinica, se hai il permesso. Il nome sta entro 80 caratteri.",
     "  - Con `renameSelf` puoi cambiare il tuo nome, entro 40 caratteri. Il titolo di questa chat viene allineato al nuovo nome.",
@@ -733,6 +748,121 @@ export async function replyToTurn(
         return await botDeletePatients(client, workerId, turn.id, patientIds);
       },
     }),
+
+    listChats: tool({
+      description: "Elenca le conversazioni di questa clinica a cui partecipi, anche quelle diverse da questa.",
+      inputSchema: z.object({}),
+      execute: async () => ({ chats: await botListChats(client, workerId, turn.id) }),
+    }),
+
+    listBots: tool({
+      description: "Elenca i bot tuoi in questa clinica, te compreso.",
+      inputSchema: z.object({}),
+      execute: async () => ({ bots: await botListBots(client, workerId, turn.id) }),
+    }),
+
+    createChats: tool({
+      description: "Apre una o più conversazioni in una sola chiamata. Partono subito, senza dialog.",
+      inputSchema: z.object({
+        chats: z
+          .array(
+            z.object({
+              title: z.string().max(80).optional().describe("Titolo, oppure vuoto"),
+              color: z.enum(botColorIds),
+              emoji: z.enum(channelSymbolIds).describe("Simbolo della conversazione"),
+            }),
+          )
+          .min(1)
+          .max(20),
+      }),
+      execute: async ({ chats }) => ({ created: await botCreateChats(client, workerId, turn.id, chats) }),
+    }),
+
+    createBots: tool({
+      description:
+        "Crea uno o più bot in una sola chiamata. Ognuno riceve una conversazione sua. Partono subito, senza dialog.",
+      inputSchema: z.object({
+        bots: z
+          .array(
+            z.object({
+              name: z.string().min(1).max(40),
+              color: z.enum(botColorIds),
+              emoji: z.enum(botFaceIds).describe("Faccia del bot"),
+            }),
+          )
+          .min(1)
+          .max(20),
+      }),
+      execute: async ({ bots }) => ({ created: await botCreateBots(client, workerId, turn.id, bots) }),
+    }),
+
+    updateChats: tool({
+      description:
+        "Propone la modifica di una o più conversazioni in una sola chiamata. Non modifica: apre un solo dialog e risponde awaiting_user.",
+      inputSchema: z.object({
+        updates: z
+          .array(
+            z
+              .object({
+                chatId: z.string().uuid(),
+                title: z.string().max(80).nullable().optional().describe("Nuovo titolo, oppure null per toglierlo"),
+                color: z.enum(botColorIds).optional(),
+                emoji: z.enum(channelSymbolIds).optional(),
+              })
+              .superRefine((value, ctx) => {
+                if (value.title === undefined && value.color === undefined && value.emoji === undefined) {
+                  ctx.addIssue({ code: "custom", message: "Indica almeno un campo da modificare.", path: ["chatId"] });
+                }
+              }),
+          )
+          .min(1)
+          .max(20),
+      }),
+      execute: async ({ updates }) => botUpdateChats(client, workerId, turn.id, updates),
+    }),
+
+    deleteChats: tool({
+      description:
+        "Propone l'eliminazione di una o più conversazioni create da te, in una sola chiamata. Non elimina: apre un solo dialog e risponde awaiting_user.",
+      inputSchema: z.object({
+        chatIds: z.array(z.string().uuid()).min(1).max(20),
+      }),
+      execute: async ({ chatIds }) => botDeleteChats(client, workerId, turn.id, chatIds),
+    }),
+
+    updateBots: tool({
+      description:
+        "Propone la modifica di uno o più bot tuoi, in una sola chiamata. Non modifica: apre un solo dialog e risponde awaiting_user.",
+      inputSchema: z.object({
+        updates: z
+          .array(
+            z
+              .object({
+                botId: z.string().uuid(),
+                name: z.string().min(1).max(40).optional(),
+                color: z.enum(botColorIds).optional(),
+                emoji: z.enum(botFaceIds).optional(),
+              })
+              .superRefine((value, ctx) => {
+                if (value.name === undefined && value.color === undefined && value.emoji === undefined) {
+                  ctx.addIssue({ code: "custom", message: "Indica almeno un campo da modificare.", path: ["botId"] });
+                }
+              }),
+          )
+          .min(1)
+          .max(20),
+      }),
+      execute: async ({ updates }) => botUpdateBots(client, workerId, turn.id, updates),
+    }),
+
+    deleteBots: tool({
+      description:
+        "Propone l'eliminazione di uno o più bot tuoi, te escluso, in una sola chiamata. Non elimina: apre un solo dialog e risponde awaiting_user.",
+      inputSchema: z.object({
+        botIds: z.array(z.string().uuid()).min(1).max(20),
+      }),
+      execute: async ({ botIds }) => botDeleteBots(client, workerId, turn.id, botIds),
+    }),
   };
 
   type ToolName = keyof typeof tools;
@@ -741,6 +871,14 @@ export async function replyToTurn(
     "listServerAlerts",
     "cancelServerAlerts",
     "renameSelf",
+    "listChats",
+    "listBots",
+    "createChats",
+    "createBots",
+    "updateChats",
+    "deleteChats",
+    "updateBots",
+    "deleteBots",
   ];
   if (canRenameClinic) activeTools.push("renameClinic");
   if (canReadAgenda) activeTools.push("listAppointments", "listAgendaBlocks");
