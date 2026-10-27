@@ -24,6 +24,7 @@ import {
   type Specialist,
   type ToolLink,
 } from "@/components/settings-view";
+import { type ToolChoice } from "@/lib/tool-catalog";
 import {
   rememberAgenda,
   rememberPatients,
@@ -323,6 +324,7 @@ export function ClinicShell({
   specialists,
   assets,
   toolLinks,
+  toolChoices,
   toolError = null,
   canRenameClinic,
   canManageMembers,
@@ -356,6 +358,7 @@ export function ClinicShell({
   specialists: Specialist[];
   assets: ClinicAsset[];
   toolLinks: ToolLink[];
+  toolChoices: ToolChoice[];
   toolError?: string | null;
   canRenameClinic: boolean;
   canManageMembers: boolean;
@@ -959,6 +962,7 @@ export function ClinicShell({
             specialists={specialists}
             assets={assets}
             toolLinks={toolLinks}
+            toolChoices={toolChoices}
             toolError={toolError}
             canManageTools={canManageTools}
           />

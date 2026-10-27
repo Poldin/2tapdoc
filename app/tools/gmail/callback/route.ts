@@ -34,7 +34,7 @@ export async function GET(request: Request) {
     return NextResponse.redirect(settingsUrl(request, clinic, "denied"));
   }
   if (!gmailOAuthConfigured()) {
-    return NextResponse.redirect(settingsUrl(request, clinic, "config"));
+    return NextResponse.redirect(settingsUrl(request, clinic));
   }
 
   const code = incoming.searchParams.get("code") ?? "";

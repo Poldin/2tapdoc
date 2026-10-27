@@ -30,12 +30,15 @@ import {
   botUpdateBots,
   botListToolLinks,
   botReadToolSecret,
+  botReadWhatsAppSession,
   botStoreToolAccess,
+  botStoreWhatsAppSession,
   botUnlinkToolLinks,
   botUpdateChats,
   botUpdatePatients,
 } from "./db.js";
 import { gmailOperation } from "./gmail.js";
+import { listWhatsAppChats, readWhatsAppMessages, sendWhatsAppMessage } from "./whatsapp.js";
 import { botColorIds, botFaceIds, channelSymbolIds } from "./marks.js";
 
 export type TurnMessage = {
@@ -154,10 +157,19 @@ function withDayNames(value: unknown): unknown {
   return out;
 }
 
+function gmailOAuthConfigured() {
+  return Boolean(process.env.GOOGLE_OAUTH_CLIENT_ID?.trim() && process.env.GOOGLE_OAUTH_CLIENT_SECRET?.trim());
+}
+
 function toolAccountLines(links: ToolLink[]) {
-  const gmail = links.filter((link) => link.provider === "gmail");
-  if (gmail.length === 0) return "Nessuna casella collegata.";
-  return gmail.map((link) => `- Gmail ${link.account} (id: ${link.id})`).join("\n");
+  const visible = links.filter((link) => link.provider === "whatsapp" || (link.provider === "gmail" && gmailOAuthConfigured()));
+  if (visible.length === 0) return "Nessun tool collegato.";
+  return visible
+    .map((link) => {
+      const name = link.provider === "gmail" ? "Gmail" : "WhatsApp";
+      return `- ${name} ${link.account} (id: ${link.id})`;
+    })
+    .join("\n");
 }
 
 function appOrigin() {
@@ -240,16 +252,27 @@ function buildSystemPrompt(
     ...(canManageTools || canUseTools
       ? [
           "- **Tool esterni** (solo i bot, dentro la chat: niente automazioni sistema-sistema):",
-          "  - Le caselle collegate stanno in Impostazioni, sezione tool. Ogni casella Gmail è una riga. La stessa casella non si ripete.",
+          "  - I tool collegati stanno in Impostazioni, sezione tool. Ogni account è una riga. Lo stesso account non si ripete.",
           ...(canManageTools
             ? [
-                "  - Per collegare Gmail usa `linkTool`. Manda all'utente il link che ricevi: è il consenso ufficiale di Google, non una scheda tua. Un'altra casella è un'altra chiamata.",
+                gmailOAuthConfigured()
+                  ? "  - Per collegare Gmail o WhatsApp usa `linkTool`. Manda all'utente il link che ricevi, e basta."
+                  : "  - Per collegare WhatsApp usa `linkTool`. Manda all'utente il link che ricevi, e basta.",
+                ...(gmailOAuthConfigured()
+                  ? ["  - Gmail apre il consenso ufficiale di Google. Un'altra casella è un'altra chiamata."]
+                  : []),
+                "  - WhatsApp è whatsapp-web.js. Il link mostra il QR di WhatsApp Web. Il container del server installa il client solo quando parte quel collegamento. Un altro numero è un'altra chiamata.",
                 "  - Per sganciare usa `unlinkToolLinks` con gli id. Non sganci tu: un solo dialog, risposta `awaiting_user`. Non chiedere conferma in chat.",
               ]
             : []),
           ...(canUseTools
             ? [
-                "  - Per usare una casella già collegata, se non conosci l'operazione chiama `listGmailTools`, poi `callGmail` con il suo `linkId`. Usa solo la casella chiesta.",
+                ...(gmailOAuthConfigured()
+                  ? [
+                      "  - Per una casella Gmail già collegata, se non conosci l'operazione chiama `listGmailTools`, poi `callGmail` con il suo `linkId`.",
+                    ]
+                  : []),
+                "  - Per un WhatsApp già collegato, e solo se l'utente lo chiede, usa `listWhatsAppChats`, poi `readWhatsAppMessages` o `sendWhatsAppMessage`. Un solo destinatario per chiamata. L'id della chat esce da `listWhatsAppChats`.",
               ]
             : []),
           toolAccountLines(toolLinks),
@@ -286,6 +309,27 @@ async function useLinkedGmail(
     return outcome.result;
   } catch (error) {
     const message = error instanceof Error ? error.message : "Gmail non ha risposto.";
+    return { error: message.slice(0, 300) };
+  }
+}
+
+const whatsappChatId = /^[0-9]{6,24}@(c\.us|g\.us|lid|s\.whatsapp\.net)$/;
+
+async function useLinkedWhatsApp(
+  client: pg.Client,
+  workerId: string,
+  jobId: string,
+  linkId: string,
+  run: (session: Buffer) => Promise<{ result: unknown; session: Buffer }>,
+) {
+  try {
+    const session = await botReadWhatsAppSession(client, workerId, jobId, linkId);
+    if (!session) return { error: "WhatsApp non trovato." };
+    const outcome = await run(session);
+    await botStoreWhatsAppSession(client, workerId, jobId, linkId, outcome.session);
+    return outcome.result;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "WhatsApp non ha risposto.";
     return { error: message.slice(0, 300) };
   }
 }
@@ -945,16 +989,26 @@ export async function replyToTurn(
     }),
 
     linkTool: tool({
-      description:
-        "Avvia il collegamento di Gmail. Restituisce il link del consenso ufficiale di Google: mandalo all'utente. Ogni casella è un collegamento nuovo. Non dice che è già collegata.",
+      description: gmailOAuthConfigured()
+        ? "Avvia il collegamento di Gmail o WhatsApp. Restituisce un link da mandare all'utente. Non dice che è già collegato."
+        : "Avvia il collegamento di WhatsApp. Restituisce il link del QR di WhatsApp Web: mandalo all'utente. Il server installa il client a quel punto. Non dice che è già collegato.",
       inputSchema: z.object({
-        provider: z.literal("gmail"),
+        provider: z.enum(gmailOAuthConfigured() ? ["gmail", "whatsapp"] : ["whatsapp"]),
       }),
-      execute: async () => ({
-        url: `${appOrigin()}/clinics/${turn.clinicId}/tools/connect/gmail`,
-        instruction:
-          "Manda all'utente questo link e basta. Lo apre lui: è il consenso ufficiale di Google. Non dire che la casella è già collegata.",
-      }),
+      execute: async ({ provider }) => {
+        if (provider === "gmail") {
+          return {
+            url: `${appOrigin()}/clinics/${turn.clinicId}/tools/connect/gmail`,
+            instruction:
+              "Manda all'utente questo link e basta. Lo apre lui: è il consenso ufficiale di Google. Non dire che la casella è già collegata.",
+          };
+        }
+        return {
+          url: `${appOrigin()}/clinics/${turn.clinicId}/tools/connect/whatsapp`,
+          instruction:
+            "Manda all'utente questo link e basta. Lo apre lui: è il QR di WhatsApp Web. Il server installa il client in quel momento. Non dire che il numero è già collegato.",
+        };
+      },
     }),
 
     unlinkToolLinks: tool({
@@ -984,6 +1038,41 @@ export async function replyToTurn(
       }),
       execute: async ({ linkId, name, arguments: args }) =>
         useLinkedGmail(client, workerId, turn.id, linkId, "call", name, args),
+    }),
+
+    listWhatsAppChats: tool({
+      description: "Elenca le chat di un WhatsApp già collegato. Usalo solo se l'utente lo chiede.",
+      inputSchema: z.object({
+        linkId: z.string().uuid(),
+      }),
+      execute: async ({ linkId }) =>
+        useLinkedWhatsApp(client, workerId, turn.id, linkId, (session) => listWhatsAppChats(session, linkId)),
+    }),
+
+    readWhatsAppMessages: tool({
+      description: "Legge gli ultimi messaggi di una chat WhatsApp. L'id arriva da listWhatsAppChats.",
+      inputSchema: z.object({
+        linkId: z.string().uuid(),
+        chatId: z.string().regex(whatsappChatId),
+        limit: z.number().int().min(1).max(20).optional(),
+      }),
+      execute: async ({ linkId, chatId, limit }) =>
+        useLinkedWhatsApp(client, workerId, turn.id, linkId, (session) =>
+          readWhatsAppMessages(session, linkId, chatId, limit ?? 10),
+        ),
+    }),
+
+    sendWhatsAppMessage: tool({
+      description: "Invia un solo messaggio WhatsApp a una chat. L'id arriva da listWhatsAppChats.",
+      inputSchema: z.object({
+        linkId: z.string().uuid(),
+        chatId: z.string().regex(whatsappChatId),
+        body: z.string().trim().min(1).max(1000),
+      }),
+      execute: async ({ linkId, chatId, body }) =>
+        useLinkedWhatsApp(client, workerId, turn.id, linkId, (session) =>
+          sendWhatsAppMessage(session, linkId, chatId, body),
+        ),
     }),
   };
 
@@ -1017,7 +1106,8 @@ export async function replyToTurn(
   if (canReadPatients) activeTools.push("searchPatients");
   if (canWritePatients) activeTools.push("createPatients", "updatePatients", "deletePatients");
   if (canManageTools) activeTools.push("linkTool", "unlinkToolLinks");
-  if (canUseTools) activeTools.push("listGmailTools", "callGmail");
+  if (canUseTools && gmailOAuthConfigured()) activeTools.push("listGmailTools", "callGmail");
+  if (canUseTools) activeTools.push("listWhatsAppChats", "readWhatsAppMessages", "sendWhatsAppMessage");
 
   const mistral = createMistral({ apiKey });
   const modelName = process.env.MISTRAL_MODEL?.trim() || "mistral-medium-latest";

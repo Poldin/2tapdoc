@@ -11,6 +11,7 @@ import { getSessionUser } from "@/lib/auth/session";
 import { clinicRecencyFromCookie, leadingPlace } from "@/lib/clinic-recency";
 import { createClient } from "@/lib/supabase/server";
 import { markdownToPlainText } from "@/lib/markdown";
+import { toolChoices } from "@/lib/tool-catalog";
 
 export const instant = false;
 
@@ -70,6 +71,14 @@ export default async function ClinicPage({
   const { id } = await params;
   const { chat, view, patient: patientParam, toolError: toolErrorCode } = await searchParams;
   if (!uuidPattern.test(id)) notFound();
+  if (toolErrorCode === "config") {
+    const params = new URLSearchParams();
+    if (chat) params.set("chat", chat);
+    if (view) params.set("view", view);
+    if (patientParam) params.set("patient", patientParam);
+    const query = params.toString();
+    redirect(query ? `/clinics/${id}?${query}` : `/clinics/${id}`);
+  }
   const agendaOpen = view === "agenda";
   const patientsOpen = view === "patients";
   const settingsOpen = view === "settings";
@@ -305,7 +314,9 @@ export default async function ClinicPage({
       description: object.description,
     }));
     toolLinks = ((toolRows ?? []) as { id: string; provider: string; account: string }[]).flatMap((link) =>
-      link.provider === "gmail" ? [{ id: link.id, provider: link.provider, account: link.account }] : [],
+      link.provider === "gmail" || link.provider === "whatsapp"
+        ? [{ id: link.id, provider: link.provider, account: link.account }]
+        : [],
     );
     const mineRole = mine?.clinic_roles as { is_admin: boolean } | { is_admin: boolean }[] | null;
     const admin = Boolean((Array.isArray(mineRole) ? mineRole[0] : mineRole)?.is_admin);
@@ -525,16 +536,15 @@ export default async function ClinicPage({
       canManageAgenda={canManageAgenda}
       canManageTools={canManageTools}
       toolLinks={toolLinks}
+      toolChoices={toolChoices()}
       toolError={
-        toolErrorCode === "config"
-          ? "Manca il client OAuth di Gmail sulla piattaforma."
-          : toolErrorCode === "denied"
-            ? "Collegamento annullato."
-            : toolErrorCode === "expired"
-              ? "Il collegamento è scaduto. Riprova."
-              : toolErrorCode === "failed"
-                ? "Non è stato possibile collegare Gmail."
-                : null
+        toolErrorCode === "denied"
+          ? "Collegamento annullato."
+          : toolErrorCode === "expired"
+            ? "Il collegamento è scaduto. Riprova."
+            : toolErrorCode === "failed"
+              ? "Non è stato possibile collegare il tool."
+              : null
       }
       currentUserId={user.id}
       recency={recency}

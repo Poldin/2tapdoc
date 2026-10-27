@@ -11,6 +11,7 @@ import {
   openDatabase,
 } from "./db.js";
 import { replyToTurn } from "./reply.js";
+import { startWhatsAppSupervisor } from "./whatsapp.js";
 
 const idleMs = 1500;
 let running = true;
@@ -82,11 +83,15 @@ async function waitForWork(client: pg.Client) {
 
 async function runSession() {
   const client = openDatabase(databaseUrl as string);
-  await client.connect();
-  await client.query("listen bot_jobs");
-  console.log("worker listening", workerId);
-
+  const pairClient = openDatabase(databaseUrl as string);
+  let whatsapp: { stop: () => void } | null = null;
   try {
+    await client.connect();
+    await pairClient.connect();
+    whatsapp = startWhatsAppSupervisor(pairClient);
+    await client.query("listen bot_jobs");
+    console.log("worker listening", workerId);
+
     while (running) {
       await flushDueAlerts(client);
 
@@ -113,6 +118,8 @@ async function runSession() {
       }
     }
   } finally {
+    whatsapp?.stop();
+    await pairClient.end().catch(() => undefined);
     await client.end().catch(() => undefined);
   }
 }

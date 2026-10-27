@@ -6,6 +6,7 @@ import { createClient } from "@/lib/supabase/server";
 import { getSessionUser } from "@/lib/auth/session";
 import { botGreeting } from "@/lib/bot-greeting";
 import { botFaceIds, channelSymbolIds, isListed, markColorIds } from "@/lib/marks";
+import { gmailOAuthConfigured } from "@/lib/gmail-link";
 import { listedPermissions, roleSlug } from "@/lib/permissions";
 
 const uuidPattern =
@@ -1195,11 +1196,17 @@ export async function createAgendaEntry(input: {
   return {};
 }
 
-export async function startGmailLink(clinicId: string, _state: FormState, _formData: FormData): Promise<FormState> {
+export async function startToolLink(clinicId: string, _state: FormState, formData: FormData): Promise<FormState> {
   const user = await requireUser();
   if (!uuidPattern.test(clinicId)) return { error: "Studio non valido." };
   if (!(await clinicMember(clinicId, user.id))) return { error: "Non fai parte di questo studio." };
-  redirect(`/clinics/${clinicId}/tools/connect/gmail`);
+  const provider = String(formData.get("provider") ?? "");
+  if (provider === "gmail") {
+    if (!gmailOAuthConfigured()) return {};
+    redirect(`/clinics/${clinicId}/tools/connect/gmail`);
+  }
+  if (provider === "whatsapp") redirect(`/clinics/${clinicId}/tools/connect/whatsapp`);
+  return { error: "Tool sconosciuto." };
 }
 
 export async function dropToolLink(

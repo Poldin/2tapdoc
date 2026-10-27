@@ -482,6 +482,30 @@ export async function botStoreToolAccess(
   ]);
 }
 
+export async function botReadWhatsAppSession(client: pg.Client, workerId: string, jobId: string, linkId: string) {
+  const result = await client.query<{ session: Buffer | null }>(
+    "select private.bot_read_whatsapp_session($1, $2, $3) as session",
+    [workerId, jobId, linkId],
+  );
+  const session = result.rows[0]?.session;
+  return Buffer.isBuffer(session) && session.length > 0 ? session : null;
+}
+
+export async function botStoreWhatsAppSession(
+  client: pg.Client,
+  workerId: string,
+  jobId: string,
+  linkId: string,
+  session: Buffer,
+) {
+  await client.query("select private.bot_store_whatsapp_session($1, $2, $3, $4)", [
+    workerId,
+    jobId,
+    linkId,
+    session,
+  ]);
+}
+
 function parseTurn(value: unknown): Turn | null {
   if (value == null) return null;
   if (typeof value !== "object") throw new Error("Unexpected job payload");

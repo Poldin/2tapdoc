@@ -19,7 +19,6 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
     return NextResponse.redirect(back);
   }
   if (!gmailOAuthConfigured()) {
-    back.searchParams.set("toolError", "config");
     return NextResponse.redirect(back);
   }
 

@@ -7,16 +7,17 @@ import {
   createClinicalObject,
   createDoctor,
   createRole,
-  updateClinicalObject,
-  updateClinic,
   dropToolLink,
-  startGmailLink,
+  startToolLink,
+  updateClinic,
+  updateClinicalObject,
   updateDoctor,
   updateMember,
   updateRole,
   type FormState,
 } from "@/app/clinics/actions";
 import { permissionCatalog, permissionKeys, permissionLabel } from "@/lib/permissions";
+import { type ToolChoice } from "@/lib/tool-catalog";
 
 export type ClinicMember = {
   id: string;
@@ -110,7 +111,9 @@ function memberLabel(member: ClinicMember) {
 }
 
 function toolLabel(provider: string) {
-  return provider === "gmail" ? "Gmail" : provider;
+  if (provider === "gmail") return "Gmail";
+  if (provider === "whatsapp") return "WhatsApp";
+  return provider;
 }
 
 function fieldClassName() {
@@ -566,15 +569,17 @@ function ToolDialog({
   open,
   clinicId,
   draft,
+  choices,
   onClose,
 }: {
   open: boolean;
   clinicId: string;
   draft: ToolLink | null;
+  choices: ToolChoice[];
   onClose: () => void;
 }) {
   const [state, action, pending] = useActionState<FormState, FormData>(
-    draft ? dropToolLink.bind(null, clinicId, draft.id) : startGmailLink.bind(null, clinicId),
+    draft ? dropToolLink.bind(null, clinicId, draft.id) : startToolLink.bind(null, clinicId),
     {},
   );
   useCloseWhenSent(open, state.sent, onClose);
@@ -595,14 +600,16 @@ function ToolDialog({
           <p className="text-sm text-muted">{draft.account}</p>
         </>
       ) : (
-        <>
-          <label className="flex flex-col gap-2 text-sm">
-            Tool
-            <select name="provider" defaultValue="gmail" className={fieldClassName()}>
-              <option value="gmail">Gmail</option>
-            </select>
-          </label>
-        </>
+        <label className="flex flex-col gap-2 text-sm">
+          Tool
+          <select name="provider" defaultValue={choices[0]?.id ?? "whatsapp"} className={fieldClassName()}>
+            {choices.map((choice) => (
+              <option key={choice.id} value={choice.id}>
+                {choice.label}
+              </option>
+            ))}
+          </select>
+        </label>
       )}
     </SettingsDialog>
   );
@@ -622,6 +629,7 @@ export function SettingsView({
   specialists = [],
   assets = [],
   toolLinks = [],
+  toolChoices,
   toolError = null,
 }: {
   clinicId: string;
@@ -637,6 +645,7 @@ export function SettingsView({
   specialists?: Specialist[];
   assets?: ClinicAsset[];
   toolLinks?: ToolLink[];
+  toolChoices: ToolChoice[];
   toolError?: string | null;
 }) {
   const threadRef = useRef<HTMLDivElement>(null);
@@ -846,10 +855,10 @@ export function SettingsView({
                 setToolDraft(null);
                 setToolOpen(true);
               }}
-              canAdd={canManageTools}
+              canAdd={canManageTools && toolChoices.length > 0}
             />
             {toolError ? <p className="rounded-2xl bg-paper px-4 py-3 text-sm text-teal">{toolError}</p> : null}
-            <DataTable columns={["Tool", "Casella", "Stato"]}>
+            <DataTable columns={["Tool", "Account", "Stato"]}>
               {toolLinks.length === 0 ? (
                 <EmptyRow columns={3}>Nessun tool collegato.</EmptyRow>
               ) : (
@@ -921,6 +930,7 @@ export function SettingsView({
           open
           clinicId={clinicId}
           draft={toolDraft}
+          choices={toolChoices}
           onClose={() => setToolOpen(false)}
         />
       ) : null}
