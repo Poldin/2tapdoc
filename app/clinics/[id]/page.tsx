@@ -1,8 +1,9 @@
 import { cookies } from "next/headers";
 import { notFound, redirect } from "next/navigation";
-import { type AgendaAppointment, type AgendaLane } from "@/components/agenda-view";
+import { type AgendaEditPatient } from "@/components/agenda-edit-dialog";
+import { type AgendaAppointment, type AgendaBlock, type AgendaLane } from "@/components/agenda-view";
 import { ClinicShell, type BotMark, type ChatListItem, type ChatMessage } from "@/components/clinic-shell";
-import { type PatientDeletionRequest } from "@/components/patient-deletion-dialog";
+import { type BotActionRequest } from "@/components/bot-action-dialog";
 import { asPatient, type PatientRecord } from "@/lib/patients";
 import { type ClinicAsset, type ClinicMember, type ClinicRole, type Specialist } from "@/components/settings-view";
 import { type ClinicOption } from "@/components/clinic-switcher";
@@ -24,6 +25,7 @@ type EventRow = {
   created_at: string;
   user_id: string | null;
   bot_id: string | null;
+  preferred_at: string | null;
 };
 
 function messageBody(payload: unknown) {
@@ -102,7 +104,7 @@ export default async function ClinicPage({
   const { data: rows } = await supabase
     .from("chats")
     .select(
-      "id, title, color, emoji, created_at, chat_events(id, seq, kind, payload, created_at, user_id, bot_id), chat_participants(bots(id, name, color, emoji)), chat_clinics!inner(clinic_id)",
+      "id, title, color, emoji, created_at, chat_events(id, seq, kind, payload, created_at, user_id, bot_id, preferred_at), chat_participants(bots(id, name, color, emoji)), chat_clinics!inner(clinic_id)",
     )
     .eq("chat_clinics.clinic_id", id);
 
@@ -321,8 +323,17 @@ export default async function ClinicPage({
   }
   let lanes: AgendaLane[] = [];
   let agendaAppointments: AgendaAppointment[] = [];
+  let agendaBlocks: AgendaBlock[] = [];
+  let agendaPatients: AgendaEditPatient[] = [];
   if (agendaOpen) {
-    const [{ data: doctors }, { data: objects }, { data: appointmentRows }] = await Promise.all([
+    const [
+      { data: doctors },
+      { data: objects },
+      { data: appointmentRows },
+      { data: blockRows },
+      { data: mine },
+      { data: patientRows },
+    ] = await Promise.all([
       supabase
         .from("doctors")
         .select("id, given_name, family_name")
@@ -334,11 +345,42 @@ export default async function ClinicPage({
       supabase
         .from("appointments")
         .select(
-          "id, title, note, starts_at, ends_at, appointment_doctors(doctor_id), appointment_objects(clinical_object_id), appointment_patients(patients(given_name, family_name))",
+          "id, title, note, starts_at, ends_at, appointment_doctors(doctor_id), appointment_objects(clinical_object_id), appointment_patients(patient_id, patients(given_name, family_name))",
         )
         .eq("clinic_id", id)
         .order("starts_at"),
+      supabase
+        .from("agenda_blocks")
+        .select(
+          "id, title, description, starts_at, ends_at, agenda_block_doctors(doctor_id), agenda_block_objects(clinical_object_id)",
+        )
+        .eq("clinic_id", id)
+        .order("starts_at"),
+      supabase
+        .from("memberships")
+        .select("clinic_role_id, clinic_roles(is_admin)")
+        .eq("clinic_id", id)
+        .eq("user_id", user.id)
+        .maybeSingle(),
+      supabase
+        .from("patients")
+        .select("id, given_name, family_name")
+        .eq("clinic_id", id)
+        .order("family_name")
+        .order("given_name"),
     ]);
+    const mineRole = mine?.clinic_roles as { is_admin: boolean } | { is_admin: boolean }[] | null;
+    const admin = Boolean((Array.isArray(mineRole) ? mineRole[0] : mineRole)?.is_admin);
+    if (admin) {
+      canManageAgenda = true;
+    } else if (mine?.clinic_role_id) {
+      const { data: perms } = await supabase
+        .from("clinic_role_permissions")
+        .select("permission_key")
+        .eq("clinic_role_id", mine.clinic_role_id)
+        .eq("permission_key", "agenda.write");
+      canManageAgenda = Boolean(perms?.length);
+    }
     lanes = [
       ...((doctors ?? []) as { id: string; given_name: string; family_name: string }[]).map((doctor) => ({
         id: doctor.id,
@@ -362,6 +404,7 @@ export default async function ClinicPage({
         appointment_objects: { clinical_object_id: string }[] | null;
         appointment_patients:
           | {
+              patient_id: string;
               patients:
                 | { given_name: string; family_name: string }
                 | { given_name: string; family_name: string }[]
@@ -377,6 +420,7 @@ export default async function ClinicPage({
       endsAt: row.ends_at,
       doctorIds: (row.appointment_doctors ?? []).map((item) => item.doctor_id),
       objectIds: (row.appointment_objects ?? []).map((item) => item.clinical_object_id),
+      patientIds: (row.appointment_patients ?? []).map((item) => item.patient_id),
       patientNames: (row.appointment_patients ?? []).flatMap((item) => {
         const patient = Array.isArray(item.patients) ? item.patients[0] : item.patients;
         if (!patient) return [];
@@ -384,6 +428,31 @@ export default async function ClinicPage({
         return full ? [full] : [];
       }),
     }));
+    agendaBlocks = (
+      (blockRows ?? []) as {
+        id: string;
+        title: string;
+        description: string | null;
+        starts_at: string;
+        ends_at: string;
+        agenda_block_doctors: { doctor_id: string }[] | null;
+        agenda_block_objects: { clinical_object_id: string }[] | null;
+      }[]
+    ).map((row) => ({
+      id: row.id,
+      title: row.title,
+      description: row.description,
+      startsAt: row.starts_at,
+      endsAt: row.ends_at,
+      doctorIds: (row.agenda_block_doctors ?? []).map((item) => item.doctor_id),
+      objectIds: (row.agenda_block_objects ?? []).map((item) => item.clinical_object_id),
+    }));
+    agendaPatients = ((patientRows ?? []) as { id: string; given_name: string; family_name: string }[]).flatMap(
+      (patient) => {
+        const name = `${patient.given_name} ${patient.family_name}`.replace(/\s+/g, " ").trim();
+        return name ? [{ id: patient.id, name }] : [];
+      },
+    );
   }
 
   const list: ChatListItem[] = chats.map(({ id: chatId, title, color, emoji, preview, activityAt, bot }) => ({
@@ -401,26 +470,21 @@ export default async function ClinicPage({
     createdAt: message.created_at,
     mine: message.user_id === user.id,
     botId: message.bot_id,
+    preferredAt: message.preferred_at,
   }));
 
-  const { data: deletionRows } = await supabase
+  const { data: confirmationRows } = await supabase
     .from("bot_confirmations")
-    .select("id, patients")
+    .select("id, action, bots(name)")
     .eq("clinic_id", clinic.id)
     .eq("status", "pending")
     .order("created_at");
-  const patientDeletions: PatientDeletionRequest[] = (deletionRows ?? []).flatMap((row) => {
-    const patients = Array.isArray(row.patients)
-      ? row.patients.flatMap((item) => {
-          if (!item || typeof item !== "object") return [];
-          const patient = item as { id?: unknown; fullName?: unknown };
-          if (typeof patient.id !== "string" || typeof patient.fullName !== "string" || !patient.fullName.trim()) {
-            return [];
-          }
-          return [{ id: patient.id, fullName: patient.fullName }];
-        })
-      : [];
-    return patients.length > 0 ? [{ id: row.id, patients }] : [];
+  const confirmations: BotActionRequest[] = (confirmationRows ?? []).flatMap((row) => {
+    const action = typeof row.action === "string" ? row.action.trim() : "";
+    if (!action) return [];
+    const bot = Array.isArray(row.bots) ? row.bots[0] : row.bots;
+    const botName = bot && typeof bot.name === "string" && bot.name.trim() ? bot.name.trim() : "Un agente";
+    return [{ id: row.id, botName, action }];
   });
 
   return (
@@ -436,6 +500,8 @@ export default async function ClinicPage({
       agendaOpen={agendaOpen}
       lanes={lanes}
       appointments={agendaAppointments}
+      blocks={agendaBlocks}
+      agendaPatients={agendaPatients}
       patientsOpen={patientsOpen}
       patients={patients}
       selectedPatient={selectedPatient}
@@ -451,7 +517,7 @@ export default async function ClinicPage({
       canManageAgenda={canManageAgenda}
       currentUserId={user.id}
       recency={recency}
-      patientDeletions={patientDeletions}
+      confirmations={confirmations}
     />
   );
 }

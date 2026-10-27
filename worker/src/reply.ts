@@ -8,14 +8,18 @@ import {
   scheduleServerAlerts,
 } from "./alerts.js";
 import {
+  botCreateAgendaBlocks,
   botCreateAppointments,
   botCreatePatients,
+  botDeleteAgendaBlocks,
   botDeleteAppointments,
   botDeletePatients,
+  botListAgendaBlocks,
   botListAppointments,
   botRenameClinic,
   botRenameSelf,
   botSearchPatients,
+  botUpdateAgendaBlocks,
   botUpdateAppointments,
   botUpdatePatients,
 } from "./db.js";
@@ -168,14 +172,21 @@ function buildSystemPrompt(turn: Turn, now: Date): string {
     "  - Ogni appuntamento può coinvolgere **uno o più dottori** (`doctorIds`), **una o più stanze/oggetti clinici** (`clinicalObjectIds`) e **uno o più pazienti** (`patientIds`). Almeno un dottore o un oggetto clinico è obbligatorio.",
     "  - Con `createAppointments` puoi creare **uno o più appuntamenti in blocco** in una sola chiamata.",
     "  - Con `updateAppointments` puoi modificare **uno o più appuntamenti in blocco** (orari, titolo, nota, dottori, oggetti clinici, pazienti). Prima di modificare o cancellare, se non conosci gli ID degli appuntamenti, cercali con `listAppointments`.",
-    "  - Con `deleteAppointments` puoi eliminare **uno o più appuntamenti in blocco** passando i loro ID.",
+    "  - Con `deleteAppointments` proponi l'eliminazione di uno o più appuntamenti, anche tutti quelli richiesti, in una sola chiamata. Il sistema non elimina: apre un solo dialog. La chiamata risponde `awaiting_user`. Non chiedere conferma in chat, non dire che l'eliminazione è avvenuta e non rifiutare l'azione perché sono tanti.",
     "  - Quando un appuntamento riguarda un paziente, usa l'id trovato con `searchPatients`.",
+    "  - Un **blocco di agenda** non è un appuntamento: occupa il tempo di uno o più dottori (`doctorIds`) o di una o più stanze/oggetti (`clinicalObjectIds`), con un titolo obbligatorio e una descrizione facoltativa. Non ha pazienti e non impedisce un appuntamento nello stesso orario.",
+    "  - Con `createAgendaBlocks` e `updateAgendaBlocks` crei o modifichi uno o più blocchi. Per leggerli usa `listAgendaBlocks`. Non usare gli strumenti degli appuntamenti per un blocco, né il contrario.",
+    "  - Con `deleteAgendaBlocks` proponi l'eliminazione di uno o più blocchi in una sola chiamata. Vale la stessa regola di `deleteAppointments`: un solo dialog, risposta `awaiting_user`, niente conferma in chat.",
+    "  - Se ti chiedono che cosa c'è in agenda in un intervallo, leggi sia gli appuntamenti sia i blocchi.",
     "  - Tutte le date/orari passati ai tool devono essere in formato ISO 8601 completo di offset (es. `2026-10-28T09:30:00+01:00`) e, accanto a ciascuna data, il nome del giorno in italiano nel fuso Europe/Rome (es. `mercoledì`). Il nome deve coincidere con la data: se non coincide, il tool rifiuta la chiamata.",
     "- **Pazienti**:",
     "  - Con `searchPatients` leggi l'anagrafica: nome, cognome, data di nascita, codice fiscale, telefono, email, note e data di creazione del profilo (`createdAt`, sola lettura).",
     "  - Con `createPatients` puoi creare uno o più pazienti, se hai il permesso di scrittura.",
     "  - Con `updatePatients` puoi modificare uno o più pazienti già esistenti. Prima cercali per avere l'id. I campi che non indichi restano invariati; passa null per svuotare data di nascita, codice fiscale, telefono, email o nota.",
-    "  - Con `deletePatients` puoi proporre l'eliminazione di uno o più pazienti. Il sistema non elimina e non affida a te la conferma: apre un dialog all'utente. La chiamata risponde `awaiting_user`. Non chiedere conferma in chat, non dire che l'eliminazione è avvenuta e non richiamare il tool. Se l'utente conferma, il sistema elimina e ti avvisa; se annulla, ti avvisa che non è stato eliminato nulla.",
+    "  - Con `deletePatients` proponi l'eliminazione di uno o più pazienti, fino a 30, in una sola chiamata. Se chiedono di eliminarne tanti o tutti, cerca gli id e passali insieme: il dialog è uno solo per l'intera chiamata, non uno per paziente. Non dire che non puoi farlo in un'unica azione. La chiamata risponde `awaiting_user`. Non chiedere conferma in chat e non dire che l'eliminazione è avvenuta. Se l'utente conferma, il sistema elimina tutti quelli della chiamata e ti avvisa; se annulla, non è stato eliminato nulla.",
+    "- **Dialog di conferma**:",
+    "  - Le azioni che aspettano un sì non le esegui tu. Chiami il tool e il sistema mostra sempre lo stesso dialog: «[tuo nome] sta tentando di eseguire [azione]. Procedere?».",
+    "  - Una chiamata, un dialog, tutti gli elementi di quella chiamata. Non spezzare la richiesta in conferme separate e non rifiutarla.",
     "- **Clinica e identità**:",
     "  - Con `renameClinic` puoi cambiare il nome della clinica, se hai il permesso. Il nome sta entro 80 caratteri.",
     "  - Con `renameSelf` puoi cambiare il tuo nome, entro 40 caratteri. Il titolo di questa chat viene allineato al nuovo nome.",
@@ -426,8 +437,160 @@ export async function replyToTurn(
       },
     }),
 
+    listAgendaBlocks: tool({
+      description:
+        "Legge i blocchi di agenda in un intervallo di tempo. Un blocco occupa il tempo di dottori o stanze e non è un appuntamento.",
+      inputSchema: z
+        .object({
+          fromIso: z.string().describe("Inizio intervallo in formato ISO 8601 (es. 2026-10-28T00:00:00+01:00)"),
+          fromDay: weekdayName.describe("Giorno di fromIso (es. mercoledì)"),
+          toIso: z.string().describe("Fine intervallo in formato ISO 8601 (es. 2026-10-29T00:00:00+01:00)"),
+          toDay: weekdayName.describe("Giorno di toIso (es. giovedì)"),
+          doctorIds: z.array(z.string().uuid()).optional().describe("Filtra per ID di uno o più dottori"),
+          clinicalObjectIds: z
+            .array(z.string().uuid())
+            .optional()
+            .describe("Filtra per ID di una o più stanze/oggetti clinici"),
+        })
+        .superRefine((value, ctx) => {
+          sameWeekday(value.fromIso, value.fromDay, ctx, "fromIso", "fromDay");
+          sameWeekday(value.toIso, value.toDay, ctx, "toIso", "toDay");
+        }),
+      execute: async ({ fromIso, toIso, doctorIds, clinicalObjectIds }) => {
+        const items = await botListAgendaBlocks(client, workerId, turn.id, {
+          from: fromIso,
+          to: toIso,
+          doctorIds,
+          clinicalObjectIds,
+        });
+        return { blocks: withDayNames(items) };
+      },
+    }),
+
+    createAgendaBlocks: tool({
+      description:
+        "Crea uno o più blocchi di agenda. Ogni blocco ha un titolo, una descrizione facoltativa e almeno un dottore o una stanza/oggetto. Non assegna pazienti e non vieta un appuntamento nello stesso orario.",
+      inputSchema: z.object({
+        blocks: z
+          .array(
+            z
+              .object({
+                startsAt: z.string().describe("Inizio blocco ISO 8601 (es. 2026-10-28T13:00:00+01:00)"),
+                startsDay: weekdayName.describe("Giorno di startsAt (es. mercoledì)"),
+                endsAt: z.string().describe("Fine blocco ISO 8601 (es. 2026-10-28T14:00:00+01:00)"),
+                endsDay: weekdayName.describe("Giorno di endsAt (es. mercoledì)"),
+                title: z.string().min(1).max(120).describe("Titolo del blocco, obbligatorio"),
+                description: z.string().max(1000).optional().describe("Descrizione facoltativa"),
+                doctorIds: z
+                  .array(z.string().uuid())
+                  .default([])
+                  .describe("ID dei dottori il cui tempo viene occupato"),
+                clinicalObjectIds: z
+                  .array(z.string().uuid())
+                  .default([])
+                  .describe("ID delle stanze o oggetti clinici il cui tempo viene occupato"),
+              })
+              .superRefine((value, ctx) => {
+                sameWeekday(value.startsAt, value.startsDay, ctx, "startsAt", "startsDay");
+                sameWeekday(value.endsAt, value.endsDay, ctx, "endsAt", "endsDay");
+              }),
+          )
+          .min(1)
+          .max(50),
+      }),
+      execute: async ({ blocks }) => {
+        const created = await botCreateAgendaBlocks(
+          client,
+          workerId,
+          turn.id,
+          blocks.map(({ startsDay: _startsDay, endsDay: _endsDay, ...item }) => item),
+        );
+        return { created: withDayNames(created) };
+      },
+    }),
+
+    updateAgendaBlocks: tool({
+      description:
+        "Modifica uno o più blocchi di agenda (orario, titolo, descrizione, dottori, stanze/oggetti). Prima di modificare, se non conosci gli ID, cercali con listAgendaBlocks.",
+      inputSchema: z.object({
+        updates: z
+          .array(
+            z
+              .object({
+                blockId: z.string().uuid().describe("ID del blocco da modificare"),
+                startsAt: z.string().optional().describe("Nuovo inizio ISO 8601"),
+                startsDay: weekdayName.optional().describe("Giorno di startsAt, obbligatorio se cambi l'inizio"),
+                endsAt: z.string().optional().describe("Nuova fine ISO 8601"),
+                endsDay: weekdayName.optional().describe("Giorno di endsAt, obbligatorio se cambi la fine"),
+                title: z.string().min(1).max(120).optional().describe("Nuovo titolo"),
+                description: z
+                  .string()
+                  .max(1000)
+                  .nullable()
+                  .optional()
+                  .describe("Nuova descrizione, oppure null per toglierla"),
+                doctorIds: z
+                  .array(z.string().uuid())
+                  .optional()
+                  .describe("Nuova lista completa di ID dottori per questo blocco"),
+                clinicalObjectIds: z
+                  .array(z.string().uuid())
+                  .optional()
+                  .describe("Nuova lista completa di ID stanze/oggetti per questo blocco"),
+              })
+              .superRefine((value, ctx) => {
+                if (value.startsAt) {
+                  if (!value.startsDay) {
+                    ctx.addIssue({
+                      code: "custom",
+                      message: "Indica startsDay insieme a startsAt.",
+                      path: ["startsDay"],
+                    });
+                  } else {
+                    sameWeekday(value.startsAt, value.startsDay, ctx, "startsAt", "startsDay");
+                  }
+                }
+                if (value.endsAt) {
+                  if (!value.endsDay) {
+                    ctx.addIssue({
+                      code: "custom",
+                      message: "Indica endsDay insieme a endsAt.",
+                      path: ["endsDay"],
+                    });
+                  } else {
+                    sameWeekday(value.endsAt, value.endsDay, ctx, "endsAt", "endsDay");
+                  }
+                }
+              }),
+          )
+          .min(1)
+          .max(50),
+      }),
+      execute: async ({ updates }) => {
+        const updated = await botUpdateAgendaBlocks(
+          client,
+          workerId,
+          turn.id,
+          updates.map(({ startsDay: _startsDay, endsDay: _endsDay, ...item }) => item),
+        );
+        return { updated: withDayNames(updated) };
+      },
+    }),
+
+    deleteAgendaBlocks: tool({
+      description:
+        "Propone l'eliminazione di uno o più blocchi di agenda in una sola chiamata. Non cancella: il sistema apre un solo dialog e risponde awaiting_user. Non chiedere conferma in chat.",
+      inputSchema: z.object({
+        blockIds: z.array(z.string().uuid()).min(1).max(50).describe("Lista degli ID dei blocchi da eliminare"),
+      }),
+      execute: async ({ blockIds }) => {
+        return await botDeleteAgendaBlocks(client, workerId, turn.id, blockIds);
+      },
+    }),
+
     deleteAppointments: tool({
-      description: "Elimina uno o più appuntamenti dall'agenda tramite i loro ID.",
+      description:
+        "Propone l'eliminazione di uno o più appuntamenti in una sola chiamata. Non cancella: il sistema apre un solo dialog e risponde awaiting_user. Non chiedere conferma in chat.",
       inputSchema: z.object({
         appointmentIds: z
           .array(z.string().uuid())
@@ -436,8 +599,7 @@ export async function replyToTurn(
           .describe("Lista degli ID degli appuntamenti da eliminare"),
       }),
       execute: async ({ appointmentIds }) => {
-        const deleted = await botDeleteAppointments(client, workerId, turn.id, appointmentIds);
-        return { deleted };
+        return await botDeleteAppointments(client, workerId, turn.id, appointmentIds);
       },
     }),
 
@@ -559,13 +721,13 @@ export async function replyToTurn(
 
     deletePatients: tool({
       description:
-        "Propone l'eliminazione di uno o più pazienti. Non cancella: il sistema apre un dialog all'utente e risponde awaiting_user. Non chiedere conferma in chat. L'esito arriva dopo, quando l'utente ha scelto.",
+        "Propone l'eliminazione di uno o più pazienti, fino a 30, in una sola chiamata. Non cancella: il sistema apre un solo dialog e risponde awaiting_user. Passa tutti gli id insieme. Non chiedere conferma in chat.",
       inputSchema: z.object({
         patientIds: z
           .array(z.string().uuid())
           .min(1)
-          .max(20)
-          .describe("ID dei pazienti da eliminare, gli stessi della conferma in sospeso"),
+          .max(30)
+          .describe("Tutti gli ID dei pazienti da eliminare, in una sola chiamata"),
       }),
       execute: async ({ patientIds }) => {
         return await botDeletePatients(client, workerId, turn.id, patientIds);
@@ -581,9 +743,16 @@ export async function replyToTurn(
     "renameSelf",
   ];
   if (canRenameClinic) activeTools.push("renameClinic");
-  if (canReadAgenda) activeTools.push("listAppointments");
+  if (canReadAgenda) activeTools.push("listAppointments", "listAgendaBlocks");
   if (canWriteAgenda) {
-    activeTools.push("createAppointments", "updateAppointments", "deleteAppointments");
+    activeTools.push(
+      "createAppointments",
+      "updateAppointments",
+      "deleteAppointments",
+      "createAgendaBlocks",
+      "updateAgendaBlocks",
+      "deleteAgendaBlocks",
+    );
   }
   if (canReadPatients) activeTools.push("searchPatients");
   if (canWritePatients) activeTools.push("createPatients", "updatePatients", "deletePatients");

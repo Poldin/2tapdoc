@@ -3,7 +3,7 @@
 import { useActionState, useEffect, useRef, useState } from "react";
 import { createChat, updateChat, type CreatedChat, type FormState } from "@/app/clinics/actions";
 import { ChannelMark } from "@/components/mark";
-import { channelSymbols, markColors } from "@/lib/marks";
+import { channelSymbols } from "@/lib/marks";
 
 export type ChatDraft = {
   chatId: string;
@@ -25,7 +25,7 @@ export function ChatDialog({
   onClose: () => void;
   onCreated?: (chat: CreatedChat) => void;
 }) {
-  const [color, setColor] = useState(draft?.color ?? "teal");
+  const color = draft?.color ?? "teal";
   const [emoji, setEmoji] = useState(draft?.emoji ?? "speechbubble");
   const [state, action, pending] = useActionState<FormState, FormData>(
     draft ? updateChat.bind(null, clinicId, draft.chatId) : createChat.bind(null, clinicId),
@@ -69,7 +69,7 @@ export function ChatDialog({
             <h2 id="chat-dialog-title" className="text-base font-medium">
               {draft ? "Modifica conversazione" : "Nuova conversazione"}
             </h2>
-            <p className="mt-1 text-sm text-muted">Un cerchio colorato e un simbolo, non una faccia.</p>
+            <p className="mt-1 text-sm text-muted">Scegli un simbolo per la conversazione.</p>
           </div>
           <button
             type="button"
@@ -82,7 +82,7 @@ export function ChatDialog({
         </div>
 
         <div className="flex items-center gap-3">
-          <ChannelMark color={color} emoji={emoji} animate className="h-12 w-12" />
+          <ChannelMark color={color} emoji={emoji} animate plain className="h-12 w-12" />
           <input
             name="title"
             autoFocus
@@ -93,23 +93,6 @@ export function ChatDialog({
             className="h-10 min-w-0 flex-1 rounded-xl border border-line bg-background px-3 text-sm outline-none focus:border-teal"
           />
         </div>
-
-        <fieldset>
-          <legend className="text-sm text-muted">Colore</legend>
-          <div className="mt-2 flex flex-wrap gap-2">
-            {markColors.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                aria-label={item.label}
-                aria-pressed={color === item.id}
-                onClick={() => setColor(item.id)}
-                className={`h-8 w-8 rounded-full ${color === item.id ? "ring-2 ring-ink ring-offset-2" : ""}`}
-                style={{ background: item.value }}
-              />
-            ))}
-          </div>
-        </fieldset>
 
         <fieldset>
           <legend className="text-sm text-muted">Simbolo</legend>
@@ -123,7 +106,7 @@ export function ChatDialog({
                 onClick={() => setEmoji(item.id)}
                 className={`rounded-full ${emoji === item.id ? "ring-2 ring-ink ring-offset-1" : ""}`}
               >
-                <ChannelMark color={color} emoji={item.id} className="h-7 w-7" />
+                <ChannelMark color={color} emoji={item.id} plain className="h-7 w-7" />
               </button>
             ))}
           </div>

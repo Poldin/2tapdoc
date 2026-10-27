@@ -132,6 +132,85 @@ export async function botUpdateAppointments(
   return result.rows[0]?.updated ?? [];
 }
 
+export async function botListAgendaBlocks(
+  client: pg.Client,
+  workerId: string,
+  jobId: string,
+  params: {
+    from: string;
+    to: string;
+    doctorIds?: string[];
+    clinicalObjectIds?: string[];
+  },
+): Promise<unknown> {
+  const result = await client.query<{ items: unknown }>(
+    "select private.bot_list_agenda_blocks($1, $2, $3::timestamptz, $4::timestamptz, $5::uuid[], $6::uuid[]) as items",
+    [
+      workerId,
+      jobId,
+      params.from,
+      params.to,
+      params.doctorIds?.length ? params.doctorIds : null,
+      params.clinicalObjectIds?.length ? params.clinicalObjectIds : null,
+    ],
+  );
+  return result.rows[0]?.items ?? [];
+}
+
+export async function botCreateAgendaBlocks(
+  client: pg.Client,
+  workerId: string,
+  jobId: string,
+  items: Array<{
+    startsAt: string;
+    endsAt: string;
+    title: string;
+    description?: string | null;
+    doctorIds?: string[];
+    clinicalObjectIds?: string[];
+  }>,
+): Promise<unknown> {
+  const result = await client.query<{ created: unknown }>(
+    "select private.bot_create_agenda_blocks($1, $2, $3::jsonb) as created",
+    [workerId, jobId, JSON.stringify(items)],
+  );
+  return result.rows[0]?.created ?? [];
+}
+
+export async function botUpdateAgendaBlocks(
+  client: pg.Client,
+  workerId: string,
+  jobId: string,
+  items: Array<{
+    blockId: string;
+    startsAt?: string;
+    endsAt?: string;
+    title?: string;
+    description?: string | null;
+    doctorIds?: string[];
+    clinicalObjectIds?: string[];
+  }>,
+): Promise<unknown> {
+  const result = await client.query<{ updated: unknown }>(
+    "select private.bot_update_agenda_blocks($1, $2, $3::jsonb) as updated",
+    [workerId, jobId, JSON.stringify(items)],
+  );
+  return result.rows[0]?.updated ?? [];
+}
+
+export async function botDeleteAgendaBlocks(
+  client: pg.Client,
+  workerId: string,
+  jobId: string,
+  blockIds: string[],
+): Promise<unknown> {
+  const result = await client.query<{ deleted: unknown }>(
+    "select private.bot_delete_agenda_blocks($1, $2, $3::uuid[]) as deleted",
+    [workerId, jobId, blockIds],
+  );
+  return result.rows[0]?.deleted ?? [];
+}
+
 export async function botDeleteAppointments(
   client: pg.Client,
   workerId: string,

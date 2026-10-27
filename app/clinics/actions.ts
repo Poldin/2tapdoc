@@ -19,7 +19,7 @@ export type CreatedChat = {
   preview: string | null;
   activityAt: string;
   bot: { id: string; name: string; color: string; emoji: string } | null;
-  messages: { id: string; body: string; createdAt: string; mine: boolean; botId: string | null }[];
+  messages: { id: string; body: string; createdAt: string; mine: boolean; botId: string | null; preferredAt: string | null }[];
 };
 
 export type FormState = {
@@ -251,6 +251,7 @@ export async function createBot(
           createdAt: activityAt,
           mine: false,
           botId: bot.id,
+          preferredAt: null,
         },
       ],
     },
@@ -427,7 +428,34 @@ export async function sendMessage(
   return { sent: Date.now() };
 }
 
-export async function decidePatientDeletion(
+export async function preferMessage(
+  clinicId: string,
+  chatId: string,
+  messageId: string,
+  preferred: boolean,
+): Promise<FormState> {
+  const user = await requireUser();
+  if (!uuidPattern.test(clinicId) || !uuidPattern.test(chatId) || !uuidPattern.test(messageId)) {
+    return { error: "Messaggio non valido." };
+  }
+  if (!(await clinicMember(clinicId, user.id))) return { error: "Non fai parte di questo studio." };
+  if (!(await chatInClinic(clinicId, chatId))) return { error: "Questa chat non è in questa clinica." };
+
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("chat_events")
+    .update({ preferred_at: preferred ? new Date().toISOString() : null })
+    .eq("id", messageId)
+    .eq("chat_id", chatId)
+    .eq("kind", "message")
+    .select("id");
+
+  if (error || !data?.length) return { error: "Non è stato possibile aggiornare il preferito." };
+  revalidatePath(`/clinics/${clinicId}`);
+  return {};
+}
+
+export async function decideBotAction(
   clinicId: string,
   requestId: string,
   _state: FormState,
@@ -823,4 +851,346 @@ export async function createPatient(
   if (error || !data?.length) return { error: "Non è stato possibile aggiungere il paziente." };
   revalidatePath(`/clinics/${clinicId}`);
   return { sent: Date.now() };
+}
+
+async function agendaLaneKind(clinicId: string, laneId: string) {
+  const supabase = await createClient();
+  const { data: doctor } = await supabase
+    .from("doctors")
+    .select("id")
+    .eq("clinic_id", clinicId)
+    .eq("id", laneId)
+    .maybeSingle();
+  if (doctor) return "specialist" as const;
+  const { data: object } = await supabase
+    .from("clinical_objects")
+    .select("id")
+    .eq("clinic_id", clinicId)
+    .eq("id", laneId)
+    .maybeSingle();
+  if (object) return "asset" as const;
+  return null;
+}
+
+export async function moveAgendaEntry(input: {
+  clinicId: string;
+  kind: "appointment" | "block";
+  id: string;
+  startsAt: string;
+  fromLaneId: string;
+  toLaneId: string;
+}): Promise<FormState> {
+  const user = await requireUser();
+  const { clinicId, kind, id, fromLaneId, toLaneId } = input;
+  if (![clinicId, id, fromLaneId, toLaneId].every((value) => uuidPattern.test(value))) {
+    return { error: "Non è stato possibile spostare." };
+  }
+  if (kind !== "appointment" && kind !== "block") return { error: "Non è stato possibile spostare." };
+  if (!(await clinicMember(clinicId, user.id))) return { error: "Non fai parte di questo studio." };
+
+  const starts = new Date(input.startsAt);
+  if (Number.isNaN(starts.getTime())) return { error: "Orario non valido." };
+
+  const fromKind = await agendaLaneKind(clinicId, fromLaneId);
+  const toKind = await agendaLaneKind(clinicId, toLaneId);
+  if (!fromKind || !toKind) return { error: "Non è stato possibile spostare." };
+
+  const supabase = await createClient();
+  const table = kind === "appointment" ? "appointments" : "agenda_blocks";
+  const { data: row, error: readError } = await supabase
+    .from(table)
+    .select("starts_at, ends_at")
+    .eq("clinic_id", clinicId)
+    .eq("id", id)
+    .maybeSingle();
+  if (readError || !row) return { error: "Non è stato possibile spostare." };
+
+  const duration = Date.parse(row.ends_at) - Date.parse(row.starts_at);
+  if (!Number.isFinite(duration) || duration <= 0) return { error: "Non è stato possibile spostare." };
+  const ends = new Date(starts.getTime() + duration);
+
+  const { data: updated, error: timeError } = await supabase
+    .from(table)
+    .update({ starts_at: starts.toISOString(), ends_at: ends.toISOString() })
+    .eq("clinic_id", clinicId)
+    .eq("id", id)
+    .select("id");
+  if (timeError || !updated?.length) return { error: "Non hai il permesso di spostare in agenda." };
+
+  if (fromLaneId !== toLaneId) {
+    const parent = kind === "appointment" ? "appointment_id" : "block_id";
+    const doctors = kind === "appointment" ? "appointment_doctors" : "agenda_block_doctors";
+    const objects = kind === "appointment" ? "appointment_objects" : "agenda_block_objects";
+    const targetTable = toKind === "specialist" ? doctors : objects;
+    const targetColumn = toKind === "specialist" ? "doctor_id" : "clinical_object_id";
+    const sourceTable = fromKind === "specialist" ? doctors : objects;
+    const sourceColumn = fromKind === "specialist" ? "doctor_id" : "clinical_object_id";
+
+    const { data: existing } = await supabase
+      .from(targetTable)
+      .select(targetColumn)
+      .eq(parent, id)
+      .eq(targetColumn, toLaneId)
+      .maybeSingle();
+    if (!existing) {
+      const { error: linkError } = await supabase
+        .from(targetTable)
+        .insert({ [parent]: id, [targetColumn]: toLaneId });
+      if (linkError) return { error: "Non è stato possibile spostare." };
+    }
+
+    const { error: unlinkError } = await supabase
+      .from(sourceTable)
+      .delete()
+      .eq(parent, id)
+      .eq(sourceColumn, fromLaneId);
+    if (unlinkError) return { error: "Non è stato possibile spostare." };
+  }
+
+  revalidatePath(`/clinics/${clinicId}`);
+  return {};
+}
+
+export async function deleteAgendaEntry(input: {
+  clinicId: string;
+  kind: "appointment" | "block";
+  id: string;
+}): Promise<FormState> {
+  const user = await requireUser();
+  const { clinicId, kind, id } = input;
+  if (!uuidPattern.test(clinicId) || !uuidPattern.test(id)) return { error: "Non è stato possibile eliminare." };
+  if (kind !== "appointment" && kind !== "block") return { error: "Non è stato possibile eliminare." };
+  if (!(await clinicMember(clinicId, user.id))) return { error: "Non fai parte di questo studio." };
+
+  const supabase = await createClient();
+  const table = kind === "appointment" ? "appointments" : "agenda_blocks";
+  const { data, error } = await supabase
+    .from(table)
+    .delete()
+    .eq("clinic_id", clinicId)
+    .eq("id", id)
+    .select("id");
+  if (error || !data?.length) return { error: "Non hai il permesso di eliminare in agenda." };
+  revalidatePath(`/clinics/${clinicId}`);
+  return {};
+}
+
+async function replaceAgendaLinks(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  table: string,
+  parentColumn: string,
+  parentId: string,
+  column: string,
+  ids: string[],
+) {
+  const { data: existing, error: readError } = await supabase.from(table).select(column).eq(parentColumn, parentId);
+  if (readError) return "Non è stato possibile aggiornare.";
+  const have = new Set(
+    (existing ?? []).flatMap((row) => {
+      const value = (row as Record<string, unknown>)[column];
+      return typeof value === "string" ? [value] : [];
+    }),
+  );
+  const want = new Set(ids);
+  const add = ids.filter((item) => !have.has(item));
+  const remove = [...have].filter((item) => !want.has(item));
+  if (add.length > 0) {
+    const { error } = await supabase.from(table).insert(add.map((item) => ({ [parentColumn]: parentId, [column]: item })));
+    if (error) return "Non è stato possibile aggiornare.";
+  }
+  if (remove.length > 0) {
+    const { error } = await supabase.from(table).delete().eq(parentColumn, parentId).in(column, remove);
+    if (error) return "Non è stato possibile aggiornare.";
+  }
+  return null;
+}
+
+export async function updateAgendaEntry(input: {
+  clinicId: string;
+  fromKind: "appointment" | "block";
+  kind: "appointment" | "block";
+  id: string;
+  title: string | null;
+  body: string | null;
+  startsAt: string;
+  endsAt: string;
+  doctorIds: string[];
+  objectIds: string[];
+  patientIds: string[];
+}): Promise<FormState> {
+  const user = await requireUser();
+  const { clinicId, fromKind, kind, id, doctorIds, objectIds, patientIds } = input;
+  const ids = [clinicId, id, ...doctorIds, ...objectIds, ...patientIds];
+  if (!ids.every((value) => uuidPattern.test(value))) return { error: "Non è stato possibile aggiornare." };
+  if ((kind !== "appointment" && kind !== "block") || (fromKind !== "appointment" && fromKind !== "block")) {
+    return { error: "Non è stato possibile aggiornare." };
+  }
+  if (!(await clinicMember(clinicId, user.id))) return { error: "Non fai parte di questo studio." };
+
+  const title = input.title?.trim() || null;
+  const body = input.body?.trim() || null;
+  const starts = new Date(input.startsAt);
+  const ends = new Date(input.endsAt);
+  if (Number.isNaN(starts.getTime()) || Number.isNaN(ends.getTime()) || ends <= starts) {
+    return { error: "La fine deve essere dopo l'inizio." };
+  }
+  if (kind === "block" && !title) return { error: "Il blocco ha bisogno di un titolo." };
+  if ((title && title.length > 120) || (body && body.length > 1000)) {
+    return { error: "Titolo o testo sono troppo lunghi." };
+  }
+  if (doctorIds.length === 0 && objectIds.length === 0) {
+    return { error: "Serve almeno uno specialista o un oggetto." };
+  }
+
+  const supabase = await createClient();
+  const startsAt = starts.toISOString();
+  const endsAt = ends.toISOString();
+  let entryId = id;
+
+  if (fromKind !== kind) {
+    const source = fromKind === "appointment" ? "appointments" : "agenda_blocks";
+    const { data: current } = await supabase.from(source).select("id").eq("clinic_id", clinicId).eq("id", id).maybeSingle();
+    if (!current) return { error: "Non è stato possibile aggiornare." };
+    const created =
+      kind === "appointment"
+        ? await supabase
+            .from("appointments")
+            .insert({ clinic_id: clinicId, title, note: body, starts_at: startsAt, ends_at: endsAt })
+            .select("id")
+            .single()
+        : await supabase
+            .from("agenda_blocks")
+            .insert({ clinic_id: clinicId, title, description: body, starts_at: startsAt, ends_at: endsAt })
+            .select("id")
+            .single();
+    if (created.error || !created.data) return { error: "Non hai il permesso di modificare in agenda." };
+    entryId = created.data.id;
+  } else {
+    const updated =
+      kind === "appointment"
+        ? await supabase
+            .from("appointments")
+            .update({ title, note: body, starts_at: startsAt, ends_at: endsAt })
+            .eq("clinic_id", clinicId)
+            .eq("id", id)
+            .select("id")
+        : await supabase
+            .from("agenda_blocks")
+            .update({ title, description: body, starts_at: startsAt, ends_at: endsAt })
+            .eq("clinic_id", clinicId)
+            .eq("id", id)
+            .select("id");
+    if (updated.error || !updated.data?.length) return { error: "Non hai il permesso di modificare in agenda." };
+  }
+
+  const parent = kind === "appointment" ? "appointment_id" : "block_id";
+  const doctors = kind === "appointment" ? "appointment_doctors" : "agenda_block_doctors";
+  const objects = kind === "appointment" ? "appointment_objects" : "agenda_block_objects";
+
+  const doctorError = await replaceAgendaLinks(supabase, doctors, parent, entryId, "doctor_id", doctorIds);
+  if (doctorError) return { error: doctorError };
+  const objectError = await replaceAgendaLinks(supabase, objects, parent, entryId, "clinical_object_id", objectIds);
+  if (objectError) return { error: objectError };
+  if (kind === "appointment") {
+    const patientError = await replaceAgendaLinks(
+      supabase,
+      "appointment_patients",
+      "appointment_id",
+      entryId,
+      "patient_id",
+      patientIds,
+    );
+    if (patientError) return { error: patientError };
+  }
+  if (fromKind !== kind) {
+    const source = fromKind === "appointment" ? "appointments" : "agenda_blocks";
+    const removed = await supabase.from(source).delete().eq("clinic_id", clinicId).eq("id", id).select("id");
+    if (removed.error || !removed.data?.length) return { error: "Non è stato possibile aggiornare." };
+  }
+
+  revalidatePath(`/clinics/${clinicId}`);
+  return {};
+}
+
+export async function createAgendaEntry(input: {
+  clinicId: string;
+  kind: "appointment" | "block";
+  title: string | null;
+  body: string | null;
+  startsAt: string;
+  endsAt: string;
+  doctorIds: string[];
+  objectIds: string[];
+  patientIds: string[];
+}): Promise<FormState> {
+  const user = await requireUser();
+  const { clinicId, kind, doctorIds, objectIds, patientIds } = input;
+  const ids = [clinicId, ...doctorIds, ...objectIds, ...patientIds];
+  if (!ids.every((value) => uuidPattern.test(value))) return { error: "Non è stato possibile creare." };
+  if (kind !== "appointment" && kind !== "block") return { error: "Non è stato possibile creare." };
+  if (!(await clinicMember(clinicId, user.id))) return { error: "Non fai parte di questo studio." };
+
+  const title = input.title?.trim() || null;
+  const body = input.body?.trim() || null;
+  const starts = new Date(input.startsAt);
+  const ends = new Date(input.endsAt);
+  if (Number.isNaN(starts.getTime()) || Number.isNaN(ends.getTime()) || ends <= starts) {
+    return { error: "La fine deve essere dopo l'inizio." };
+  }
+  if (kind === "block" && !title) return { error: "Il blocco ha bisogno di un titolo." };
+  if ((title && title.length > 120) || (body && body.length > 1000)) {
+    return { error: "Titolo o testo sono troppo lunghi." };
+  }
+  if (doctorIds.length === 0 && objectIds.length === 0) {
+    return { error: "Serve almeno uno specialista o un oggetto." };
+  }
+
+  const supabase = await createClient();
+  const created =
+    kind === "appointment"
+      ? await supabase
+          .from("appointments")
+          .insert({
+            clinic_id: clinicId,
+            title,
+            note: body,
+            starts_at: starts.toISOString(),
+            ends_at: ends.toISOString(),
+          })
+          .select("id")
+          .single()
+      : await supabase
+          .from("agenda_blocks")
+          .insert({
+            clinic_id: clinicId,
+            title,
+            description: body,
+            starts_at: starts.toISOString(),
+            ends_at: ends.toISOString(),
+          })
+          .select("id")
+          .single();
+  if (created.error || !created.data) return { error: "Non hai il permesso di creare in agenda." };
+
+  const entryId = created.data.id;
+  const parent = kind === "appointment" ? "appointment_id" : "block_id";
+  const doctors = kind === "appointment" ? "appointment_doctors" : "agenda_block_doctors";
+  const objects = kind === "appointment" ? "appointment_objects" : "agenda_block_objects";
+  const table = kind === "appointment" ? "appointments" : "agenda_blocks";
+  const doctorError = await replaceAgendaLinks(supabase, doctors, parent, entryId, "doctor_id", doctorIds);
+  const objectError = doctorError
+    ? null
+    : await replaceAgendaLinks(supabase, objects, parent, entryId, "clinical_object_id", objectIds);
+  const patientError =
+    doctorError || objectError || kind !== "appointment"
+      ? null
+      : await replaceAgendaLinks(supabase, "appointment_patients", "appointment_id", entryId, "patient_id", patientIds);
+  const linkError = doctorError ?? objectError ?? patientError;
+  if (linkError) {
+    await supabase.from(table).delete().eq("clinic_id", clinicId).eq("id", entryId);
+    return { error: linkError };
+  }
+
+  revalidatePath(`/clinics/${clinicId}`);
+  return {};
 }

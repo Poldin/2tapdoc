@@ -1,17 +1,18 @@
 "use client";
 
-import { useActionState, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useActionState, useEffect, useLayoutEffect, useRef, useState, useTransition } from "react";
 import { flushSync } from "react-dom";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, PanelLeftClose, PanelLeftOpen, Plus, Search } from "lucide-react";
-import { sendMessage, type CreatedChat, type FormState } from "@/app/clinics/actions";
+import { ArrowLeft, PanelLeftClose, PanelLeftOpen, Plus, Search, Send, Star } from "lucide-react";
+import { preferMessage, sendMessage, type CreatedChat, type FormState } from "@/app/clinics/actions";
 import { botGreeting } from "@/lib/bot-greeting";
 import { AgendaListItem, agendaListId } from "@/components/agenda-list-item";
-import { AgendaView, type AgendaAppointment, type AgendaLane } from "@/components/agenda-view";
+import { type AgendaEditPatient } from "@/components/agenda-edit-dialog";
+import { AgendaView, type AgendaAppointment, type AgendaBlock, type AgendaLane } from "@/components/agenda-view";
 import { PatientsListItem, patientsListId } from "@/components/patients-list-item";
 import { PatientPage } from "@/components/patient-page";
-import { PatientDeletionDialog, type PatientDeletionRequest } from "@/components/patient-deletion-dialog";
+import { BotActionDialog, type BotActionRequest } from "@/components/bot-action-dialog";
 import { PatientsView } from "@/components/patients-view";
 import { type PatientRecord } from "@/lib/patients";
 import { SettingsListItem, settingsListId } from "@/components/settings-list-item";
@@ -56,6 +57,7 @@ export type ChatMessage = {
   createdAt: string;
   mine: boolean;
   botId: string | null;
+  preferredAt: string | null;
 };
 
 export type BotMark = {
@@ -186,6 +188,7 @@ function writeDraft(clinicId: string, chatId: string, value: string) {
 function MessageComposer({ clinicId, chatId }: { clinicId: string; chatId: string }) {
   const formRef = useRef<HTMLFormElement>(null);
   const fieldRef = useRef<HTMLTextAreaElement>(null);
+  const [ready, setReady] = useState(false);
   const [state, action, pending] = useActionState<FormState, FormData>(
     sendMessage.bind(null, clinicId, chatId),
     {},
@@ -201,6 +204,7 @@ function MessageComposer({ clinicId, chatId }: { clinicId: string; chatId: strin
       const saved = readDraft(clinicId, chatId);
       if (saved) field.value = saved;
     }
+    setReady(field.value.trim().length > 0);
     fitField(field);
   }, [state.sent, clinicId, chatId]);
 
@@ -220,21 +224,23 @@ function MessageComposer({ clinicId, chatId }: { clinicId: string; chatId: strin
           onInput={(event) => {
             const field = event.currentTarget;
             writeDraft(clinicId, chatId, field.value);
+            setReady(field.value.trim().length > 0);
             fitField(field);
           }}
           onKeyDown={(event) => {
             if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
             event.preventDefault();
-            if (!pending) formRef.current?.requestSubmit();
+            if (!pending && event.currentTarget.value.trim()) formRef.current?.requestSubmit();
           }}
           className="composer-field max-h-40 min-h-12 min-w-0 flex-1 resize-none overflow-x-hidden overflow-y-auto rounded-[1.5rem] border border-line bg-paper px-4 py-3 text-sm leading-5 disabled:opacity-50"
         />
         <button
           type="submit"
-          disabled={pending}
-          className="h-12 shrink-0 rounded-full bg-ink px-4 text-sm text-paper disabled:opacity-40"
+          disabled={pending || !ready}
+          aria-label="Invia"
+          className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-ink text-paper disabled:opacity-40"
         >
-          Invia
+          <Send className="h-5 w-5" strokeWidth={2} />
         </button>
       </div>
     </form>
@@ -242,7 +248,54 @@ function MessageComposer({ clinicId, chatId }: { clinicId: string; chatId: strin
 }
 
 function BotLead({ bot }: { bot: BotMark }) {
-  return <BotGlyph color={bot.color} emoji={bot.emoji} className="mr-1.5 h-5 w-5 align-[-0.2em]" />;
+  return <BotGlyph color={bot.color} emoji={bot.emoji} plain className="mr-1.5 h-5 w-5 align-[-0.2em]" />;
+}
+
+const messageIdPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function PreferStar({
+  clinicId,
+  chatId,
+  messageId,
+  preferredAt,
+}: {
+  clinicId: string;
+  chatId: string;
+  messageId: string;
+  preferredAt: string | null;
+}) {
+  const [override, setOverride] = useState<boolean | null>(null);
+  const [pending, startTransition] = useTransition();
+  const on = override ?? preferredAt !== null;
+
+  useEffect(() => {
+    setOverride(null);
+  }, [preferredAt]);
+
+  if (!messageIdPattern.test(messageId)) return null;
+
+  return (
+    <button
+      type="button"
+      aria-pressed={on}
+      aria-label={on ? "Togli dai preferiti" : "Segna come preferito"}
+      disabled={pending}
+      onClick={() => {
+        const next = !on;
+        setOverride(next);
+        startTransition(async () => {
+          const result = await preferMessage(clinicId, chatId, messageId, next);
+          if (result.error) setOverride(null);
+        });
+      }}
+      className={`flex h-6 w-6 items-center justify-center rounded-full disabled:opacity-40 ${
+        on ? "text-ink" : "text-muted"
+      }`}
+    >
+      <Star className={`h-3.5 w-3.5 ${on ? "fill-current" : "fill-none"}`} strokeWidth={2} />
+    </button>
+  );
 }
 
 export function ClinicShell({
@@ -257,6 +310,8 @@ export function ClinicShell({
   agendaOpen,
   lanes,
   appointments = [],
+  blocks = [],
+  agendaPatients = [],
   patientsOpen,
   patients,
   selectedPatient,
@@ -272,7 +327,7 @@ export function ClinicShell({
   canManageAgenda,
   currentUserId,
   recency: initialRecency,
-  patientDeletions,
+  confirmations,
 }: {
   clinicId: string;
   clinicName: string;
@@ -285,6 +340,8 @@ export function ClinicShell({
   agendaOpen: boolean;
   lanes: AgendaLane[];
   appointments?: AgendaAppointment[];
+  blocks?: AgendaBlock[];
+  agendaPatients?: AgendaEditPatient[];
   patientsOpen: boolean;
   patients: PatientRecord[];
   selectedPatient: PatientRecord | null;
@@ -300,7 +357,7 @@ export function ClinicShell({
   canManageAgenda: boolean;
   currentUserId: string;
   recency: ClinicRecency;
-  patientDeletions: PatientDeletionRequest[];
+  confirmations: BotActionRequest[];
 }) {
   const [searchOpen, setSearchOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -325,6 +382,11 @@ export function ClinicShell({
   const initial = (email.trim()[0] || "?").toUpperCase();
   const listRef = useRef<HTMLUListElement>(null);
   const threadRef = useRef<HTMLDivElement>(null);
+  const knownMessages = useRef<{ chatId: string | null; ids: Set<string> }>({
+    chatId: null,
+    ids: new Set(),
+  });
+  const [entered, setEntered] = useState<Set<string>>(new Set());
   const badgeRef = useRef<HTMLParagraphElement>(null);
   const [dayChat, setDayChat] = useState(activeChatId);
   const [dayLabel, setDayLabel] = useState(() =>
@@ -385,16 +447,14 @@ export function ClinicShell({
   const railClosed = navCollapsed && showPanel;
   const refreshPage = useRef(router.refresh);
   refreshPage.current = router.refresh;
-  const deletionToken = patientDeletions
-    .map((item) => `${item.id}:${item.patients.map((patient) => patient.id).join(",")}`)
-    .join("|");
-  const [deletions, setDeletions] = useState(patientDeletions);
-  const [seenDeletionToken, setSeenDeletionToken] = useState(deletionToken);
-  if (seenDeletionToken !== deletionToken) {
-    setSeenDeletionToken(deletionToken);
-    setDeletions(patientDeletions);
+  const confirmationToken = confirmations.map((item) => `${item.id}:${item.action}`).join("|");
+  const [pendingConfirmations, setPendingConfirmations] = useState(confirmations);
+  const [seenConfirmationToken, setSeenConfirmationToken] = useState(confirmationToken);
+  if (seenConfirmationToken !== confirmationToken) {
+    setSeenConfirmationToken(confirmationToken);
+    setPendingConfirmations(confirmations);
   }
-  const pendingDeletion = deletions[0] ?? null;
+  const pendingConfirmation = pendingConfirmations[0] ?? null;
 
   useEffect(() => {
     if (opened || !activeChatId || agendaOpen || patientsOpen || settingsOpen) return;
@@ -411,6 +471,16 @@ export function ClinicShell({
       "postgres_changes",
       {
         event: "INSERT",
+        schema: "public",
+        table: "chat_events",
+        filter: `chat_id=eq.${activeChatId}`,
+      },
+      refresh,
+    );
+    channel.on(
+      "postgres_changes",
+      {
+        event: "UPDATE",
         schema: "public",
         table: "chat_events",
         filter: `chat_id=eq.${activeChatId}`,
@@ -579,6 +649,22 @@ export function ClinicShell({
     const frame = requestAnimationFrame(() => setSlide(true));
     return () => cancelAnimationFrame(frame);
   }, [focusBox]);
+
+  useLayoutEffect(() => {
+    const known = knownMessages.current;
+    if (known.chatId !== shownActiveId) {
+      known.chatId = shownActiveId;
+      known.ids = new Set(shownMessages.map((message) => message.id));
+      setEntered((current) => (current.size === 0 ? current : new Set()));
+      return;
+    }
+    const arrived = shownMessages.flatMap((message) => {
+      if (known.ids.has(message.id)) return [];
+      known.ids.add(message.id);
+      return message.id;
+    });
+    if (arrived.length > 0) setEntered(new Set(arrived));
+  }, [shownActiveId, shownMessages]);
 
   useLayoutEffect(() => {
     const thread = threadRef.current;
@@ -756,6 +842,7 @@ export function ClinicShell({
                             color={chat.bot.color}
                             emoji={chat.bot.emoji}
                             animate={selected}
+                            plain
                             className="h-full w-full"
                           />
                         ) : (
@@ -763,6 +850,7 @@ export function ClinicShell({
                             color={chat.color}
                             emoji={chat.emoji}
                             animate={selected}
+                            plain
                             className="h-full w-full"
                           />
                         )}
@@ -869,7 +957,14 @@ export function ClinicShell({
         ) : showPatients ? (
           <PatientsView clinicId={clinicId} patients={patients} canWrite={canWritePatients} />
         ) : showAgenda ? (
-          <AgendaView clinicId={clinicId} lanes={lanes} appointments={appointments} />
+          <AgendaView
+            clinicId={clinicId}
+            lanes={lanes}
+            appointments={appointments}
+            blocks={blocks}
+            patients={agendaPatients}
+            canMove={canManageAgenda}
+          />
         ) : active ? (
         <>
         <ChatTitle
@@ -880,6 +975,7 @@ export function ClinicShell({
           emoji={active.emoji}
         />
 
+        <div className="mx-auto flex min-h-0 w-full max-w-4xl flex-1 flex-col">
         <div ref={threadRef} className="thread-scroll flex min-h-0 flex-1 flex-col overflow-y-auto px-4 pt-14 pb-6">
           <div className="mt-auto flex flex-col gap-3">
           {shownMessages.length > 0 ? (
@@ -893,6 +989,12 @@ export function ClinicShell({
                   key={entry.message.id}
                   className={`flex w-fit max-w-[36rem] flex-col items-end gap-1 ${
                     entry.message.mine ? "self-end" : "self-start"
+                  } ${
+                    entered.has(entry.message.id)
+                      ? entry.message.mine
+                        ? "msg-enter-mine"
+                        : "msg-enter-theirs"
+                      : ""
                   }`}
                 >
                   <div
@@ -909,9 +1011,17 @@ export function ClinicShell({
                       }
                     />
                   </div>
-                  <time dateTime={entry.message.createdAt} className="px-1 text-xs text-muted">
-                    {formatClock(entry.message.createdAt)}
-                  </time>
+                  <div className="flex items-center gap-0.5 px-1">
+                    <time dateTime={entry.message.createdAt} className="text-xs text-muted">
+                      {formatClock(entry.message.createdAt)}
+                    </time>
+                    <PreferStar
+                      clinicId={clinicId}
+                      chatId={active.id}
+                      messageId={entry.message.id}
+                      preferredAt={entry.message.preferredAt}
+                    />
+                  </div>
                 </div>
               ),
             )
@@ -924,6 +1034,7 @@ export function ClinicShell({
         </div>
 
         <MessageComposer key={active.id} clinicId={clinicId} chatId={active.id} />
+        </div>
         </>
         ) : null}
       </section>
@@ -950,13 +1061,13 @@ export function ClinicShell({
           setBotDraft(null);
         }}
       />
-      <PatientDeletionDialog
-        key={pendingDeletion?.id ?? "no-patient-deletion"}
-        open={Boolean(pendingDeletion)}
+      <BotActionDialog
+        key={pendingConfirmation?.id ?? "no-bot-action"}
+        open={Boolean(pendingConfirmation)}
         clinicId={clinicId}
-        request={pendingDeletion}
+        request={pendingConfirmation}
         onDecided={(requestId) => {
-          setDeletions((current) => current.filter((item) => item.id !== requestId));
+          setPendingConfirmations((current) => current.filter((item) => item.id !== requestId));
         }}
       />
       <SearchDialog open={searchOpen} onClose={() => setSearchOpen(false)} />

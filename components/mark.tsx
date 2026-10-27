@@ -59,18 +59,20 @@ export function BotGlyph({
   color,
   emoji,
   animate = false,
+  plain = false,
   className = "h-4 w-4",
 }: {
   color: string;
   emoji: string;
   animate?: boolean;
+  plain?: boolean;
   className?: string;
 }) {
   return (
     <span
       aria-hidden
-      className={`inline-flex shrink-0 items-center justify-center rounded-[22%] ${className}`}
-      style={{ background: markPaint(color) }}
+      className={`inline-flex shrink-0 items-center justify-center ${plain ? "mark-plain" : "rounded-[22%]"} ${className}`}
+      style={plain ? undefined : { background: markPaint(color) }}
     >
       <FluentFace emoji={emoji} animate={animate} />
     </span>
@@ -81,18 +83,20 @@ export function ChannelMark({
   color,
   emoji,
   animate = false,
+  plain = false,
   className = "h-4 w-4",
 }: {
   color: string;
   emoji: string;
   animate?: boolean;
+  plain?: boolean;
   className?: string;
 }) {
   return (
     <span
       aria-hidden
-      className={`inline-flex shrink-0 items-center justify-center rounded-full ${className}`}
-      style={{ background: markPaint(color) }}
+      className={`inline-flex shrink-0 items-center justify-center ${plain ? "mark-plain" : "rounded-full"} ${className}`}
+      style={plain ? undefined : { background: markPaint(color) }}
     >
       <FluentFace emoji={emoji} animate={animate} />
     </span>
