@@ -1,0 +1,38 @@
+import { NextResponse } from "next/server";
+import { gmailAuthorizeUrl, gmailOAuthConfigured } from "@/lib/gmail-link";
+import { getSessionUser } from "@/lib/auth/session";
+import { createClient } from "@/lib/supabase/server";
+
+const uuidPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export async function GET(request: Request, context: { params: Promise<{ id: string }> }) {
+  const { id } = await context.params;
+  const user = await getSessionUser();
+  if (!user) {
+    return NextResponse.redirect(new URL("/login", request.url));
+  }
+  const back = new URL(`/clinics/${id}`, request.url);
+  back.searchParams.set("view", "settings");
+  if (!uuidPattern.test(id)) {
+    back.searchParams.set("toolError", "failed");
+    return NextResponse.redirect(back);
+  }
+  if (!gmailOAuthConfigured()) {
+    back.searchParams.set("toolError", "config");
+    return NextResponse.redirect(back);
+  }
+
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc("begin_tool_link", {
+    p_clinic_id: id,
+    p_provider: "gmail",
+  });
+  if (error || typeof data !== "string") {
+    back.searchParams.set("toolError", "failed");
+    return NextResponse.redirect(back);
+  }
+
+  const origin = new URL(request.url).origin;
+  return NextResponse.redirect(gmailAuthorizeUrl(origin, data));
+}

@@ -45,7 +45,7 @@ export function BotActionDialog({
         className="w-full max-w-sm rounded-3xl border border-line bg-paper p-5"
       >
         <h2 id="bot-action-title" className="text-base font-medium">
-          {request.botName} sta tentando di eseguire {request.action}. Procedere?
+          <span className="font-semibold">{request.botName}</span> sta tentando di eseguire {request.action}. Procedere?
         </h2>
         {state.error ? <p className="mt-3 text-sm text-teal">{state.error}</p> : null}
         <div className="mt-5 flex justify-end gap-2">

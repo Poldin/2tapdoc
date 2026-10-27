@@ -1194,3 +1194,27 @@ export async function createAgendaEntry(input: {
   revalidatePath(`/clinics/${clinicId}`);
   return {};
 }
+
+export async function startGmailLink(clinicId: string, _state: FormState, _formData: FormData): Promise<FormState> {
+  const user = await requireUser();
+  if (!uuidPattern.test(clinicId)) return { error: "Studio non valido." };
+  if (!(await clinicMember(clinicId, user.id))) return { error: "Non fai parte di questo studio." };
+  redirect(`/clinics/${clinicId}/tools/connect/gmail`);
+}
+
+export async function dropToolLink(
+  clinicId: string,
+  linkId: string,
+  _state: FormState,
+  _formData: FormData,
+): Promise<FormState> {
+  const user = await requireUser();
+  if (!uuidPattern.test(clinicId) || !uuidPattern.test(linkId)) return { error: "Tool non valido." };
+  if (!(await clinicMember(clinicId, user.id))) return { error: "Non fai parte di questo studio." };
+
+  const supabase = await createClient();
+  const { error } = await supabase.rpc("drop_tool_link", { p_clinic_id: clinicId, p_link_id: linkId });
+  if (error) return { error: "Non è stato possibile sganciare il tool." };
+  revalidatePath(`/clinics/${clinicId}`);
+  return { sent: Date.now() };
+}

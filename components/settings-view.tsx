@@ -9,6 +9,8 @@ import {
   createRole,
   updateClinicalObject,
   updateClinic,
+  dropToolLink,
+  startGmailLink,
   updateDoctor,
   updateMember,
   updateRole,
@@ -47,10 +49,17 @@ export type ClinicAsset = {
   description: string | null;
 };
 
+export type ToolLink = {
+  id: string;
+  provider: string;
+  account: string;
+};
+
 const sections = [
   { id: "generali", label: "generali" },
   { id: "equipe", label: "equipe" },
   { id: "assets", label: "stanze e oggetti" },
+  { id: "tool", label: "tool" },
 ] as const;
 
 function syncSectionBadge(
@@ -98,6 +107,10 @@ function specialistName(specialist: Specialist) {
 
 function memberLabel(member: ClinicMember) {
   return member.name?.trim() || member.email;
+}
+
+function toolLabel(provider: string) {
+  return provider === "gmail" ? "Gmail" : provider;
 }
 
 function fieldClassName() {
@@ -549,6 +562,52 @@ function AssetDialog({
   );
 }
 
+function ToolDialog({
+  open,
+  clinicId,
+  draft,
+  onClose,
+}: {
+  open: boolean;
+  clinicId: string;
+  draft: ToolLink | null;
+  onClose: () => void;
+}) {
+  const [state, action, pending] = useActionState<FormState, FormData>(
+    draft ? dropToolLink.bind(null, clinicId, draft.id) : startGmailLink.bind(null, clinicId),
+    {},
+  );
+  useCloseWhenSent(open, state.sent, onClose);
+
+  return (
+    <SettingsDialog
+      open={open}
+      title={draft ? "Tool collegato" : "Nuovo tool"}
+      onClose={onClose}
+      action={action}
+      pending={pending}
+      error={state.error}
+      submitLabel={draft ? "Sgancia" : "Aggiungi"}
+    >
+      {draft ? (
+        <>
+          <p className="text-sm">{toolLabel(draft.provider)}</p>
+          <p className="text-sm text-muted">{draft.account}</p>
+        </>
+      ) : (
+        <>
+          <label className="flex flex-col gap-2 text-sm">
+            Tool
+            <select name="provider" defaultValue="gmail" className={fieldClassName()}>
+              <option value="gmail">Gmail</option>
+            </select>
+          </label>
+        </>
+      )}
+    </SettingsDialog>
+  );
+}
+
 export function SettingsView({
   clinicId,
   clinicName,
@@ -557,10 +616,13 @@ export function SettingsView({
   canManageMembers,
   canManageRoles,
   canManageAgenda,
+  canManageTools,
   members,
   roles = [],
   specialists = [],
   assets = [],
+  toolLinks = [],
+  toolError = null,
 }: {
   clinicId: string;
   clinicName: string;
@@ -569,10 +631,13 @@ export function SettingsView({
   canManageMembers: boolean;
   canManageRoles: boolean;
   canManageAgenda: boolean;
+  canManageTools: boolean;
   members: ClinicMember[];
   roles?: ClinicRole[];
   specialists?: Specialist[];
   assets?: ClinicAsset[];
+  toolLinks?: ToolLink[];
+  toolError?: string | null;
 }) {
   const threadRef = useRef<HTMLDivElement>(null);
   const badgeRef = useRef<HTMLParagraphElement>(null);
@@ -585,6 +650,8 @@ export function SettingsView({
   const [specialistOpen, setSpecialistOpen] = useState(false);
   const [assetDraft, setAssetDraft] = useState<ClinicAsset | null>(null);
   const [assetOpen, setAssetOpen] = useState(false);
+  const [toolDraft, setToolDraft] = useState<ToolLink | null>(null);
+  const [toolOpen, setToolOpen] = useState(false);
   const takenUserIds = new Set(
     specialists.flatMap((specialist) => (specialist.userId ? [specialist.userId] : [])),
   );
@@ -593,7 +660,7 @@ export function SettingsView({
     const thread = threadRef.current;
     if (!thread) return;
     syncSectionBadge(thread, badgeRef.current, setSectionLabel);
-  }, [members, roles, specialists, assets]);
+  }, [members, roles, specialists, assets, toolLinks]);
 
   useEffect(() => {
     const thread = threadRef.current;
@@ -606,7 +673,7 @@ export function SettingsView({
       thread.removeEventListener("scroll", sync);
       observer.disconnect();
     };
-  }, [members, roles, specialists, assets]);
+  }, [members, roles, specialists, assets, toolLinks]);
 
   return (
     <>
@@ -769,6 +836,42 @@ export function SettingsView({
             </DataTable>
           </div>
         </section>
+
+        <section className="border-t border-line px-4 pt-6 md:px-8">
+          <div className="mx-auto flex w-full max-w-3xl flex-col gap-4">
+            <TableHeading
+              title="tool"
+              pin="tool"
+              onAdd={() => {
+                setToolDraft(null);
+                setToolOpen(true);
+              }}
+              canAdd={canManageTools}
+            />
+            {toolError ? <p className="rounded-2xl bg-paper px-4 py-3 text-sm text-teal">{toolError}</p> : null}
+            <DataTable columns={["Tool", "Casella", "Stato"]}>
+              {toolLinks.length === 0 ? (
+                <EmptyRow columns={3}>Nessun tool collegato.</EmptyRow>
+              ) : (
+                toolLinks.map((link) => (
+                  <tr
+                    key={link.id}
+                    className={`border-t border-line ${canManageTools ? "cursor-pointer hover:bg-background" : ""}`}
+                    onClick={() => {
+                      if (!canManageTools) return;
+                      setToolDraft(link);
+                      setToolOpen(true);
+                    }}
+                  >
+                    <td className="px-4 py-3 font-medium">{toolLabel(link.provider)}</td>
+                    <td className="px-4 py-3 text-muted">{link.account}</td>
+                    <td className="px-4 py-3 text-muted">Collegato</td>
+                  </tr>
+                ))
+              )}
+            </DataTable>
+          </div>
+        </section>
       </div>
 
       {roleOpen ? (
@@ -810,6 +913,15 @@ export function SettingsView({
           clinicId={clinicId}
           draft={assetDraft}
           onClose={() => setAssetOpen(false)}
+        />
+      ) : null}
+      {toolOpen ? (
+        <ToolDialog
+          key={toolDraft?.id ?? "new-tool"}
+          open
+          clinicId={clinicId}
+          draft={toolDraft}
+          onClose={() => setToolOpen(false)}
         />
       ) : null}
     </>

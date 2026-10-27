@@ -1,5 +1,5 @@
 import pg from "pg";
-import type { ClinicDoctor, ClinicObject, Turn, TurnMessage } from "./reply.js";
+import type { ClinicDoctor, ClinicObject, ToolLink, Turn, TurnMessage } from "./reply.js";
 
 const { Client } = pg;
 
@@ -413,6 +413,75 @@ export async function botCreatePatients(
   return result.rows[0]?.created ?? [];
 }
 
+export async function botListToolLinks(client: pg.Client, workerId: string, jobId: string): Promise<ToolLink[]> {
+  const result = await client.query<{ items: unknown }>("select private.bot_list_tool_links($1, $2) as items", [
+    workerId,
+    jobId,
+  ]);
+  const items = result.rows[0]?.items;
+  if (!Array.isArray(items)) return [];
+  return items.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const row = item as Record<string, unknown>;
+    if (typeof row.id !== "string" || typeof row.provider !== "string" || typeof row.account !== "string") return [];
+    return [{ id: row.id, provider: row.provider, account: row.account }];
+  });
+}
+
+export async function botUnlinkToolLinks(client: pg.Client, workerId: string, jobId: string, linkIds: string[]) {
+  const result = await client.query<{ removed: unknown }>(
+    "select private.bot_unlink_tool_links($1, $2, $3::uuid[]) as removed",
+    [workerId, jobId, linkIds],
+  );
+  return result.rows[0]?.removed ?? null;
+}
+
+export type ToolSecret = {
+  refreshToken: string;
+  accessToken: string | null;
+  accessExpiresAt: string | null;
+};
+
+export async function botReadToolSecret(
+  client: pg.Client,
+  workerId: string,
+  jobId: string,
+  linkId: string,
+): Promise<ToolSecret | null> {
+  const result = await client.query<{ secret: unknown }>(
+    "select private.bot_read_tool_secret($1, $2, $3) as secret",
+    [workerId, jobId, linkId],
+  );
+  const secret = result.rows[0]?.secret;
+  if (!secret || typeof secret !== "object") return null;
+  const row = secret as Record<string, unknown>;
+  if (typeof row.refreshToken !== "string") return null;
+  return {
+    refreshToken: row.refreshToken,
+    accessToken: typeof row.accessToken === "string" ? row.accessToken : null,
+    accessExpiresAt: typeof row.accessExpiresAt === "string" ? row.accessExpiresAt : null,
+  };
+}
+
+export async function botStoreToolAccess(
+  client: pg.Client,
+  workerId: string,
+  jobId: string,
+  linkId: string,
+  accessToken: string,
+  accessExpiresAt: string,
+  refreshToken: string,
+) {
+  await client.query("select private.bot_store_tool_access($1, $2, $3, $4, $5::timestamptz, $6)", [
+    workerId,
+    jobId,
+    linkId,
+    accessToken,
+    accessExpiresAt,
+    refreshToken,
+  ]);
+}
+
 function parseTurn(value: unknown): Turn | null {
   if (value == null) return null;
   if (typeof value !== "object") throw new Error("Unexpected job payload");
@@ -481,6 +550,7 @@ function parseTurn(value: unknown): Turn | null {
     id: row.id,
     botId: row.botId,
     botName: row.botName,
+    botEmoji: typeof row.botEmoji === "string" && row.botEmoji.trim() ? row.botEmoji : null,
     chatId: row.chatId,
     clinicId: row.clinicId,
     clinicName: row.clinicName,

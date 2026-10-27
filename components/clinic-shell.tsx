@@ -22,6 +22,7 @@ import {
   type ClinicMember,
   type ClinicRole,
   type Specialist,
+  type ToolLink,
 } from "@/components/settings-view";
 import {
   rememberAgenda,
@@ -321,10 +322,13 @@ export function ClinicShell({
   settingsRoles,
   specialists,
   assets,
+  toolLinks,
+  toolError = null,
   canRenameClinic,
   canManageMembers,
   canManageRoles,
   canManageAgenda,
+  canManageTools,
   currentUserId,
   recency: initialRecency,
   confirmations,
@@ -351,10 +355,13 @@ export function ClinicShell({
   settingsRoles: ClinicRole[];
   specialists: Specialist[];
   assets: ClinicAsset[];
+  toolLinks: ToolLink[];
+  toolError?: string | null;
   canRenameClinic: boolean;
   canManageMembers: boolean;
   canManageRoles: boolean;
   canManageAgenda: boolean;
+  canManageTools: boolean;
   currentUserId: string;
   recency: ClinicRecency;
   confirmations: BotActionRequest[];
@@ -951,6 +958,9 @@ export function ClinicShell({
             roles={settingsRoles}
             specialists={specialists}
             assets={assets}
+            toolLinks={toolLinks}
+            toolError={toolError}
+            canManageTools={canManageTools}
           />
         ) : showPatients && selectedPatient ? (
           <PatientPage clinicId={clinicId} patient={selectedPatient} />

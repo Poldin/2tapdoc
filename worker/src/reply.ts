@@ -28,9 +28,14 @@ import {
   botUpdateAgendaBlocks,
   botUpdateAppointments,
   botUpdateBots,
+  botListToolLinks,
+  botReadToolSecret,
+  botStoreToolAccess,
+  botUnlinkToolLinks,
   botUpdateChats,
   botUpdatePatients,
 } from "./db.js";
+import { gmailOperation } from "./gmail.js";
 import { botColorIds, botFaceIds, channelSymbolIds } from "./marks.js";
 
 export type TurnMessage = {
@@ -52,10 +57,17 @@ export type ClinicObject = {
   description: string | null;
 };
 
+export type ToolLink = {
+  id: string;
+  provider: string;
+  account: string;
+};
+
 export type Turn = {
   id: string;
   botId: string;
   botName: string;
+  botEmoji: string | null;
   chatId: string;
   clinicId: string;
   clinicName: string;
@@ -142,7 +154,23 @@ function withDayNames(value: unknown): unknown {
   return out;
 }
 
-function buildSystemPrompt(turn: Turn, now: Date): string {
+function toolAccountLines(links: ToolLink[]) {
+  const gmail = links.filter((link) => link.provider === "gmail");
+  if (gmail.length === 0) return "Nessuna casella collegata.";
+  return gmail.map((link) => `- Gmail ${link.account} (id: ${link.id})`).join("\n");
+}
+
+function appOrigin() {
+  return (process.env.APP_ORIGIN?.trim() || "http://localhost:3000").replace(/\/+$/, "");
+}
+
+function buildSystemPrompt(
+  turn: Turn,
+  now: Date,
+  toolLinks: ToolLink[],
+  canManageTools: boolean,
+  canUseTools: boolean,
+): string {
   const doctorsList =
     turn.doctors.length > 0
       ? turn.doctors
@@ -164,7 +192,7 @@ function buildSystemPrompt(turn: Turn, now: Date): string {
       : "Nessuna stanza o oggetto clinico configurato o visibile.";
 
   return [
-    `Sei ${turn.botName}, un agente operativo di 2tapdoc nella clinica "${turn.clinicName}".`,
+    `Sei ${turn.botName}${turn.botEmoji ? `, faccia ${turn.botEmoji}` : ""}, un agente operativo di 2tapdoc nella clinica "${turn.clinicName}".`,
     `Data e ora attuali (fuso Europe/Rome): ${formatRomeClock(now)}.`,
     "Rispondi sempre in italiano, in modo breve, preciso e concreto.",
     "Puoi usare Markdown semplice (grassetto, elenchi puntati, a capo). Niente HTML, niente tabelle larghe.",
@@ -209,8 +237,57 @@ function buildSystemPrompt(turn: Turn, now: Date): string {
     "  - Usa `setServerAlerts` per programmare uno o più alert/sveglie direttamente nel container del server (specificando `delaySeconds` per attese relative come 'tra 5 minuti' oppure `firesAtIso` per un orario preciso).",
     "  - Quando l'alert scatta sul server, ti risveglierà automaticamente con l'istruzione salvata in `prompt` e potrai scrivere in questa chat (anche controllando l'agenda in quel momento).",
     "  - Usa `listServerAlerts` e `cancelServerAlerts` per vedere o annullare gli alert attivi nel server.",
+    ...(canManageTools || canUseTools
+      ? [
+          "- **Tool esterni** (solo i bot, dentro la chat: niente automazioni sistema-sistema):",
+          "  - Le caselle collegate stanno in Impostazioni, sezione tool. Ogni casella Gmail è una riga. La stessa casella non si ripete.",
+          ...(canManageTools
+            ? [
+                "  - Per collegare Gmail usa `linkTool`. Manda all'utente il link che ricevi: è il consenso ufficiale di Google, non una scheda tua. Un'altra casella è un'altra chiamata.",
+                "  - Per sganciare usa `unlinkToolLinks` con gli id. Non sganci tu: un solo dialog, risposta `awaiting_user`. Non chiedere conferma in chat.",
+              ]
+            : []),
+          ...(canUseTools
+            ? [
+                "  - Per usare una casella già collegata, se non conosci l'operazione chiama `listGmailTools`, poi `callGmail` con il suo `linkId`. Usa solo la casella chiesta.",
+              ]
+            : []),
+          toolAccountLines(toolLinks),
+        ]
+      : []),
     "- Non inventare mai di aver eseguito un'azione se non hai chiamato il relativo tool con successo. Se manca un dato essenziale (es. quale medico o quale orario), chiedilo.",
   ].join("\n");
+}
+
+async function useLinkedGmail(
+  client: pg.Client,
+  workerId: string,
+  jobId: string,
+  linkId: string,
+  operation: "list" | "call",
+  name?: string,
+  args?: Record<string, unknown>,
+) {
+  try {
+    const secret = await botReadToolSecret(client, workerId, jobId, linkId);
+    if (!secret) return { error: "Casella non trovata." };
+    const outcome = await gmailOperation(secret, operation, name, args);
+    if (outcome.access.refreshed && outcome.access.accessToken && outcome.access.accessExpiresAt) {
+      await botStoreToolAccess(
+        client,
+        workerId,
+        jobId,
+        linkId,
+        outcome.access.accessToken,
+        outcome.access.accessExpiresAt,
+        outcome.access.refreshToken,
+      );
+    }
+    return outcome.result;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Gmail non ha risposto.";
+    return { error: message.slice(0, 300) };
+  }
 }
 
 export async function replyToTurn(
@@ -237,6 +314,9 @@ export async function replyToTurn(
   const canReadPatients = perms.has("patients.read") || perms.has("patients.write");
   const canWritePatients = perms.has("patients.write");
   const canRenameClinic = perms.has("clinic.update");
+  const canManageTools = perms.has("tools.manage");
+  const canUseTools = perms.has("tools.use");
+  const toolLinks = canManageTools || canUseTools ? await botListToolLinks(client, workerId, turn.id) : [];
 
   const tools = {
     setServerAlerts: tool({
@@ -863,6 +943,48 @@ export async function replyToTurn(
       }),
       execute: async ({ botIds }) => botDeleteBots(client, workerId, turn.id, botIds),
     }),
+
+    linkTool: tool({
+      description:
+        "Avvia il collegamento di Gmail. Restituisce il link del consenso ufficiale di Google: mandalo all'utente. Ogni casella è un collegamento nuovo. Non dice che è già collegata.",
+      inputSchema: z.object({
+        provider: z.literal("gmail"),
+      }),
+      execute: async () => ({
+        url: `${appOrigin()}/clinics/${turn.clinicId}/tools/connect/gmail`,
+        instruction:
+          "Manda all'utente questo link e basta. Lo apre lui: è il consenso ufficiale di Google. Non dire che la casella è già collegata.",
+      }),
+    }),
+
+    unlinkToolLinks: tool({
+      description:
+        "Propone lo sgancio di una o più caselle già collegate, in una sola chiamata. Non sgancia: apre un solo dialog e risponde awaiting_user.",
+      inputSchema: z.object({
+        linkIds: z.array(z.string().uuid()).min(1).max(20),
+      }),
+      execute: async ({ linkIds }) => botUnlinkToolLinks(client, workerId, turn.id, linkIds),
+    }),
+
+    listGmailTools: tool({
+      description: "Elenca le operazioni del MCP ufficiale di Gmail per una casella collegata.",
+      inputSchema: z.object({
+        linkId: z.string().uuid(),
+      }),
+      execute: async ({ linkId }) => useLinkedGmail(client, workerId, turn.id, linkId, "list"),
+    }),
+
+    callGmail: tool({
+      description:
+        "Esegue un'operazione del MCP ufficiale di Gmail su una casella collegata. Il nome e gli argomenti arrivano da listGmailTools.",
+      inputSchema: z.object({
+        linkId: z.string().uuid(),
+        name: z.string().min(1).max(80),
+        arguments: z.record(z.string(), z.unknown()).optional(),
+      }),
+      execute: async ({ linkId, name, arguments: args }) =>
+        useLinkedGmail(client, workerId, turn.id, linkId, "call", name, args),
+    }),
   };
 
   type ToolName = keyof typeof tools;
@@ -894,17 +1016,19 @@ export async function replyToTurn(
   }
   if (canReadPatients) activeTools.push("searchPatients");
   if (canWritePatients) activeTools.push("createPatients", "updatePatients", "deletePatients");
+  if (canManageTools) activeTools.push("linkTool", "unlinkToolLinks");
+  if (canUseTools) activeTools.push("listGmailTools", "callGmail");
 
   const mistral = createMistral({ apiKey });
   const modelName = process.env.MISTRAL_MODEL?.trim() || "mistral-medium-latest";
 
   const result = await generateText({
     model: mistral(modelName),
-    system: buildSystemPrompt(turn, now),
+    system: buildSystemPrompt(turn, now, toolLinks, canManageTools, canUseTools),
     messages,
     tools,
     activeTools,
-    stopWhen: stepCountIs(6),
+    stopWhen: stepCountIs(canUseTools ? 8 : 6),
     maxOutputTokens: 1000,
     abortSignal: AbortSignal.timeout(modelTimeoutMs),
   });
