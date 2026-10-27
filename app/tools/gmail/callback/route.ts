@@ -51,11 +51,9 @@ export async function GET(request: Request) {
       p_access_token: tokens.accessToken,
       p_access_expires_at: tokens.expiresAt,
     });
-    if (error) {
-      return NextResponse.redirect(settingsUrl(request, clinic, "failed"));
-    }
+    if (error) return NextResponse.redirect(settingsUrl(request, clinic));
     return NextResponse.redirect(settingsUrl(request, clinic));
   } catch {
-    return NextResponse.redirect(settingsUrl(request, clinic, "failed"));
+    return NextResponse.redirect(settingsUrl(request, clinic));
   }
 }

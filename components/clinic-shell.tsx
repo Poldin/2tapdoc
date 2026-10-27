@@ -23,6 +23,7 @@ import {
   type ClinicRole,
   type Specialist,
   type ToolLink,
+  type ToolPairing,
 } from "@/components/settings-view";
 import { type ToolChoice } from "@/lib/tool-catalog";
 import {
@@ -324,6 +325,7 @@ export function ClinicShell({
   specialists,
   assets,
   toolLinks,
+  toolPairings,
   toolChoices,
   toolError = null,
   canRenameClinic,
@@ -358,6 +360,7 @@ export function ClinicShell({
   specialists: Specialist[];
   assets: ClinicAsset[];
   toolLinks: ToolLink[];
+  toolPairings: ToolPairing[];
   toolChoices: ToolChoice[];
   toolError?: string | null;
   canRenameClinic: boolean;
@@ -962,6 +965,7 @@ export function ClinicShell({
             specialists={specialists}
             assets={assets}
             toolLinks={toolLinks}
+            toolPairings={toolPairings}
             toolChoices={toolChoices}
             toolError={toolError}
             canManageTools={canManageTools}

@@ -5,7 +5,7 @@ import { type AgendaAppointment, type AgendaBlock, type AgendaLane } from "@/com
 import { ClinicShell, type BotMark, type ChatListItem, type ChatMessage } from "@/components/clinic-shell";
 import { type BotActionRequest } from "@/components/bot-action-dialog";
 import { asPatient, type PatientRecord } from "@/lib/patients";
-import { type ClinicAsset, type ClinicMember, type ClinicRole, type Specialist, type ToolLink } from "@/components/settings-view";
+import { type ClinicAsset, type ClinicMember, type ClinicRole, type Specialist, type ToolLink, type ToolPairing } from "@/components/settings-view";
 import { type ClinicOption } from "@/components/clinic-switcher";
 import { getSessionUser } from "@/lib/auth/session";
 import { clinicRecencyFromCookie, leadingPlace } from "@/lib/clinic-recency";
@@ -71,7 +71,7 @@ export default async function ClinicPage({
   const { id } = await params;
   const { chat, view, patient: patientParam, toolError: toolErrorCode } = await searchParams;
   if (!uuidPattern.test(id)) notFound();
-  if (toolErrorCode === "config") {
+  if (toolErrorCode === "config" || toolErrorCode === "failed") {
     const params = new URLSearchParams();
     if (chat) params.set("chat", chat);
     if (view) params.set("view", view);
@@ -218,6 +218,7 @@ export default async function ClinicPage({
   let specialists: Specialist[] = [];
   let assets: ClinicAsset[] = [];
   let toolLinks: ToolLink[] = [];
+  let toolPairings: ToolPairing[] = [];
   let canRenameClinic = false;
   let canManageMembers = false;
   let canManageRoles = false;
@@ -318,6 +319,15 @@ export default async function ClinicPage({
         ? [{ id: link.id, provider: link.provider, account: link.account }]
         : [],
     );
+    const { data: pairingPayload, error: pairingError } = await supabase.rpc("list_tool_pairings", { p_clinic_id: id });
+    if (!pairingError) {
+      toolPairings = (Array.isArray(pairingPayload) ? pairingPayload : []).flatMap((item) => {
+        if (!item || typeof item !== "object") return [];
+        const row = item as { id?: unknown; provider?: unknown; status?: unknown; qr?: unknown };
+        if (typeof row.id !== "string" || typeof row.provider !== "string" || typeof row.status !== "string") return [];
+        return [{ id: row.id, provider: row.provider, status: row.status, qr: typeof row.qr === "string" ? row.qr : null }];
+      });
+    }
     const mineRole = mine?.clinic_roles as { is_admin: boolean } | { is_admin: boolean }[] | null;
     const admin = Boolean((Array.isArray(mineRole) ? mineRole[0] : mineRole)?.is_admin);
     if (admin) {
@@ -536,15 +546,14 @@ export default async function ClinicPage({
       canManageAgenda={canManageAgenda}
       canManageTools={canManageTools}
       toolLinks={toolLinks}
+      toolPairings={toolPairings}
       toolChoices={toolChoices()}
       toolError={
         toolErrorCode === "denied"
           ? "Collegamento annullato."
           : toolErrorCode === "expired"
             ? "Il collegamento è scaduto. Riprova."
-            : toolErrorCode === "failed"
-              ? "Non è stato possibile collegare il tool."
-              : null
+            : null
       }
       currentUserId={user.id}
       recency={recency}

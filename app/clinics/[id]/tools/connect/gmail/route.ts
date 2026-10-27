@@ -14,10 +14,7 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
   }
   const back = new URL(`/clinics/${id}`, request.url);
   back.searchParams.set("view", "settings");
-  if (!uuidPattern.test(id)) {
-    back.searchParams.set("toolError", "failed");
-    return NextResponse.redirect(back);
-  }
+  if (!uuidPattern.test(id)) return NextResponse.redirect(back);
   if (!gmailOAuthConfigured()) {
     return NextResponse.redirect(back);
   }
@@ -27,10 +24,7 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
     p_clinic_id: id,
     p_provider: "gmail",
   });
-  if (error || typeof data !== "string") {
-    back.searchParams.set("toolError", "failed");
-    return NextResponse.redirect(back);
-  }
+  if (error || typeof data !== "string") return NextResponse.redirect(back);
 
   const origin = new URL(request.url).origin;
   return NextResponse.redirect(gmailAuthorizeUrl(origin, data));

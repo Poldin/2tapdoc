@@ -1,13 +1,15 @@
 "use client";
 
 import { useActionState, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { Settings } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { Loader2, Settings } from "lucide-react";
 import {
   addClinicMember,
   createClinicalObject,
   createDoctor,
   createRole,
   dropToolLink,
+  cancelToolPairing,
   startToolLink,
   updateClinic,
   updateClinicalObject,
@@ -54,6 +56,13 @@ export type ToolLink = {
   id: string;
   provider: string;
   account: string;
+};
+
+export type ToolPairing = {
+  id: string;
+  provider: string;
+  status: string;
+  qr: string | null;
 };
 
 const sections = [
@@ -569,17 +578,23 @@ function ToolDialog({
   open,
   clinicId,
   draft,
+  pairing,
   choices,
   onClose,
 }: {
   open: boolean;
   clinicId: string;
   draft: ToolLink | null;
+  pairing: ToolPairing | null;
   choices: ToolChoice[];
   onClose: () => void;
 }) {
   const [state, action, pending] = useActionState<FormState, FormData>(
-    draft ? dropToolLink.bind(null, clinicId, draft.id) : startToolLink.bind(null, clinicId),
+    pairing
+      ? cancelToolPairing.bind(null, clinicId, pairing.id)
+      : draft
+        ? dropToolLink.bind(null, clinicId, draft.id)
+        : startToolLink.bind(null, clinicId),
     {},
   );
   useCloseWhenSent(open, state.sent, onClose);
@@ -587,14 +602,16 @@ function ToolDialog({
   return (
     <SettingsDialog
       open={open}
-      title={draft ? "Tool collegato" : "Nuovo tool"}
+      title={pairing ? "Collegamento" : draft ? "Tool collegato" : "Nuovo tool"}
       onClose={onClose}
       action={action}
       pending={pending}
       error={state.error}
-      submitLabel={draft ? "Sgancia" : "Aggiungi"}
+      submitLabel={pairing ? "Blocca" : draft ? "Sgancia" : "Aggiungi"}
     >
-      {draft ? (
+      {pairing ? (
+        <p className="text-sm">{toolLabel(pairing.provider)}</p>
+      ) : draft ? (
         <>
           <p className="text-sm">{toolLabel(draft.provider)}</p>
           <p className="text-sm text-muted">{draft.account}</p>
@@ -629,6 +646,7 @@ export function SettingsView({
   specialists = [],
   assets = [],
   toolLinks = [],
+  toolPairings = [],
   toolChoices,
   toolError = null,
 }: {
@@ -645,11 +663,13 @@ export function SettingsView({
   specialists?: Specialist[];
   assets?: ClinicAsset[];
   toolLinks?: ToolLink[];
+  toolPairings?: ToolPairing[];
   toolChoices: ToolChoice[];
   toolError?: string | null;
 }) {
   const threadRef = useRef<HTMLDivElement>(null);
   const badgeRef = useRef<HTMLParagraphElement>(null);
+  const router = useRouter();
   const [sectionLabel, setSectionLabel] = useState<string>(sections[0].label);
   const [roleDraft, setRoleDraft] = useState<ClinicRole | null>(null);
   const [roleOpen, setRoleOpen] = useState(false);
@@ -660,16 +680,25 @@ export function SettingsView({
   const [assetDraft, setAssetDraft] = useState<ClinicAsset | null>(null);
   const [assetOpen, setAssetOpen] = useState(false);
   const [toolDraft, setToolDraft] = useState<ToolLink | null>(null);
+  const [pairingDraft, setPairingDraft] = useState<ToolPairing | null>(null);
   const [toolOpen, setToolOpen] = useState(false);
   const takenUserIds = new Set(
     specialists.flatMap((specialist) => (specialist.userId ? [specialist.userId] : [])),
   );
 
+  const pairingWaiting = toolPairings.some((pairing) => pairing.status === "pending" || pairing.status === "installing" || pairing.status === "qr");
+
+  useEffect(() => {
+    if (!pairingWaiting) return;
+    const timer = window.setInterval(() => router.refresh(), 2000);
+    return () => window.clearInterval(timer);
+  }, [pairingWaiting, router]);
+
   useLayoutEffect(() => {
     const thread = threadRef.current;
     if (!thread) return;
     syncSectionBadge(thread, badgeRef.current, setSectionLabel);
-  }, [members, roles, specialists, assets, toolLinks]);
+  }, [members, roles, specialists, assets, toolLinks, toolPairings]);
 
   useEffect(() => {
     const thread = threadRef.current;
@@ -682,7 +711,7 @@ export function SettingsView({
       thread.removeEventListener("scroll", sync);
       observer.disconnect();
     };
-  }, [members, roles, specialists, assets, toolLinks]);
+  }, [members, roles, specialists, assets, toolLinks, toolPairings]);
 
   return (
     <>
@@ -853,21 +882,51 @@ export function SettingsView({
               pin="tool"
               onAdd={() => {
                 setToolDraft(null);
+                setPairingDraft(null);
                 setToolOpen(true);
               }}
               canAdd={canManageTools && toolChoices.length > 0}
             />
             {toolError ? <p className="rounded-2xl bg-paper px-4 py-3 text-sm text-teal">{toolError}</p> : null}
             <DataTable columns={["Tool", "Account", "Stato"]}>
-              {toolLinks.length === 0 ? (
+              {toolLinks.length === 0 && toolPairings.length === 0 ? (
                 <EmptyRow columns={3}>Nessun tool collegato.</EmptyRow>
               ) : (
-                toolLinks.map((link) => (
+                <>
+                  {toolPairings.map((pairing) => (
+                    <tr
+                      key={pairing.id}
+                      className={`border-t border-line ${canManageTools ? "cursor-pointer hover:bg-background" : ""}`}
+                      onClick={() => {
+                        if (!canManageTools) return;
+                        setToolDraft(null);
+                        setPairingDraft(pairing);
+                        setToolOpen(true);
+                      }}
+                    >
+                      <td className="px-4 py-3 font-medium">{toolLabel(pairing.provider)}</td>
+                      <td className="px-4 py-3 text-muted">
+                        {pairing.qr?.startsWith("data:image") ? (
+                          <img src={pairing.qr} alt="QR di WhatsApp Web" className="h-28 w-28 rounded-xl bg-white p-1" />
+                        ) : (
+                          "—"
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-muted">
+                        <span className="inline-flex items-center gap-2">
+                          <Loader2 className="h-4 w-4 animate-spin" strokeWidth={2} />
+                          Collegamento
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                  {toolLinks.map((link) => (
                   <tr
                     key={link.id}
                     className={`border-t border-line ${canManageTools ? "cursor-pointer hover:bg-background" : ""}`}
                     onClick={() => {
                       if (!canManageTools) return;
+                      setPairingDraft(null);
                       setToolDraft(link);
                       setToolOpen(true);
                     }}
@@ -876,7 +935,8 @@ export function SettingsView({
                     <td className="px-4 py-3 text-muted">{link.account}</td>
                     <td className="px-4 py-3 text-muted">Collegato</td>
                   </tr>
-                ))
+                  ))}
+                </>
               )}
             </DataTable>
           </div>
@@ -926,10 +986,11 @@ export function SettingsView({
       ) : null}
       {toolOpen ? (
         <ToolDialog
-          key={toolDraft?.id ?? "new-tool"}
+          key={pairingDraft?.id ?? toolDraft?.id ?? "new-tool"}
           open
           clinicId={clinicId}
           draft={toolDraft}
+          pairing={pairingDraft}
           choices={toolChoices}
           onClose={() => setToolOpen(false)}
         />
