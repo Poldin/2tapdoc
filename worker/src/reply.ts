@@ -261,7 +261,7 @@ function buildSystemPrompt(
                 ...(gmailOAuthConfigured()
                   ? ["  - Gmail apre il consenso ufficiale di Google. Un'altra casella è un'altra chiamata."]
                   : []),
-                "  - WhatsApp è whatsapp-web.js. Il link mostra il QR di WhatsApp Web. Il container del server installa il client solo quando parte quel collegamento. Un altro numero è un'altra chiamata.",
+                "  - WhatsApp è OpenWA. Il link mostra il QR di WhatsApp Web. Il container del server installa OpenWA solo quando parte quel collegamento. Un altro numero è un'altra chiamata.",
                 "  - Per sganciare usa `unlinkToolLinks` con gli id. Non sganci tu: un solo dialog, risposta `awaiting_user`. Non chiedere conferma in chat.",
               ]
             : []),
@@ -313,7 +313,7 @@ async function useLinkedGmail(
   }
 }
 
-const whatsappChatId = /^[0-9]{6,24}@(c\.us|g\.us|lid|s\.whatsapp\.net)$/;
+const whatsappChatId = /^[0-9-]{6,40}@(c\.us|g\.us|lid|s\.whatsapp\.net)$/;
 
 async function useLinkedWhatsApp(
   client: pg.Client,
@@ -991,7 +991,7 @@ export async function replyToTurn(
     linkTool: tool({
       description: gmailOAuthConfigured()
         ? "Avvia il collegamento di Gmail o WhatsApp. Restituisce un link da mandare all'utente. Non dice che è già collegato."
-        : "Avvia il collegamento di WhatsApp. Restituisce il link del QR di WhatsApp Web: mandalo all'utente. Il server installa il client a quel punto. Non dice che è già collegato.",
+        : "Avvia il collegamento di WhatsApp tramite OpenWA. Restituisce il link del QR di WhatsApp Web: mandalo all'utente. Il server installa OpenWA a quel punto. Non dice che è già collegato.",
       inputSchema: z.object({
         provider: z.enum(gmailOAuthConfigured() ? ["gmail", "whatsapp"] : ["whatsapp"]),
       }),
@@ -1006,7 +1006,7 @@ export async function replyToTurn(
         return {
           url: `${appOrigin()}/clinics/${turn.clinicId}/tools/connect/whatsapp`,
           instruction:
-            "Manda all'utente questo link e basta. Lo apre lui: è il QR di WhatsApp Web. Il server installa il client in quel momento. Non dire che il numero è già collegato.",
+            "Manda all'utente questo link e basta. Lo apre lui: è il QR di WhatsApp Web, tramite OpenWA. Il server installa OpenWA in quel momento. Non dire che il numero è già collegato.",
         };
       },
     }),

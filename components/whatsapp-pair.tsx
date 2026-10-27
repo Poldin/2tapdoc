@@ -45,6 +45,10 @@ export function WhatsAppPair({ state }: { state: string }) {
       setImage(null);
       return;
     }
+    if (qr.startsWith("data:image")) {
+      setImage(qr);
+      return;
+    }
     let cancelled = false;
     void QRCode.toDataURL(qr, { margin: 1, width: 280 }).then((url) => {
       if (!cancelled) setImage(url);
@@ -67,7 +71,7 @@ export function WhatsAppPair({ state }: { state: string }) {
       ) : (
         <p className="text-sm text-muted">
           {waiting
-            ? "Il server sta installando WhatsApp."
+            ? "Il server sta installando OpenWA."
             : status.status === "failed"
               ? status.error || "Non è stato possibile collegare WhatsApp."
               : "Il collegamento è scaduto. Riprova."}

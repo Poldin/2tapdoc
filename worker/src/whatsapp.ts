@@ -1,6 +1,5 @@
 import { spawn, execFile } from "node:child_process";
-import { createRequire } from "node:module";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -8,56 +7,28 @@ import { promisify } from "node:util";
 import type pg from "pg";
 
 const execFileAsync = promisify(execFile);
-const installTimeoutMs = 5 * 60 * 1000;
+const installTimeoutMs = 20 * 60 * 1000;
 const pairTimeoutMs = 4 * 60 * 1000;
-const useTimeoutMs = 40_000;
-
-type WaMessage = {
-  body: string;
-  fromMe: boolean;
-  timestamp: number;
-};
-
-type WaChat = {
-  id: { _serialized: string; user: string };
-  name: string;
-  unreadCount: number;
-  isGroup: boolean;
-  fetchMessages: (options: { limit: number }) => Promise<WaMessage[]>;
-};
-
-type WaClient = {
-  initialize: () => Promise<void>;
-  destroy: () => Promise<void>;
-  info?: { wid?: { user?: string } };
-  getChats: () => Promise<WaChat[]>;
-  getChatById: (id: string) => Promise<WaChat>;
-  sendMessage: (to: string, body: string) => Promise<unknown>;
-  on: (event: string, listener: (...args: unknown[]) => void) => void;
-};
-
-type WaLibrary = {
-  Client: new (options: {
-    authStrategy: unknown;
-    puppeteer: { headless: boolean; args: string[] };
-  }) => WaClient;
-  LocalAuth: new (options: { clientId: string; dataPath: string }) => unknown;
-};
+const archiveUrl = "https://github.com/rmyndharis/OpenWA/archive/refs/heads/main.tar.gz";
 
 let installing: Promise<void> | null = null;
-let held = false;
+let server: ReturnType<typeof spawn> | null = null;
 
 function toolDir() {
-  return process.env.WHATSAPP_TOOL_DIR?.trim() || path.join(os.tmpdir(), "2tapdoc-wwebjs");
+  return process.env.WHATSAPP_TOOL_DIR?.trim() || path.join(os.tmpdir(), "2tapdoc-openwa");
+}
+
+function openwaDir() {
+  return path.join(toolDir(), "openwa");
+}
+
+function openwaOrigin() {
+  return (process.env.OPENWA_URL?.trim() || "http://127.0.0.1:2785").replace(/\/+$/, "");
 }
 
 function run(command: string, args: string[], cwd: string) {
   return new Promise<void>((resolve, reject) => {
-    const child = spawn(command, args, {
-      cwd,
-      env: process.env,
-      windowsHide: true,
-    });
+    const child = spawn(command, args, { cwd, env: process.env, windowsHide: true });
     let output = "";
     child.stdout?.on("data", (chunk: Buffer) => {
       output = (output + chunk.toString()).slice(-2000);
@@ -77,101 +48,117 @@ function run(command: string, args: string[], cwd: string) {
       clearTimeout(timer);
       if (code === 0) resolve();
       else {
-        console.error("whatsapp install", output.trim().slice(-300));
+        console.error("openwa install", output.trim().slice(-300));
         reject(new Error("install"));
       }
     });
   });
 }
 
-async function ensureInstalled() {
+async function downloadOpenWA() {
+  const dir = openwaDir();
+  if (existsSync(path.join(dir, "package.json"))) return;
+  await mkdir(toolDir(), { recursive: true });
+  const response = await fetch(archiveUrl);
+  if (!response.ok) throw new Error("install");
+  const archive = path.join(toolDir(), "openwa.tgz");
+  await writeFile(archive, Buffer.from(await response.arrayBuffer()));
+  const extracted = path.join(toolDir(), "extract");
+  await rm(extracted, { recursive: true, force: true });
+  await mkdir(extracted, { recursive: true });
+  await execFileAsync("tar", ["-xzf", archive, "-C", extracted], { windowsHide: true });
+  const [folder] = await readdir(extracted);
+  if (!folder) throw new Error("install");
+  await rm(dir, { recursive: true, force: true });
+  await rename(path.join(extracted, folder), dir);
+  await rm(archive, { force: true });
+  await rm(extracted, { recursive: true, force: true });
+}
+
+async function installOpenWA() {
+  await downloadOpenWA();
+  const dir = openwaDir();
+  if (existsSync(path.join(dir, "dist", "main.js"))) return;
+  const npm = process.platform === "win32" ? "npm.cmd" : "npm";
+  console.log("installing OpenWA");
+  await run(npm, ["ci", "--no-audit", "--no-fund"], dir);
+  await run(npm, ["run", "build"], dir);
+}
+
+async function ensureOpenWA() {
+  if (process.env.OPENWA_URL?.trim()) return;
   if (!installing) {
-    installing = installPackage().catch((error) => {
+    installing = installOpenWA().catch((error) => {
       installing = null;
       throw error;
     });
   }
   await installing;
-}
-
-async function installPackage() {
-  const dir = toolDir();
-  await mkdir(dir, { recursive: true });
-  process.env.PUPPETEER_CACHE_DIR ??= path.join(dir, "puppeteer");
-  const pkg = path.join(dir, "node_modules", "whatsapp-web.js", "package.json");
-  if (existsSync(pkg)) return;
-  const npm = process.platform === "win32" ? "npm.cmd" : "npm";
-  if (!existsSync(path.join(dir, "package.json"))) {
-    await run(npm, ["init", "-y"], dir);
-  }
-  console.log("installing whatsapp-web.js");
-  await run(npm, ["install", "whatsapp-web.js@1.34.7", "--omit=dev", "--no-audit", "--no-fund"], dir);
-}
-
-async function loadLibrary() {
-  await ensureInstalled();
-  const require = createRequire(path.join(toolDir(), "package.json"));
-  return require("whatsapp-web.js") as WaLibrary;
-}
-
-async function exclusive<T>(task: () => Promise<T>) {
-  if (held) throw new Error("WhatsApp è occupato nel server. Riprova tra poco.");
-  held = true;
-  try {
-    return await task();
-  } finally {
-    held = false;
-  }
-}
-
-function browserArgs() {
-  return ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu"];
-}
-
-function launch(wa: WaClient, timeoutMs: number, onQr?: (qr: string) => void) {
-  return new Promise<void>((resolve, reject) => {
-    let settled = false;
-    const finish = (error?: Error) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      if (error) reject(error);
-      else resolve();
-    };
-    const timer = setTimeout(() => finish(new Error("pair-timeout")), timeoutMs);
-    wa.on("qr", (qr) => {
-      if (typeof qr === "string" && onQr) onQr(qr);
+  if (await healthy()) return;
+  if (!server) {
+    server = spawn(process.execPath, ["dist/main.js"], {
+      cwd: openwaDir(),
+      env: { ...process.env, PORT: "2785", NODE_ENV: "production" },
+      windowsHide: true,
+      stdio: "ignore",
     });
-    wa.on("ready", () => finish());
-    wa.on("auth_failure", () => finish(new Error("auth")));
-    void wa.initialize().catch((error: unknown) => {
-      finish(error instanceof Error ? error : new Error("start"));
+    server.on("exit", () => {
+      server = null;
     });
-  });
+  }
+  const started = Date.now();
+  while (Date.now() - started < 90_000) {
+    if (await healthy()) return;
+    await sleep(1000);
+  }
+  throw new Error("install");
 }
 
-async function packDir(dir: string) {
-  const { stdout } = await execFileAsync("tar", ["-czf", "-", "-C", dir, "."], {
-    encoding: "buffer",
-    maxBuffer: 20 * 1024 * 1024,
-    windowsHide: true,
-  });
-  return stdout as Buffer;
-}
-
-async function unpack(session: Buffer, dir: string) {
-  const archive = path.join(toolDir(), `session-${Date.now()}.tgz`);
-  await writeFile(archive, session);
+async function healthy() {
   try {
-    await execFileAsync("tar", ["-xzf", archive, "-C", dir], { windowsHide: true });
-  } finally {
-    await rm(archive, { force: true });
+    const response = await fetch(`${openwaOrigin()}/api/health/live`);
+    return response.ok;
+  } catch {
+    return false;
   }
 }
 
-function phoneFrom(client: WaClient) {
-  const raw = client.info?.wid?.user ?? "";
-  return raw.split(":")[0].replace(/\D/g, "");
+async function apiKey() {
+  const fromEnv = process.env.OPENWA_API_KEY?.trim();
+  if (fromEnv) return fromEnv;
+  const file = path.join(openwaDir(), "data", ".api-key");
+  const started = Date.now();
+  while (Date.now() - started < 30_000) {
+    if (existsSync(file)) return (await readFile(file, "utf8")).trim();
+    await sleep(500);
+  }
+  throw new Error("install");
+}
+
+async function openwa(method: string, pathname: string, body?: unknown) {
+  await ensureOpenWA();
+  const response = await fetch(`${openwaOrigin()}/api${pathname}`, {
+    method,
+    headers: {
+      "X-API-Key": await apiKey(),
+      ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const text = await response.text();
+  const payload = text ? (JSON.parse(text) as unknown) : null;
+  if (!response.ok) {
+    const message =
+      payload && typeof payload === "object" && payload && "message" in payload
+        ? String((payload as { message: unknown }).message)
+        : "OpenWA non ha risposto.";
+    throw new Error(message.slice(0, 300));
+  }
+  return payload;
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function failPairing(db: pg.Client, stateId: string, message: string) {
@@ -198,7 +185,7 @@ export function startWhatsAppSupervisor(db: pg.Client) {
       } catch (error) {
         console.error("whatsapp pairing", error instanceof Error ? error.message : error);
       }
-      await new Promise((resolve) => setTimeout(resolve, 1500));
+      await sleep(1500);
     }
   })();
   void loop;
@@ -211,125 +198,101 @@ export function startWhatsAppSupervisor(db: pg.Client) {
 
 async function runPairing(db: pg.Client, stateId: string) {
   try {
-    await exclusive(() => pair(db, stateId));
+    await pair(db, stateId);
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
-    if (message.includes("occupato")) {
-      await db.query("select private.release_whatsapp_pairing($1)", [stateId]).catch(() => undefined);
-      return;
-    }
     console.error("whatsapp pairing failed", message);
-    await failPairing(db, stateId, "Non sono riuscito a collegare WhatsApp.");
+    await failPairing(
+      db,
+      stateId,
+      message === "install"
+        ? "Non sono riuscito a installare OpenWA nel server."
+        : message === "pair-timeout"
+          ? "Nessuno ha scansionato il QR in tempo."
+          : message === "auth"
+            ? "WhatsApp ha rifiutato il collegamento."
+            : message.slice(0, 200) || "Non sono riuscito a collegare WhatsApp.",
+    );
   }
 }
 
 async function pair(db: pg.Client, stateId: string) {
-  let wa: WaClient | null = null;
-  const dataPath = path.join(toolDir(), "sessions");
-  const sessionDir = path.join(dataPath, `session-${stateId}`);
-  try {
-    const lib = await loadLibrary();
-    await mkdir(dataPath, { recursive: true });
-    await rm(sessionDir, { recursive: true, force: true });
-    wa = new lib.Client({
-      authStrategy: new lib.LocalAuth({ clientId: stateId, dataPath }),
-      puppeteer: { headless: true, args: browserArgs() },
-    });
-    let qrChain: Promise<void> = Promise.resolve();
-    await launch(wa, pairTimeoutMs, (qr) => {
-      qrChain = qrChain.then(() =>
-        db.query("select private.save_whatsapp_qr($1, $2)", [stateId, qr]).then(
-          () => undefined,
-          (error: unknown) => {
-            console.error("whatsapp qr", error instanceof Error ? error.message : error);
-          },
-        ),
-      );
-    });
-    await qrChain;
-    const account = phoneFrom(wa);
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-    const session = await packDir(sessionDir);
-    await db.query("select private.finish_whatsapp_pairing($1, $2, $3)", [stateId, account, session]);
-    console.log("whatsapp linked", stateId);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "";
-    console.error("whatsapp pair", message);
-    const publicMessage =
-      message === "pair-timeout"
-        ? "Nessuno ha scansionato il QR in tempo."
-        : message === "auth"
-          ? "WhatsApp ha rifiutato il collegamento."
-          : message === "install"
-            ? "Non sono riuscito a installare WhatsApp nel server."
-            : "Non sono riuscito a collegare WhatsApp.";
-    await failPairing(db, stateId, publicMessage);
-  } finally {
-    await wa?.destroy().catch(() => undefined);
-    await rm(sessionDir, { recursive: true, force: true });
-  }
-}
-
-export async function withWhatsApp<T>(session: Buffer, linkId: string, task: (client: WaClient) => Promise<T>) {
-  return exclusive(async () => {
-    const lib = await loadLibrary();
-    const dataPath = path.join(toolDir(), "sessions");
-    const sessionDir = path.join(dataPath, `session-${linkId}`);
-    await rm(sessionDir, { recursive: true, force: true });
-    await mkdir(sessionDir, { recursive: true });
-    await unpack(session, sessionDir);
-    const wa = new lib.Client({
-      authStrategy: new lib.LocalAuth({ clientId: linkId, dataPath }),
-      puppeteer: { headless: true, args: browserArgs() },
-    });
-    try {
-      try {
-        await launch(wa, useTimeoutMs);
-      } catch (error) {
-        const code = error instanceof Error ? error.message : "";
-        if (code === "pair-timeout") throw new Error("WhatsApp non è partito in tempo.");
-        if (code === "auth") throw new Error("La sessione WhatsApp non è più valida. Va ricollegata.");
-        throw new Error("WhatsApp non è partito.");
+  await ensureOpenWA();
+  const created = (await openwa("POST", "/sessions", { name: stateId })) as { id?: string };
+  if (!created.id) throw new Error("OpenWA non ha aperto la sessione.");
+  await openwa("POST", `/sessions/${created.id}/start`);
+  const deadline = Date.now() + pairTimeoutMs;
+  let sawQr = false;
+  while (Date.now() < deadline) {
+    const session = (await openwa("GET", `/sessions/${created.id}`)) as {
+      status?: string;
+      phone?: string | null;
+      lastError?: string | null;
+    };
+    if (session.status === "qr_ready") {
+      const qr = (await openwa("GET", `/sessions/${created.id}/qr`)) as { qrCode?: string };
+      if (qr.qrCode) {
+        sawQr = true;
+        await db.query("select private.save_whatsapp_qr($1, $2)", [stateId, qr.qrCode]);
       }
-      const result = await task(wa);
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      const next = await packDir(sessionDir);
-      return { result, session: next };
-    } finally {
-      await wa.destroy().catch(() => undefined);
-      await rm(sessionDir, { recursive: true, force: true });
     }
-  });
+    if (session.status === "ready") {
+      const account = (session.phone ?? "").replace(/\D/g, "");
+      const packed = Buffer.from(JSON.stringify({ sessionId: created.id }), "utf8");
+      await db.query("select private.finish_whatsapp_pairing($1, $2, $3)", [stateId, account, packed]);
+      console.log("whatsapp linked", stateId);
+      return;
+    }
+    if (session.status === "failed") throw new Error(session.lastError || "auth");
+    await sleep(2000);
+  }
+  throw new Error(sawQr ? "pair-timeout" : "install");
 }
 
-export async function listWhatsAppChats(session: Buffer, linkId: string) {
-  const outcome = await withWhatsApp(session, linkId, async (client) => {
-    const chats = await client.getChats();
-    return chats.slice(0, 30).map((chat) => ({
-      id: chat.id._serialized,
-      name: chat.name || chat.id.user,
-      unread: chat.unreadCount,
-      group: chat.isGroup,
-    }));
-  });
-  return outcome;
+function sessionIdFrom(session: Buffer) {
+  const parsed = JSON.parse(session.toString("utf8")) as { sessionId?: unknown };
+  if (typeof parsed.sessionId !== "string" || parsed.sessionId.length < 8) {
+    throw new Error("WhatsApp non trovato.");
+  }
+  return parsed.sessionId;
 }
 
-export async function readWhatsAppMessages(session: Buffer, linkId: string, chatId: string, limit: number) {
-  return withWhatsApp(session, linkId, async (client) => {
-    const chat = await client.getChatById(chatId);
-    const messages = await chat.fetchMessages({ limit });
-    return messages.slice(-limit).map((message) => ({
-      fromMe: message.fromMe,
-      body: message.body.slice(0, 500),
-      at: new Date(message.timestamp * 1000).toISOString(),
-    }));
+export async function listWhatsAppChats(session: Buffer, _linkId: string) {
+  await ensureOpenWA();
+  const payload = await openwa("GET", `/sessions/${sessionIdFrom(session)}/chats?limit=30`);
+  const chats = Array.isArray(payload) ? payload : [];
+  const result = chats.slice(0, 30).map((chat) => {
+    const row = chat as { id?: string; name?: string; unreadCount?: number; isGroup?: boolean };
+    return {
+      id: row.id ?? "",
+      name: row.name || row.id || "",
+      unread: row.unreadCount ?? 0,
+      group: Boolean(row.isGroup),
+    };
   });
+  return { result, session };
 }
 
-export async function sendWhatsAppMessage(session: Buffer, linkId: string, chatId: string, body: string) {
-  return withWhatsApp(session, linkId, async (client) => {
-    await client.sendMessage(chatId, body);
-    return { sent: true };
+export async function readWhatsAppMessages(session: Buffer, _linkId: string, chatId: string, limit: number) {
+  await ensureOpenWA();
+  const payload = await openwa(
+    "GET",
+    `/sessions/${sessionIdFrom(session)}/messages/${encodeURIComponent(chatId)}/history?limit=${limit}`,
+  );
+  const messages = Array.isArray(payload) ? payload : [];
+  const result = messages.slice(-limit).map((message) => {
+    const row = message as { fromMe?: boolean; body?: string | null; timestamp?: number | null };
+    return {
+      fromMe: Boolean(row.fromMe),
+      body: (row.body ?? "").slice(0, 500),
+      at: row.timestamp ? new Date(row.timestamp * 1000).toISOString() : "",
+    };
   });
+  return { result, session };
+}
+
+export async function sendWhatsAppMessage(session: Buffer, _linkId: string, chatId: string, body: string) {
+  await ensureOpenWA();
+  await openwa("POST", `/sessions/${sessionIdFrom(session)}/messages/send-text`, { chatId, text: body });
+  return { result: { sent: true }, session };
 }

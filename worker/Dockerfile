@@ -9,10 +9,13 @@ RUN npm run build
 FROM node:22-bookworm-slim
 WORKDIR /app
 ENV NODE_ENV=production
-ENV WHATSAPP_TOOL_DIR=/var/lib/wwebjs
-ENV PUPPETEER_CACHE_DIR=/var/lib/wwebjs/puppeteer
+ENV WHATSAPP_TOOL_DIR=/var/lib/openwa
+ENV PUPPETEER_CACHE_DIR=/var/lib/openwa/puppeteer
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
+    python3 \
+    make \
+    g++ \
     ca-certificates \
     fonts-liberation \
     libasound2 \
@@ -34,8 +37,8 @@ RUN apt-get update \
     libxkbcommon0 \
     libxrandr2 \
   && rm -rf /var/lib/apt/lists/* \
-  && mkdir -p /var/lib/wwebjs \
-  && chown -R node:node /var/lib/wwebjs
+  && mkdir -p /var/lib/openwa \
+  && chown -R node:node /var/lib/openwa
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 COPY --from=build /app/dist ./dist
