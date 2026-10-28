@@ -6,7 +6,6 @@ import { createClient } from "@/lib/supabase/server";
 import { getSessionUser } from "@/lib/auth/session";
 import { botGreeting } from "@/lib/bot-greeting";
 import { botFaceIds, channelSymbolIds, isListed, markColorIds } from "@/lib/marks";
-import { gmailOAuthConfigured } from "@/lib/gmail-link";
 import { listedPermissions, roleSlug } from "@/lib/permissions";
 
 const uuidPattern =
@@ -1194,57 +1193,4 @@ export async function createAgendaEntry(input: {
 
   revalidatePath(`/clinics/${clinicId}`);
   return {};
-}
-
-export async function startToolLink(clinicId: string, _state: FormState, formData: FormData): Promise<FormState> {
-  const user = await requireUser();
-  if (!uuidPattern.test(clinicId)) return { error: "Studio non valido." };
-  if (!(await clinicMember(clinicId, user.id))) return { error: "Non fai parte di questo studio." };
-  const provider = String(formData.get("provider") ?? "");
-  if (provider === "gmail") {
-    if (!gmailOAuthConfigured()) return {};
-    redirect(`/clinics/${clinicId}/tools/connect/gmail`);
-  }
-  if (provider === "whatsapp") {
-    const supabase = await createClient();
-    const { error } = await supabase.rpc("begin_tool_link", { p_clinic_id: clinicId, p_provider: "whatsapp" });
-    if (error) return {};
-    revalidatePath(`/clinics/${clinicId}`);
-    return { sent: Date.now() };
-  }
-  return { error: "Tool sconosciuto." };
-}
-
-export async function cancelToolPairing(
-  clinicId: string,
-  stateId: string,
-  _state: FormState,
-  _formData: FormData,
-): Promise<FormState> {
-  const user = await requireUser();
-  if (!uuidPattern.test(clinicId) || !uuidPattern.test(stateId)) return { error: "Collegamento non valido." };
-  if (!(await clinicMember(clinicId, user.id))) return { error: "Non fai parte di questo studio." };
-
-  const supabase = await createClient();
-  const { error } = await supabase.rpc("cancel_tool_pairing", { p_clinic_id: clinicId, p_state: stateId });
-  if (error) return { error: "Non è stato possibile bloccare il collegamento." };
-  revalidatePath(`/clinics/${clinicId}`);
-  return { sent: Date.now() };
-}
-
-export async function dropToolLink(
-  clinicId: string,
-  linkId: string,
-  _state: FormState,
-  _formData: FormData,
-): Promise<FormState> {
-  const user = await requireUser();
-  if (!uuidPattern.test(clinicId) || !uuidPattern.test(linkId)) return { error: "Tool non valido." };
-  if (!(await clinicMember(clinicId, user.id))) return { error: "Non fai parte di questo studio." };
-
-  const supabase = await createClient();
-  const { error } = await supabase.rpc("drop_tool_link", { p_clinic_id: clinicId, p_link_id: linkId });
-  if (error) return { error: "Non è stato possibile sganciare il tool." };
-  revalidatePath(`/clinics/${clinicId}`);
-  return { sent: Date.now() };
 }

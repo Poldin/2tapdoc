@@ -28,17 +28,9 @@ import {
   botUpdateAgendaBlocks,
   botUpdateAppointments,
   botUpdateBots,
-  botListToolLinks,
-  botReadToolSecret,
-  botReadWhatsAppSession,
-  botStoreToolAccess,
-  botStoreWhatsAppSession,
-  botUnlinkToolLinks,
   botUpdateChats,
   botUpdatePatients,
 } from "./db.js";
-import { gmailOperation } from "./gmail.js";
-import { listWhatsAppChats, readWhatsAppMessages, sendWhatsAppMessage } from "./whatsapp.js";
 import { botColorIds, botFaceIds, channelSymbolIds } from "./marks.js";
 
 export type TurnMessage = {
@@ -58,12 +50,6 @@ export type ClinicObject = {
   name: string;
   kind: string;
   description: string | null;
-};
-
-export type ToolLink = {
-  id: string;
-  provider: string;
-  account: string;
 };
 
 export type Turn = {
@@ -157,32 +143,7 @@ function withDayNames(value: unknown): unknown {
   return out;
 }
 
-function gmailOAuthConfigured() {
-  return Boolean(process.env.GOOGLE_OAUTH_CLIENT_ID?.trim() && process.env.GOOGLE_OAUTH_CLIENT_SECRET?.trim());
-}
-
-function toolAccountLines(links: ToolLink[]) {
-  const visible = links.filter((link) => link.provider === "whatsapp" || (link.provider === "gmail" && gmailOAuthConfigured()));
-  if (visible.length === 0) return "Nessun tool collegato.";
-  return visible
-    .map((link) => {
-      const name = link.provider === "gmail" ? "Gmail" : "WhatsApp";
-      return `- ${name} ${link.account} (id: ${link.id})`;
-    })
-    .join("\n");
-}
-
-function appOrigin() {
-  return (process.env.APP_ORIGIN?.trim() || "http://localhost:3000").replace(/\/+$/, "");
-}
-
-function buildSystemPrompt(
-  turn: Turn,
-  now: Date,
-  toolLinks: ToolLink[],
-  canManageTools: boolean,
-  canUseTools: boolean,
-): string {
+function buildSystemPrompt(turn: Turn, now: Date): string {
   const doctorsList =
     turn.doctors.length > 0
       ? turn.doctors
@@ -249,89 +210,8 @@ function buildSystemPrompt(
     "  - Usa `setServerAlerts` per programmare uno o più alert/sveglie direttamente nel container del server (specificando `delaySeconds` per attese relative come 'tra 5 minuti' oppure `firesAtIso` per un orario preciso).",
     "  - Quando l'alert scatta sul server, ti risveglierà automaticamente con l'istruzione salvata in `prompt` e potrai scrivere in questa chat (anche controllando l'agenda in quel momento).",
     "  - Usa `listServerAlerts` e `cancelServerAlerts` per vedere o annullare gli alert attivi nel server.",
-    ...(canManageTools || canUseTools
-      ? [
-          "- **Tool esterni** (solo i bot, dentro la chat: niente automazioni sistema-sistema):",
-          "  - I tool collegati stanno in Impostazioni, sezione tool. Ogni account è una riga. Lo stesso account non si ripete.",
-          ...(canManageTools
-            ? [
-                gmailOAuthConfigured()
-                  ? "  - Per collegare Gmail o WhatsApp usa `linkTool`. Manda all'utente il link che ricevi, e basta."
-                  : "  - Per collegare WhatsApp usa `linkTool`. Manda all'utente il link che ricevi, e basta.",
-                ...(gmailOAuthConfigured()
-                  ? ["  - Gmail apre il consenso ufficiale di Google. Un'altra casella è un'altra chiamata."]
-                  : []),
-                "  - WhatsApp non ufficiale: il link mostra il QR. Il server controlla i messaggi a giri, non resta in ascolto 24 ore. Un altro numero è un'altra chiamata.",
-                "  - Per sganciare usa `unlinkToolLinks` con gli id. Non sganci tu: un solo dialog, risposta `awaiting_user`. Non chiedere conferma in chat.",
-              ]
-            : []),
-          ...(canUseTools
-            ? [
-                ...(gmailOAuthConfigured()
-                  ? [
-                      "  - Per una casella Gmail già collegata, se non conosci l'operazione chiama `listGmailTools`, poi `callGmail` con il suo `linkId`.",
-                    ]
-                  : []),
-                "  - Per un WhatsApp già collegato usa `listWhatsAppChats`, poi `readWhatsAppMessages` o `sendWhatsAppMessage`. Un solo destinatario per chiamata. Il controllo a giri ti può svegliare con i non letti: allora leggi e, se serve, rispondi.",
-              ]
-            : []),
-          toolAccountLines(toolLinks),
-        ]
-      : []),
     "- Non inventare mai di aver eseguito un'azione se non hai chiamato il relativo tool con successo. Se manca un dato essenziale (es. quale medico o quale orario), chiedilo.",
   ].join("\n");
-}
-
-async function useLinkedGmail(
-  client: pg.Client,
-  workerId: string,
-  jobId: string,
-  linkId: string,
-  operation: "list" | "call",
-  name?: string,
-  args?: Record<string, unknown>,
-) {
-  try {
-    const secret = await botReadToolSecret(client, workerId, jobId, linkId);
-    if (!secret) return { error: "Casella non trovata." };
-    const outcome = await gmailOperation(secret, operation, name, args);
-    if (outcome.access.refreshed && outcome.access.accessToken && outcome.access.accessExpiresAt) {
-      await botStoreToolAccess(
-        client,
-        workerId,
-        jobId,
-        linkId,
-        outcome.access.accessToken,
-        outcome.access.accessExpiresAt,
-        outcome.access.refreshToken,
-      );
-    }
-    return outcome.result;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Gmail non ha risposto.";
-    return { error: message.slice(0, 300) };
-  }
-}
-
-const whatsappChatId = /^[0-9-]{6,40}@(c\.us|g\.us|lid|s\.whatsapp\.net)$/;
-
-async function useLinkedWhatsApp(
-  client: pg.Client,
-  workerId: string,
-  jobId: string,
-  linkId: string,
-  run: (session: Buffer) => Promise<{ result: unknown; session: Buffer }>,
-) {
-  try {
-    const session = await botReadWhatsAppSession(client, workerId, jobId, linkId);
-    if (!session) return { error: "WhatsApp non trovato." };
-    const outcome = await run(session);
-    await botStoreWhatsAppSession(client, workerId, jobId, linkId, outcome.session);
-    return outcome.result;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "WhatsApp non ha risposto.";
-    return { error: message.slice(0, 300) };
-  }
 }
 
 export async function replyToTurn(
@@ -358,9 +238,6 @@ export async function replyToTurn(
   const canReadPatients = perms.has("patients.read") || perms.has("patients.write");
   const canWritePatients = perms.has("patients.write");
   const canRenameClinic = perms.has("clinic.update");
-  const canManageTools = perms.has("tools.manage");
-  const canUseTools = perms.has("tools.use");
-  const toolLinks = canManageTools || canUseTools ? await botListToolLinks(client, workerId, turn.id) : [];
 
   const tools = {
     setServerAlerts: tool({
@@ -987,93 +864,6 @@ export async function replyToTurn(
       }),
       execute: async ({ botIds }) => botDeleteBots(client, workerId, turn.id, botIds),
     }),
-
-    linkTool: tool({
-      description: gmailOAuthConfigured()
-        ? "Avvia il collegamento di Gmail o WhatsApp. Restituisce un link da mandare all'utente. Non dice che è già collegato."
-        : "Avvia il collegamento di WhatsApp. Restituisce il link del QR: mandalo all'utente. Non dice che è già collegato.",
-      inputSchema: z.object({
-        provider: z.enum(gmailOAuthConfigured() ? ["gmail", "whatsapp"] : ["whatsapp"]),
-      }),
-      execute: async ({ provider }) => {
-        if (provider === "gmail") {
-          return {
-            url: `${appOrigin()}/clinics/${turn.clinicId}/tools/connect/gmail`,
-            instruction:
-              "Manda all'utente questo link e basta. Lo apre lui: è il consenso ufficiale di Google. Non dire che la casella è già collegata.",
-          };
-        }
-        return {
-          url: `${appOrigin()}/clinics/${turn.clinicId}/tools/connect/whatsapp`,
-          instruction:
-            "Manda all'utente questo link e basta. Lo apre lui: è il QR di WhatsApp. Non dire che il numero è già collegato.",
-        };
-      },
-    }),
-
-    unlinkToolLinks: tool({
-      description:
-        "Propone lo sgancio di una o più caselle già collegate, in una sola chiamata. Non sgancia: apre un solo dialog e risponde awaiting_user.",
-      inputSchema: z.object({
-        linkIds: z.array(z.string().uuid()).min(1).max(20),
-      }),
-      execute: async ({ linkIds }) => botUnlinkToolLinks(client, workerId, turn.id, linkIds),
-    }),
-
-    listGmailTools: tool({
-      description: "Elenca le operazioni del MCP ufficiale di Gmail per una casella collegata.",
-      inputSchema: z.object({
-        linkId: z.string().uuid(),
-      }),
-      execute: async ({ linkId }) => useLinkedGmail(client, workerId, turn.id, linkId, "list"),
-    }),
-
-    callGmail: tool({
-      description:
-        "Esegue un'operazione del MCP ufficiale di Gmail su una casella collegata. Il nome e gli argomenti arrivano da listGmailTools.",
-      inputSchema: z.object({
-        linkId: z.string().uuid(),
-        name: z.string().min(1).max(80),
-        arguments: z.record(z.string(), z.unknown()).optional(),
-      }),
-      execute: async ({ linkId, name, arguments: args }) =>
-        useLinkedGmail(client, workerId, turn.id, linkId, "call", name, args),
-    }),
-
-    listWhatsAppChats: tool({
-      description: "Elenca le chat di un WhatsApp già collegato. Usalo solo se l'utente lo chiede.",
-      inputSchema: z.object({
-        linkId: z.string().uuid(),
-      }),
-      execute: async ({ linkId }) =>
-        useLinkedWhatsApp(client, workerId, turn.id, linkId, (session) => listWhatsAppChats(session, linkId)),
-    }),
-
-    readWhatsAppMessages: tool({
-      description: "Legge gli ultimi messaggi di una chat WhatsApp. L'id arriva da listWhatsAppChats.",
-      inputSchema: z.object({
-        linkId: z.string().uuid(),
-        chatId: z.string().regex(whatsappChatId),
-        limit: z.number().int().min(1).max(20).optional(),
-      }),
-      execute: async ({ linkId, chatId, limit }) =>
-        useLinkedWhatsApp(client, workerId, turn.id, linkId, (session) =>
-          readWhatsAppMessages(session, linkId, chatId, limit ?? 10),
-        ),
-    }),
-
-    sendWhatsAppMessage: tool({
-      description: "Invia un solo messaggio WhatsApp a una chat. L'id arriva da listWhatsAppChats.",
-      inputSchema: z.object({
-        linkId: z.string().uuid(),
-        chatId: z.string().regex(whatsappChatId),
-        body: z.string().trim().min(1).max(1000),
-      }),
-      execute: async ({ linkId, chatId, body }) =>
-        useLinkedWhatsApp(client, workerId, turn.id, linkId, (session) =>
-          sendWhatsAppMessage(session, linkId, chatId, body),
-        ),
-    }),
   };
 
   type ToolName = keyof typeof tools;
@@ -1105,20 +895,17 @@ export async function replyToTurn(
   }
   if (canReadPatients) activeTools.push("searchPatients");
   if (canWritePatients) activeTools.push("createPatients", "updatePatients", "deletePatients");
-  if (canManageTools) activeTools.push("linkTool", "unlinkToolLinks");
-  if (canUseTools && gmailOAuthConfigured()) activeTools.push("listGmailTools", "callGmail");
-  if (canUseTools) activeTools.push("listWhatsAppChats", "readWhatsAppMessages", "sendWhatsAppMessage");
 
   const mistral = createMistral({ apiKey });
   const modelName = process.env.MISTRAL_MODEL?.trim() || "mistral-medium-latest";
 
   const result = await generateText({
     model: mistral(modelName),
-    system: buildSystemPrompt(turn, now, toolLinks, canManageTools, canUseTools),
+    system: buildSystemPrompt(turn, now),
     messages,
     tools,
     activeTools,
-    stopWhen: stepCountIs(canUseTools ? 8 : 6),
+    stopWhen: stepCountIs(6),
     maxOutputTokens: 1000,
     abortSignal: AbortSignal.timeout(modelTimeoutMs),
   });
