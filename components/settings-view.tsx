@@ -1,12 +1,16 @@
 "use client";
 
-import { useActionState, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useActionState, useEffect, useLayoutEffect, useRef, useState, useTransition, type ReactNode } from "react";
+import { useRouter } from "next/navigation";
 import { Settings } from "lucide-react";
 import {
   addClinicMember,
+  connectWhatsApp,
   createClinicalObject,
   createDoctor,
+  createIntegration,
   createRole,
+  dropIntegration,
   updateClinic,
   updateClinicalObject,
   updateDoctor,
@@ -51,7 +55,32 @@ const sections = [
   { id: "generali", label: "generali" },
   { id: "equipe", label: "equipe" },
   { id: "assets", label: "stanze e oggetti" },
+  { id: "integrazioni", label: "integrazioni" },
 ] as const;
+
+export type ClinicIntegration = {
+  id: string;
+  provider: string;
+  account: string;
+  status: string;
+  whatsapp: { creditCents: number; messageCount: number } | null;
+};
+
+const integrationChoices = [{ id: "whatsapp", label: "WhatsApp" }] as const;
+
+function integrationLabel(provider: string) {
+  return integrationChoices.find((choice) => choice.id === provider)?.label ?? provider;
+}
+
+function integrationStatus(status: string) {
+  if (status === "connected") return "Collegato";
+  if (status === "pending") return "Da collegare";
+  return status;
+}
+
+function euro(cents: number) {
+  return new Intl.NumberFormat("it-IT", { style: "currency", currency: "EUR" }).format(cents / 100);
+}
 
 function syncSectionBadge(
   thread: HTMLDivElement,
@@ -549,6 +578,306 @@ function AssetDialog({
   );
 }
 
+function IntegrationDialog({
+  open,
+  clinicId,
+  onClose,
+}: {
+  open: boolean;
+  clinicId: string;
+  onClose: () => void;
+}) {
+  const [state, action, pending] = useActionState<FormState, FormData>(createIntegration.bind(null, clinicId), {});
+  useCloseWhenSent(open, state.sent, onClose);
+
+  return (
+    <SettingsDialog
+      open={open}
+      title="Nuova integrazione"
+      onClose={onClose}
+      action={action}
+      pending={pending}
+      error={state.error}
+      submitLabel="Aggiungi"
+    >
+      <label className="flex flex-col gap-2 text-sm">
+        Integrazione
+        <select name="provider" defaultValue={integrationChoices[0].id} className={fieldClassName()}>
+          {integrationChoices.map((choice) => (
+            <option key={choice.id} value={choice.id}>
+              {choice.label}
+            </option>
+          ))}
+        </select>
+      </label>
+    </SettingsDialog>
+  );
+}
+
+type FacebookAuth = {
+  init: (options: { appId: string; autoLogAppEvents: boolean; xfbml: boolean; version: string }) => void;
+  login: (
+    callback: (response: { authResponse?: { code?: string } }) => void,
+    options: Record<string, unknown>,
+  ) => void;
+};
+
+declare global {
+  interface Window {
+    FB?: FacebookAuth;
+    fbAsyncInit?: () => void;
+  }
+}
+
+type SignupIds = { wabaId: string; phoneNumberId: string; businessId: string };
+
+function metaReady(appId: string, configId: string) {
+  return /^[0-9]{5,32}$/.test(appId) && /^[0-9]{5,32}$/.test(configId);
+}
+
+function graphVersion(value: string) {
+  return /^v\d+\.\d+$/.test(value) ? value : "v26.0";
+}
+
+function fromFacebook(origin: string) {
+  try {
+    const host = new URL(origin).hostname;
+    return host === "facebook.com" || host.endsWith(".facebook.com");
+  } catch {
+    return false;
+  }
+}
+
+function readSignup(data: unknown): SignupIds | null {
+  if (typeof data === "string") {
+    try {
+      return readSignup(JSON.parse(data));
+    } catch {
+      return null;
+    }
+  }
+  const row = data && typeof data === "object" ? (data as { type?: unknown; event?: unknown; data?: unknown }) : null;
+  if (!row || row.type !== "WA_EMBEDDED_SIGNUP") return null;
+  const eventName = typeof row.event === "string" ? row.event : "";
+  if (eventName.startsWith("CANCEL") || eventName === "ERROR") return null;
+  const payload = row.data && typeof row.data === "object" ? (row.data as Record<string, unknown>) : {};
+  const id = (value: unknown) => (typeof value === "string" && /^[0-9]{5,32}$/.test(value) ? value : "");
+  const ids = {
+    wabaId: id(payload.waba_id),
+    phoneNumberId: id(payload.phone_number_id),
+    businessId: id(payload.business_id),
+  };
+  return ids.wabaId || ids.phoneNumberId || ids.businessId ? ids : null;
+}
+
+let facebookSdk: Promise<void> | null = null;
+
+function loadFacebookSdk(appId: string, version: string) {
+  if (facebookSdk) return facebookSdk;
+  facebookSdk = new Promise<void>((resolve, reject) => {
+    const finish = () => {
+      window.clearTimeout(timeout);
+      window.FB?.init({ appId, autoLogAppEvents: true, xfbml: false, version });
+      resolve();
+    };
+    const timeout = window.setTimeout(() => {
+      facebookSdk = null;
+      reject(new Error("timeout"));
+    }, 10000);
+    window.fbAsyncInit = finish;
+    if (window.FB) {
+      finish();
+      return;
+    }
+    const script = document.createElement("script");
+    script.src = "https://connect.facebook.net/it_IT/sdk.js";
+    script.async = true;
+    script.onerror = () => {
+      window.clearTimeout(timeout);
+      facebookSdk = null;
+      reject(new Error("script"));
+    };
+    document.body.appendChild(script);
+  });
+  return facebookSdk;
+}
+
+function waitForSignup(ids: { current: SignupIds }) {
+  return new Promise<SignupIds>((resolve) => {
+    const started = Date.now();
+    const timer = window.setInterval(() => {
+      if (ids.current.wabaId || Date.now() - started > 2000) {
+        window.clearInterval(timer);
+        resolve(ids.current);
+      }
+    }, 100);
+  });
+}
+
+function IntegrationDetailDialog({
+  open,
+  clinicId,
+  integration,
+  canManage,
+  metaAppId,
+  metaConfigId,
+  metaGraphVersion,
+  onClose,
+}: {
+  open: boolean;
+  clinicId: string;
+  integration: ClinicIntegration;
+  canManage: boolean;
+  metaAppId: string;
+  metaConfigId: string;
+  metaGraphVersion: string;
+  onClose: () => void;
+}) {
+  const router = useRouter();
+  const [state, action, pending] = useActionState<FormState, FormData>(
+    dropIntegration.bind(null, clinicId, integration.id),
+    {},
+  );
+  const [connectError, setConnectError] = useState<string>();
+  const [connectPending, startConnect] = useTransition();
+  const signupRef = useRef<SignupIds>({ wabaId: "", phoneNumberId: "", businessId: "" });
+  useCloseWhenSent(open, state.sent, onClose);
+  const credit = integration.whatsapp?.creditCents ?? 0;
+  const messages = integration.whatsapp?.messageCount ?? 0;
+  const linked = integration.status === "connected";
+  const version = graphVersion(metaGraphVersion);
+  const ready = metaReady(metaAppId, metaConfigId);
+
+  useEffect(() => {
+    if (!open) return;
+    function onMessage(event: MessageEvent) {
+      if (!fromFacebook(event.origin)) return;
+      const ids = readSignup(event.data);
+      if (!ids) return;
+      signupRef.current = {
+        wabaId: ids.wabaId || signupRef.current.wabaId,
+        phoneNumberId: ids.phoneNumberId || signupRef.current.phoneNumberId,
+        businessId: ids.businessId || signupRef.current.businessId,
+      };
+    }
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [open]);
+
+  useEffect(() => {
+    if (!open || !canManage || linked || !ready) return;
+    let cancelled = false;
+    loadFacebookSdk(metaAppId, version).catch(() => {
+      if (!cancelled) setConnectError("Meta non si è aperto.");
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, canManage, linked, ready, metaAppId, version]);
+
+  function connectNumber() {
+    if (!ready) {
+      setConnectError("Il collegamento Meta non è ancora configurato sulla piattaforma.");
+      return;
+    }
+    if (!window.FB) {
+      setConnectError("Meta non è ancora pronto. Riprova.");
+      return;
+    }
+    setConnectError(undefined);
+    signupRef.current = { wabaId: "", phoneNumberId: "", businessId: "" };
+    window.FB.login(
+      (response) => {
+        const code = response.authResponse?.code;
+        if (!code) {
+          setConnectError("Collegamento annullato.");
+          return;
+        }
+        startConnect(async () => {
+          const ids = await waitForSignup(signupRef);
+          const result = await connectWhatsApp(clinicId, integration.id, { code, ...ids });
+          setConnectError(result.error);
+          router.refresh();
+        });
+      },
+      {
+        config_id: metaConfigId,
+        response_type: "code",
+        override_default_response_type: true,
+        extras: {
+          setup: {},
+          featureType: "whatsapp_business_app_onboarding",
+          version: "4",
+        },
+      },
+    );
+  }
+
+  return (
+    <SettingsDialog
+      open={open}
+      title={integrationLabel(integration.provider)}
+      onClose={onClose}
+      action={action}
+      pending={pending}
+      error={state.error}
+      submitLabel="Chiudi"
+      allowSubmit={false}
+    >
+      {integration.provider === "whatsapp" ? (
+        <>
+          <div>
+            <p className="text-xs font-medium tracking-[0.06em] text-muted">Credito</p>
+            <p className="mt-1 text-sm">{euro(credit)}</p>
+            {credit === 0 ? <p className="mt-1 text-sm text-muted">L'invio è fermo finché non c'è credito.</p> : null}
+          </div>
+          <div>
+            <p className="text-xs font-medium tracking-[0.06em] text-muted">Collegamento</p>
+            {linked ? (
+              <>
+                <p className="mt-1 text-sm">{integration.account || "Numero verificato."}</p>
+                <p className="mt-1 text-sm text-muted">Verificato con Meta.</p>
+              </>
+            ) : (
+              <p className="mt-1 text-sm text-muted">
+                Il numero si verifica con Meta e resta utilizzabile sull'app WhatsApp Business.
+              </p>
+            )}
+            {canManage && !linked ? (
+              <button
+                type="button"
+                onClick={connectNumber}
+                disabled={connectPending}
+                className="mt-3 h-10 rounded-full bg-teal px-4 text-sm text-teal-ink disabled:opacity-50"
+              >
+                {connectPending ? "Collegamento…" : "Collega numero"}
+              </button>
+            ) : null}
+            {connectError ? <p className="mt-2 text-sm text-teal">{connectError}</p> : null}
+          </div>
+          <div>
+            <p className="text-xs font-medium tracking-[0.06em] text-muted">Cronologia</p>
+            <p className="mt-1 text-sm text-muted">
+              {messages === 0 ? "Nessun messaggio archiviato." : `${messages} messaggi archiviati.`}
+            </p>
+          </div>
+        </>
+      ) : (
+        <p className="text-sm text-muted">Nessun dettaglio.</p>
+      )}
+      {canManage ? (
+        <button
+          type="submit"
+          disabled={pending}
+          className="h-10 self-start rounded-full border border-line px-4 text-sm disabled:opacity-50"
+        >
+          {pending ? "Rimozione…" : "Rimuovi"}
+        </button>
+      ) : null}
+    </SettingsDialog>
+  );
+}
+
 export function SettingsView({
   clinicId,
   clinicName,
@@ -557,10 +886,15 @@ export function SettingsView({
   canManageMembers,
   canManageRoles,
   canManageAgenda,
+  canManageIntegrations,
+  metaAppId,
+  metaConfigId,
+  metaGraphVersion,
   members,
   roles = [],
   specialists = [],
   assets = [],
+  integrations = [],
 }: {
   clinicId: string;
   clinicName: string;
@@ -569,10 +903,15 @@ export function SettingsView({
   canManageMembers: boolean;
   canManageRoles: boolean;
   canManageAgenda: boolean;
+  canManageIntegrations: boolean;
+  metaAppId: string;
+  metaConfigId: string;
+  metaGraphVersion: string;
   members: ClinicMember[];
   roles?: ClinicRole[];
   specialists?: Specialist[];
   assets?: ClinicAsset[];
+  integrations?: ClinicIntegration[];
 }) {
   const threadRef = useRef<HTMLDivElement>(null);
   const badgeRef = useRef<HTMLParagraphElement>(null);
@@ -585,6 +924,9 @@ export function SettingsView({
   const [specialistOpen, setSpecialistOpen] = useState(false);
   const [assetDraft, setAssetDraft] = useState<ClinicAsset | null>(null);
   const [assetOpen, setAssetOpen] = useState(false);
+  const [integrationOpen, setIntegrationOpen] = useState(false);
+  const [detailIntegrationId, setDetailIntegrationId] = useState<string | null>(null);
+  const detailIntegration = integrations.find((integration) => integration.id === detailIntegrationId) ?? null;
   const takenUserIds = new Set(
     specialists.flatMap((specialist) => (specialist.userId ? [specialist.userId] : [])),
   );
@@ -593,7 +935,7 @@ export function SettingsView({
     const thread = threadRef.current;
     if (!thread) return;
     syncSectionBadge(thread, badgeRef.current, setSectionLabel);
-  }, [members, roles, specialists, assets]);
+  }, [members, roles, specialists, assets, integrations]);
 
   useEffect(() => {
     const thread = threadRef.current;
@@ -606,7 +948,7 @@ export function SettingsView({
       thread.removeEventListener("scroll", sync);
       observer.disconnect();
     };
-  }, [members, roles, specialists, assets]);
+  }, [members, roles, specialists, assets, integrations]);
 
   return (
     <>
@@ -769,6 +1111,39 @@ export function SettingsView({
             </DataTable>
           </div>
         </section>
+
+        <section className="border-t border-line px-4 pt-6 md:px-8">
+          <div className="mx-auto flex w-full max-w-3xl flex-col gap-4">
+            <TableHeading
+              title="integrazioni"
+              pin="integrazioni"
+              onAdd={() => setIntegrationOpen(true)}
+              canAdd={canManageIntegrations}
+            />
+            <DataTable columns={["Integrazione", "Descrizione", "Stato", "Dettaglio"]}>
+              {integrations.length === 0 ? (
+                <EmptyRow columns={4}>Nessuna integrazione.</EmptyRow>
+              ) : (
+                integrations.map((integration) => (
+                  <tr key={integration.id} className="border-t border-line">
+                    <td className="px-4 py-3 font-medium">{integrationLabel(integration.provider)}</td>
+                    <td className="px-4 py-3 text-muted">{integration.account.trim() || "—"}</td>
+                    <td className="px-4 py-3 text-muted">{integrationStatus(integration.status)}</td>
+                    <td className="px-4 py-3">
+                      <button
+                        type="button"
+                        onClick={() => setDetailIntegrationId(integration.id)}
+                        className="h-8 rounded-full border border-line px-3 text-sm"
+                      >
+                        Apri
+                      </button>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </DataTable>
+          </div>
+        </section>
       </div>
 
       {roleOpen ? (
@@ -810,6 +1185,22 @@ export function SettingsView({
           clinicId={clinicId}
           draft={assetDraft}
           onClose={() => setAssetOpen(false)}
+        />
+      ) : null}
+      {integrationOpen ? (
+        <IntegrationDialog open clinicId={clinicId} onClose={() => setIntegrationOpen(false)} />
+      ) : null}
+      {detailIntegration ? (
+        <IntegrationDetailDialog
+          key={detailIntegration.id}
+          open
+          clinicId={clinicId}
+          integration={detailIntegration}
+          canManage={canManageIntegrations}
+          metaAppId={metaAppId}
+          metaConfigId={metaConfigId}
+          metaGraphVersion={metaGraphVersion}
+          onClose={() => setDetailIntegrationId(null)}
         />
       ) : null}
     </>

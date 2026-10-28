@@ -7,6 +7,7 @@ export const permissionCatalog = [
   { key: "patients.write", label: "Creare e aggiornare i pazienti" },
   { key: "agenda.read", label: "Vedere l'agenda" },
   { key: "agenda.write", label: "Creare e aggiornare l'agenda" },
+  { key: "integrations.manage", label: "Aggiungere e rimuovere le integrazioni" },
 ] as const;
 
 export const permissionKeys = permissionCatalog.map((item) => item.key);

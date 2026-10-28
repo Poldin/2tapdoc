@@ -4,6 +4,8 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { getSessionUser } from "@/lib/auth/session";
+import { linkWhatsAppNumber, subscribeWhatsApp, syncWhatsAppHistory } from "@/lib/meta-whatsapp";
+import { withClinicUser } from "@/lib/postgres";
 import { botGreeting } from "@/lib/bot-greeting";
 import { botFaceIds, channelSymbolIds, isListed, markColorIds } from "@/lib/marks";
 import { listedPermissions, roleSlug } from "@/lib/permissions";
@@ -1192,5 +1194,101 @@ export async function createAgendaEntry(input: {
   }
 
   revalidatePath(`/clinics/${clinicId}`);
+  return {};
+}
+
+export async function createIntegration(clinicId: string, _state: FormState, formData: FormData): Promise<FormState> {
+  const user = await requireUser();
+  if (!uuidPattern.test(clinicId)) return { error: "Studio non valido." };
+  if (!(await clinicMember(clinicId, user.id))) return { error: "Non fai parte di questo studio." };
+  const provider = String(formData.get("provider") ?? "");
+  if (provider !== "whatsapp") return { error: "Integrazione sconosciuta." };
+
+  const supabase = await createClient();
+  const { error } = await supabase.rpc("create_integration", {
+    p_clinic_id: clinicId,
+    p_provider: provider,
+  });
+  if (error) return { error: "Non è stato possibile aggiungere l'integrazione." };
+  revalidatePath(`/clinics/${clinicId}`);
+  return { sent: Date.now() };
+}
+
+export async function dropIntegration(
+  clinicId: string,
+  integrationId: string,
+  _state: FormState,
+  _formData: FormData,
+): Promise<FormState> {
+  const user = await requireUser();
+  if (!uuidPattern.test(clinicId) || !uuidPattern.test(integrationId)) return { error: "Integrazione non valida." };
+  if (!(await clinicMember(clinicId, user.id))) return { error: "Non fai parte di questo studio." };
+
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("integrations")
+    .delete()
+    .eq("clinic_id", clinicId)
+    .eq("id", integrationId)
+    .select("id");
+  if (error || !data?.length) return { error: "Non è stato possibile rimuovere l'integrazione." };
+  revalidatePath(`/clinics/${clinicId}`);
+  return { sent: Date.now() };
+}
+
+export async function connectWhatsApp(
+  clinicId: string,
+  integrationId: string,
+  input: { code: string; wabaId: string; phoneNumberId: string; businessId: string },
+): Promise<FormState> {
+  const user = await requireUser();
+  if (!uuidPattern.test(clinicId) || !uuidPattern.test(integrationId)) return { error: "Integrazione non valida." };
+  if (!(await clinicMember(clinicId, user.id))) return { error: "Non fai parte di questo studio." };
+
+  const supabase = await createClient();
+  const existing = await supabase
+    .from("integrations")
+    .select("id, provider")
+    .eq("clinic_id", clinicId)
+    .eq("id", integrationId)
+    .maybeSingle();
+  if (existing.error || existing.data?.provider !== "whatsapp") return { error: "Integrazione non valida." };
+
+  let linked;
+  try {
+    linked = await linkWhatsAppNumber(input);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "";
+    if (code === "meta_config") return { error: "Il collegamento Meta non è ancora configurato sulla piattaforma." };
+    if (code === "meta_phone") return { error: "Meta non ha restituito un numero verificato." };
+    return { error: "Meta non ha accettato il collegamento." };
+  }
+
+  try {
+    await withClinicUser(user.id, (client) =>
+      client.query("select private.finish_whatsapp_link($1, $2, $3, $4, $5, $6)", [
+        integrationId,
+        linked.wabaId,
+        linked.phoneNumberId,
+        linked.businessId,
+        linked.displayPhone,
+        linked.accessToken,
+      ]),
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    if (message.includes("Numero già collegato")) return { error: "Questo numero è già collegato." };
+    if (message.includes("Permesso negato")) return { error: "Non hai il permesso di collegare il numero." };
+    console.error("whatsapp link save failed");
+    return { error: "Non è stato possibile salvare il collegamento." };
+  }
+
+  revalidatePath(`/clinics/${clinicId}`);
+  const subscribed = await subscribeWhatsApp(linked.wabaId, linked.accessToken);
+  if (!subscribed) return { error: "Numero collegato. L'iscrizione ai messaggi non è riuscita." };
+  if (linked.onBusinessApp) {
+    const synced = await syncWhatsAppHistory(linked.phoneNumberId, linked.accessToken);
+    if (!synced) return { error: "Numero collegato. La sincronizzazione della cronologia non è partita." };
+  }
   return {};
 }

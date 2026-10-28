@@ -19,6 +19,7 @@ import { SettingsListItem, settingsListId } from "@/components/settings-list-ite
 import {
   SettingsView,
   type ClinicAsset,
+  type ClinicIntegration,
   type ClinicMember,
   type ClinicRole,
   type Specialist,
@@ -321,10 +322,15 @@ export function ClinicShell({
   settingsRoles,
   specialists,
   assets,
+  integrations,
   canRenameClinic,
   canManageMembers,
   canManageRoles,
   canManageAgenda,
+  canManageIntegrations,
+  metaAppId,
+  metaConfigId,
+  metaGraphVersion,
   currentUserId,
   recency: initialRecency,
   confirmations,
@@ -351,10 +357,15 @@ export function ClinicShell({
   settingsRoles: ClinicRole[];
   specialists: Specialist[];
   assets: ClinicAsset[];
+  integrations: ClinicIntegration[];
   canRenameClinic: boolean;
   canManageMembers: boolean;
   canManageRoles: boolean;
   canManageAgenda: boolean;
+  canManageIntegrations: boolean;
+  metaAppId: string;
+  metaConfigId: string;
+  metaGraphVersion: string;
   currentUserId: string;
   recency: ClinicRecency;
   confirmations: BotActionRequest[];
@@ -951,6 +962,11 @@ export function ClinicShell({
             roles={settingsRoles}
             specialists={specialists}
             assets={assets}
+            integrations={integrations}
+            canManageIntegrations={canManageIntegrations}
+            metaAppId={metaAppId}
+            metaConfigId={metaConfigId}
+            metaGraphVersion={metaGraphVersion}
           />
         ) : showPatients && selectedPatient ? (
           <PatientPage clinicId={clinicId} patient={selectedPatient} />

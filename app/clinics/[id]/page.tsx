@@ -5,7 +5,13 @@ import { type AgendaAppointment, type AgendaBlock, type AgendaLane } from "@/com
 import { ClinicShell, type BotMark, type ChatListItem, type ChatMessage } from "@/components/clinic-shell";
 import { type BotActionRequest } from "@/components/bot-action-dialog";
 import { asPatient, type PatientRecord } from "@/lib/patients";
-import { type ClinicAsset, type ClinicMember, type ClinicRole, type Specialist } from "@/components/settings-view";
+import {
+  type ClinicAsset,
+  type ClinicIntegration,
+  type ClinicMember,
+  type ClinicRole,
+  type Specialist,
+} from "@/components/settings-view";
 import { type ClinicOption } from "@/components/clinic-switcher";
 import { getSessionUser } from "@/lib/auth/session";
 import { clinicRecencyFromCookie, leadingPlace } from "@/lib/clinic-recency";
@@ -208,13 +214,21 @@ export default async function ClinicPage({
   let settingsRoles: ClinicRole[] = [];
   let specialists: Specialist[] = [];
   let assets: ClinicAsset[] = [];
+  let integrations: ClinicIntegration[] = [];
   let canRenameClinic = false;
   let canManageMembers = false;
   let canManageRoles = false;
   let canManageAgenda = false;
+  let canManageIntegrations = false;
   if (settingsOpen) {
-    const [{ data: memberRows }, { data: roleRows }, { data: mine }, { data: doctorRows }, { data: objectRows }] =
-      await Promise.all([
+    const [
+      { data: memberRows },
+      { data: roleRows },
+      { data: mine },
+      { data: doctorRows },
+      { data: objectRows },
+      { data: integrationRows },
+    ] = await Promise.all([
         supabase
           .from("memberships")
           .select("id, user_id, clinic_role_id, clinic_roles(name, is_admin)")
@@ -238,6 +252,11 @@ export default async function ClinicPage({
           .order("family_name")
           .order("given_name"),
         supabase.from("clinical_objects").select("id, name, description").eq("clinic_id", id).order("name"),
+        supabase
+          .from("integrations")
+          .select("id, provider, account, status, whatsapp_channels(credit_cents), whatsapp_messages(count)")
+          .eq("clinic_id", id)
+          .order("created_at"),
       ]);
     const userIds = [...new Set((memberRows ?? []).map((row) => row.user_id as string))];
     const { data: profileRows } =
@@ -301,6 +320,31 @@ export default async function ClinicPage({
       name: object.name,
       description: object.description,
     }));
+    integrations = (
+      (integrationRows ?? []) as {
+        id: string;
+        provider: string;
+        account: string;
+        status: string;
+        whatsapp_channels: { credit_cents: number } | { credit_cents: number }[] | null;
+        whatsapp_messages: { count: number }[];
+      }[]
+    ).map((row) => {
+      const channel = Array.isArray(row.whatsapp_channels) ? row.whatsapp_channels[0] : row.whatsapp_channels;
+      const counted = Array.isArray(row.whatsapp_messages) ? row.whatsapp_messages[0]?.count : 0;
+      const messageCount = typeof counted === "number" ? counted : Number(counted);
+      const messages = Number.isFinite(messageCount) ? messageCount : 0;
+      return {
+        id: row.id,
+        provider: row.provider,
+        account: row.account,
+        status: row.status,
+        whatsapp:
+          row.provider === "whatsapp"
+            ? { creditCents: channel?.credit_cents ?? 0, messageCount: messages }
+            : null,
+      };
+    });
     const mineRole = mine?.clinic_roles as { is_admin: boolean } | { is_admin: boolean }[] | null;
     const admin = Boolean((Array.isArray(mineRole) ? mineRole[0] : mineRole)?.is_admin);
     if (admin) {
@@ -308,17 +352,19 @@ export default async function ClinicPage({
       canManageMembers = true;
       canManageRoles = true;
       canManageAgenda = true;
+      canManageIntegrations = true;
     } else if (mine?.clinic_role_id) {
       const { data: perms } = await supabase
         .from("clinic_role_permissions")
         .select("permission_key")
         .eq("clinic_role_id", mine.clinic_role_id)
-        .in("permission_key", ["clinic.update", "members.manage", "roles.manage", "agenda.write"]);
+        .in("permission_key", ["clinic.update", "members.manage", "roles.manage", "agenda.write", "integrations.manage"]);
       const keys = new Set((perms ?? []).map((row) => row.permission_key));
       canRenameClinic = keys.has("clinic.update");
       canManageMembers = keys.has("members.manage");
       canManageRoles = keys.has("roles.manage");
       canManageAgenda = keys.has("agenda.write");
+      canManageIntegrations = keys.has("integrations.manage");
     }
   }
   let lanes: AgendaLane[] = [];
@@ -511,10 +557,15 @@ export default async function ClinicPage({
       settingsRoles={settingsRoles}
       specialists={specialists}
       assets={assets}
+      integrations={integrations}
+      metaAppId={process.env.META_APP_ID?.trim() ?? ""}
+      metaConfigId={process.env.META_CONFIG_ID?.trim() ?? ""}
+      metaGraphVersion={process.env.META_GRAPH_VERSION?.trim() || "v26.0"}
       canRenameClinic={canRenameClinic}
       canManageMembers={canManageMembers}
       canManageRoles={canManageRoles}
       canManageAgenda={canManageAgenda}
+      canManageIntegrations={canManageIntegrations}
       currentUserId={user.id}
       recency={recency}
       confirmations={confirmations}
