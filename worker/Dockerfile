@@ -1,12 +1,13 @@
 FROM node:22-bookworm-slim AS openwa
 ARG OPENWA_VERSION=v0.26.0
 WORKDIR /opt/openwa
-ENV NODE_ENV=production
 ENV PUPPETEER_CACHE_DIR=/opt/openwa/.cache/puppeteer
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
+    git \
+    patch \
     python3 \
     make \
     g++ \
@@ -19,6 +20,7 @@ RUN apt-get update \
   && echo "${OPENWA_VERSION}" > /opt/openwa/.2tapdoc-openwa-version \
   && npm ci --no-audit --no-fund \
   && npm run build \
+  && npm prune --omit=dev \
   && rm -rf /tmp/openwa.tgz /tmp/extract
 
 FROM node:22-bookworm-slim AS build
