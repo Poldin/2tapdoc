@@ -88,7 +88,7 @@ async function runSession() {
   try {
     await client.connect();
     await pairClient.connect();
-    whatsapp = startWhatsAppSupervisor(pairClient);
+    whatsapp = startWhatsAppSupervisor(pairClient, workerId);
     await client.query("listen bot_jobs");
     console.log("worker listening", workerId);
 

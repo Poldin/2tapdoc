@@ -261,7 +261,7 @@ function buildSystemPrompt(
                 ...(gmailOAuthConfigured()
                   ? ["  - Gmail apre il consenso ufficiale di Google. Un'altra casella è un'altra chiamata."]
                   : []),
-                "  - WhatsApp è OpenWA. Il link mostra il QR di WhatsApp Web. OpenWA sta già sul server: un altro numero è un'altra sessione, non una nuova installazione.",
+                "  - WhatsApp non ufficiale: il link mostra il QR. Il server controlla i messaggi a giri, non resta in ascolto 24 ore. Un altro numero è un'altra chiamata.",
                 "  - Per sganciare usa `unlinkToolLinks` con gli id. Non sganci tu: un solo dialog, risposta `awaiting_user`. Non chiedere conferma in chat.",
               ]
             : []),
@@ -272,7 +272,7 @@ function buildSystemPrompt(
                       "  - Per una casella Gmail già collegata, se non conosci l'operazione chiama `listGmailTools`, poi `callGmail` con il suo `linkId`.",
                     ]
                   : []),
-                "  - Per un WhatsApp già collegato, e solo se l'utente lo chiede, usa `listWhatsAppChats`, poi `readWhatsAppMessages` o `sendWhatsAppMessage`. Un solo destinatario per chiamata. L'id della chat esce da `listWhatsAppChats`.",
+                "  - Per un WhatsApp già collegato usa `listWhatsAppChats`, poi `readWhatsAppMessages` o `sendWhatsAppMessage`. Un solo destinatario per chiamata. Il controllo a giri ti può svegliare con i non letti: allora leggi e, se serve, rispondi.",
               ]
             : []),
           toolAccountLines(toolLinks),
@@ -991,7 +991,7 @@ export async function replyToTurn(
     linkTool: tool({
       description: gmailOAuthConfigured()
         ? "Avvia il collegamento di Gmail o WhatsApp. Restituisce un link da mandare all'utente. Non dice che è già collegato."
-        : "Avvia il collegamento di WhatsApp tramite OpenWA. Restituisce il link del QR di WhatsApp Web: mandalo all'utente. Non dice che è già collegato.",
+        : "Avvia il collegamento di WhatsApp. Restituisce il link del QR: mandalo all'utente. Non dice che è già collegato.",
       inputSchema: z.object({
         provider: z.enum(gmailOAuthConfigured() ? ["gmail", "whatsapp"] : ["whatsapp"]),
       }),
@@ -1006,7 +1006,7 @@ export async function replyToTurn(
         return {
           url: `${appOrigin()}/clinics/${turn.clinicId}/tools/connect/whatsapp`,
           instruction:
-            "Manda all'utente questo link e basta. Lo apre lui: è il QR di WhatsApp Web, tramite OpenWA. Non dire che il numero è già collegato.",
+            "Manda all'utente questo link e basta. Lo apre lui: è il QR di WhatsApp. Non dire che il numero è già collegato.",
         };
       },
     }),

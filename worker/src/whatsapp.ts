@@ -15,6 +15,15 @@ const archiveUrl = `https://github.com/rmyndharis/OpenWA/archive/refs/tags/${OPE
 let installing: Promise<void> | null = null;
 let server: ReturnType<typeof spawn> | null = null;
 let startLog = "";
+const heldUntil = new Map<string, number>();
+
+function holdSession(sessionId: string) {
+  heldUntil.set(sessionId, Date.now() + 90_000);
+}
+
+function stillHeld(sessionId: string) {
+  return (heldUntil.get(sessionId) ?? 0) > Date.now();
+}
 
 function externalOpenWA() {
   return Boolean(process.env.OPENWA_URL?.trim());
@@ -158,17 +167,11 @@ function gatewayEnv(): NodeJS.ProcessEnv {
   env.PORT = "2785";
   env.HOST = "127.0.0.1";
   env.BIND_HOST = "127.0.0.1";
-  env.AUTO_START_SESSIONS = "true";
+  env.AUTO_START_SESSIONS = "false";
   env.SERVE_DASHBOARD = "false";
   env.ENABLE_SWAGGER = "false";
   env.CORS_ORIGINS = "http://127.0.0.1:2785";
-  env.ENGINE_TYPE = "whatsapp-web.js";
-  if (process.platform !== "win32") {
-    env.PUPPETEER_ARGS = "--no-sandbox,--disable-setuid-sandbox,--disable-dev-shm-usage,--disable-gpu";
-  }
-  if (!env.PUPPETEER_CACHE_DIR?.trim()) {
-    env.PUPPETEER_CACHE_DIR = path.join(dataDir(), "puppeteer");
-  }
+  env.ENGINE_TYPE = "baileys";
   return env;
 }
 
@@ -267,6 +270,11 @@ function stopGateway() {
   child?.kill();
 }
 
+async function parkSession(sessionId: string) {
+  if (!/^[0-9a-f-]{36}$/i.test(sessionId)) return;
+  await callOpenWA("POST", `/sessions/${sessionId}/stop`).catch(() => undefined);
+}
+
 async function closeSession(sessionId: string) {
   if (!/^[0-9a-f-]{36}$/i.test(sessionId)) return;
   await callOpenWA("POST", `/sessions/${sessionId}/logout`).catch(() => undefined);
@@ -275,6 +283,33 @@ async function closeSession(sessionId: string) {
     await callOpenWA("POST", `/sessions/${sessionId}/force-kill`).catch(() => undefined);
     await callOpenWA("DELETE", `/sessions/${sessionId}`).catch(() => undefined);
   }
+}
+
+async function waitReady(sessionId: string, timeoutMs: number) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const session = (await openwa("GET", `/sessions/${sessionId}`)) as {
+      status?: string;
+      lastError?: string | null;
+    };
+    if (session.status === "ready") return;
+    if (session.status === "failed" || session.status === "qr_ready") {
+      throw new Error(session.lastError || "auth");
+    }
+    await sleep(1000);
+  }
+  throw new Error("install");
+}
+
+async function ensureSessionReady(sessionId: string) {
+  holdSession(sessionId);
+  await ensureOpenWA();
+  const current = await callOpenWA("GET", `/sessions/${sessionId}`);
+  if (!current.ok) throw new Error("WhatsApp non trovato.");
+  const status = current.payload && typeof current.payload === "object" ? (current.payload as { status?: string }).status : "";
+  if (status === "ready") return;
+  await openwa("POST", `/sessions/${sessionId}/start`);
+  await waitReady(sessionId, 45_000);
 }
 
 function sessionsFrom(payload: unknown) {
@@ -295,14 +330,15 @@ function sessionsFrom(payload: unknown) {
   });
 }
 
-async function keptKeys(db: pg.Client) {
-  const kept = await db.query<{ session_key: string }>("select private.whatsapp_kept_sessions() as session_key");
-  return new Set(kept.rows.map((row) => row.session_key));
+async function sessionKeys(db: pg.Client, fn: "whatsapp_stored_sessions" | "whatsapp_live_sessions") {
+  const rows = await db.query<{ session_key: string }>(`select private.${fn}() as session_key`);
+  return new Set(rows.rows.map((row) => row.session_key));
 }
 
 async function sweepSessions(db: pg.Client) {
-  const keep = await keptKeys(db);
-  if (keep.size > 0) {
+  const stored = await sessionKeys(db, "whatsapp_stored_sessions");
+  const live = await sessionKeys(db, "whatsapp_live_sessions");
+  if (live.size > 0) {
     try {
       await ensureOpenWA();
     } catch (error) {
@@ -310,16 +346,28 @@ async function sweepSessions(db: pg.Client) {
       return;
     }
   }
-  if (!(await healthy())) return;
+  if (!(await healthy())) {
+    if (live.size === 0) stopGateway();
+    return;
+  }
   const listed = await callOpenWA("GET", "/sessions?limit=100");
   if (!listed.ok) return;
   const sessions = sessionsFrom(listed.payload);
+  let engines = 0;
   for (const session of sessions) {
     if (!session.id) continue;
-    if (keep.has(session.id) || (session.name && keep.has(session.name))) continue;
+    const named = Boolean(session.name && live.has(session.name));
+    if (live.has(session.id) || named || stillHeld(session.id)) {
+      engines += 1;
+      continue;
+    }
+    if (stored.has(session.id) || (session.name && stored.has(session.name))) {
+      await parkSession(session.id);
+      continue;
+    }
     await closeSession(session.id);
   }
-  if (keep.size === 0) stopGateway();
+  if (live.size === 0 && engines === 0) stopGateway();
 }
 
 function sleep(ms: number) {
@@ -332,7 +380,17 @@ async function failPairing(db: pg.Client, stateId: string, message: string) {
   });
 }
 
-export function startWhatsAppSupervisor(db: pg.Client) {
+type PollClaim = {
+  link_id: string;
+  clinic_id: string;
+  account: string;
+  session: Buffer | Uint8Array;
+  last_inbox: string | null;
+  bot_id: string | null;
+  chat_id: string | null;
+};
+
+export function startWhatsAppSupervisor(db: pg.Client, workerId: string) {
   let stopped = false;
   const loop = (async () => {
     try {
@@ -346,6 +404,11 @@ export function startWhatsAppSupervisor(db: pg.Client) {
         for (const row of claimed.rows) {
           if (stopped) return;
           await runPairing(db, row.id);
+        }
+        const due = await db.query<PollClaim>("select * from private.claim_whatsapp_polls($1)", [1]);
+        for (const row of due.rows) {
+          if (stopped) return;
+          await runPoll(db, workerId, row);
         }
         await sweepSessions(db);
       } catch (error) {
@@ -425,6 +488,7 @@ async function pair(db: pg.Client, stateId: string) {
         const packed = Buffer.from(JSON.stringify({ sessionId: created.id }), "utf8");
         await db.query("select private.finish_whatsapp_pairing($1, $2, $3)", [stateId, account, packed]);
         linked = true;
+        await parkSession(created.id);
         console.log("whatsapp linked", stateId);
         return;
       }
@@ -437,17 +501,61 @@ async function pair(db: pg.Client, stateId: string) {
   }
 }
 
-function sessionIdFrom(session: Buffer) {
-  const parsed = JSON.parse(session.toString("utf8")) as { sessionId?: unknown };
+function sessionIdFrom(session: Buffer | Uint8Array) {
+  const parsed = JSON.parse(Buffer.from(session).toString("utf8")) as { sessionId?: unknown };
   if (typeof parsed.sessionId !== "string" || parsed.sessionId.length < 8) {
     throw new Error("WhatsApp non trovato.");
   }
   return parsed.sessionId;
 }
 
+async function inboxFingerprint(sessionId: string) {
+  const payload = await openwa("GET", `/sessions/${sessionId}/chats?limit=30`);
+  const chats = Array.isArray(payload) ? payload : [];
+  const unread = chats.flatMap((chat) => {
+    const row = chat as { id?: string; name?: string; unreadCount?: number };
+    const count = row.unreadCount ?? 0;
+    if (!row.id || count < 1) return [];
+    return [`${row.id}:${count}:${(row.name || "").slice(0, 40)}`];
+  });
+  unread.sort();
+  return { digest: unread.join("|").slice(0, 1800), unread };
+}
+
+async function runPoll(db: pg.Client, workerId: string, row: PollClaim) {
+  let sessionId = "";
+  try {
+    sessionId = sessionIdFrom(row.session);
+    await ensureSessionReady(sessionId);
+    const inbox = await inboxFingerprint(sessionId);
+    if (inbox.unread.length > 0 && inbox.digest !== (row.last_inbox ?? "") && row.bot_id && row.chat_id) {
+      const lines = inbox.unread.slice(0, 12).map((item) => `- ${item.split(":").slice(2).join(":") || item}`);
+      const prompt = [
+        `Controllo WhatsApp ${row.account}: ci sono messaggi non letti.`,
+        ...lines,
+        "Se serve, leggi e rispondi con i tool WhatsApp. Non sei in ascolto 24 ore: è un controllo a giri.",
+      ].join("\n");
+      await db.query("select private.enqueue_bot_alert($1, $2, $3, $4)", [
+        workerId,
+        row.bot_id,
+        row.chat_id,
+        prompt.slice(0, 2000),
+      ]);
+    }
+    await db.query("select private.finish_whatsapp_poll($1, $2)", [row.link_id, inbox.digest]);
+    console.log("whatsapp poll", row.link_id, inbox.unread.length);
+  } catch (error) {
+    console.error("whatsapp poll", error instanceof Error ? error.message : error);
+    await db.query("select private.finish_whatsapp_poll($1, $2)", [row.link_id, row.last_inbox ?? ""]).catch(() => undefined);
+  } finally {
+    if (sessionId) await parkSession(sessionId);
+  }
+}
+
 export async function listWhatsAppChats(session: Buffer, _linkId: string) {
-  await ensureOpenWA();
-  const payload = await openwa("GET", `/sessions/${sessionIdFrom(session)}/chats?limit=30`);
+  const sessionId = sessionIdFrom(session);
+  await ensureSessionReady(sessionId);
+  const payload = await openwa("GET", `/sessions/${sessionId}/chats?limit=30`);
   const chats = Array.isArray(payload) ? payload : [];
   const result = chats.slice(0, 30).map((chat) => {
     const row = chat as { id?: string; name?: string; unreadCount?: number; isGroup?: boolean };
@@ -462,10 +570,11 @@ export async function listWhatsAppChats(session: Buffer, _linkId: string) {
 }
 
 export async function readWhatsAppMessages(session: Buffer, _linkId: string, chatId: string, limit: number) {
-  await ensureOpenWA();
+  const sessionId = sessionIdFrom(session);
+  await ensureSessionReady(sessionId);
   const payload = await openwa(
     "GET",
-    `/sessions/${sessionIdFrom(session)}/messages/${encodeURIComponent(chatId)}/history?limit=${limit}`,
+    `/sessions/${sessionId}/messages/${encodeURIComponent(chatId)}/history?limit=${limit}`,
   );
   const messages = Array.isArray(payload) ? payload : [];
   const result = messages.slice(-limit).map((message) => {
@@ -480,7 +589,8 @@ export async function readWhatsAppMessages(session: Buffer, _linkId: string, cha
 }
 
 export async function sendWhatsAppMessage(session: Buffer, _linkId: string, chatId: string, body: string) {
-  await ensureOpenWA();
-  await openwa("POST", `/sessions/${sessionIdFrom(session)}/messages/send-text`, { chatId, text: body });
+  const sessionId = sessionIdFrom(session);
+  await ensureSessionReady(sessionId);
+  await openwa("POST", `/sessions/${sessionId}/messages/send-text`, { chatId, text: body });
   return { result: { sent: true }, session };
 }
