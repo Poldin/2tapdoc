@@ -1,6 +1,6 @@
 import { spawn, execFile } from "node:child_process";
-import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { mkdir, readFile, readdir, rename, rm, symlink, writeFile, lstat } from "node:fs/promises";
+import { existsSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -9,21 +9,39 @@ import type pg from "pg";
 const execFileAsync = promisify(execFile);
 const installTimeoutMs = 20 * 60 * 1000;
 const pairTimeoutMs = 4 * 60 * 1000;
-const archiveUrl = "https://github.com/rmyndharis/OpenWA/archive/refs/heads/main.tar.gz";
+const OPENWA_VERSION = "v0.26.0";
+const archiveUrl = `https://github.com/rmyndharis/OpenWA/archive/refs/tags/${OPENWA_VERSION}.tar.gz`;
 
 let installing: Promise<void> | null = null;
 let server: ReturnType<typeof spawn> | null = null;
+let startLog = "";
 
-function toolDir() {
-  return process.env.WHATSAPP_TOOL_DIR?.trim() || path.join(os.tmpdir(), "2tapdoc-openwa");
+function externalOpenWA() {
+  return Boolean(process.env.OPENWA_URL?.trim());
 }
 
-function openwaDir() {
-  return path.join(toolDir(), "openwa");
+function toolDir() {
+  return process.env.WHATSAPP_TOOL_DIR?.trim() || path.join(os.homedir(), ".2tapdoc", "openwa");
+}
+
+function codeDir() {
+  return process.env.OPENWA_DIR?.trim() || path.join(toolDir(), "app");
+}
+
+function dataDir() {
+  return process.env.OPENWA_DATA_DIR?.trim() || path.join(toolDir(), "data");
+}
+
+function versionFile() {
+  return path.join(codeDir(), ".2tapdoc-openwa-version");
 }
 
 function openwaOrigin() {
   return (process.env.OPENWA_URL?.trim() || "http://127.0.0.1:2785").replace(/\/+$/, "");
+}
+
+function bakedInstall() {
+  return Boolean(process.env.OPENWA_DIR?.trim());
 }
 
 function run(command: string, args: string[], cwd: string) {
@@ -55,9 +73,45 @@ function run(command: string, args: string[], cwd: string) {
   });
 }
 
+function installed() {
+  return existsSync(path.join(codeDir(), "dist", "main.js")) && existsSync(path.join(codeDir(), "package.json"));
+}
+
+function pinnedVersion() {
+  if (!existsSync(versionFile())) return "";
+  try {
+    return readFileSync(versionFile(), "utf8").trim();
+  } catch {
+    return "";
+  }
+}
+
+async function linkDataDir() {
+  await mkdir(dataDir(), { recursive: true });
+  const link = path.join(codeDir(), "data");
+  const resolvedLink = path.resolve(link);
+  const resolvedData = path.resolve(dataDir());
+  try {
+    const stat = await lstat(link);
+    if (stat.isSymbolicLink()) return;
+    if (stat.isDirectory()) {
+      if (resolvedLink === resolvedData) return;
+      for (const name of await readdir(link)) {
+        const from = path.join(link, name);
+        const to = path.join(dataDir(), name);
+        if (!existsSync(to)) await rename(from, to);
+      }
+      await rm(link, { recursive: true, force: true });
+    }
+  } catch {
+    // missing
+  }
+  await symlink(dataDir(), link, process.platform === "win32" ? "junction" : "dir");
+}
+
 async function downloadOpenWA() {
-  const dir = openwaDir();
-  if (existsSync(path.join(dir, "package.json"))) return;
+  if (bakedInstall()) return;
+  if (installed() && pinnedVersion() === OPENWA_VERSION) return;
   await mkdir(toolDir(), { recursive: true });
   const response = await fetch(archiveUrl);
   if (!response.ok) throw new Error("install");
@@ -69,24 +123,57 @@ async function downloadOpenWA() {
   await execFileAsync("tar", ["-xzf", archive, "-C", extracted], { windowsHide: true });
   const [folder] = await readdir(extracted);
   if (!folder) throw new Error("install");
+  const dir = codeDir();
   await rm(dir, { recursive: true, force: true });
   await rename(path.join(extracted, folder), dir);
+  await writeFile(versionFile(), OPENWA_VERSION);
   await rm(archive, { force: true });
   await rm(extracted, { recursive: true, force: true });
 }
 
 async function installOpenWA() {
+  if (bakedInstall()) {
+    if (!installed()) throw new Error("install");
+    await linkDataDir();
+    return;
+  }
   await downloadOpenWA();
-  const dir = openwaDir();
-  if (existsSync(path.join(dir, "dist", "main.js"))) return;
+  await linkDataDir();
+  if (existsSync(path.join(codeDir(), "dist", "main.js"))) return;
   const npm = process.platform === "win32" ? "npm.cmd" : "npm";
-  console.log("installing OpenWA");
-  await run(npm, ["ci", "--no-audit", "--no-fund"], dir);
-  await run(npm, ["run", "build"], dir);
+  console.log("installing OpenWA", OPENWA_VERSION);
+  await run(npm, ["ci", "--no-audit", "--no-fund"], codeDir());
+  await run(npm, ["run", "build"], codeDir());
+}
+
+function gatewayEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  delete env.DATABASE_URL;
+  delete env.DATABASE_TYPE;
+  delete env.DATABASE_HOST;
+  delete env.DATABASE_USERNAME;
+  delete env.DATABASE_PASSWORD;
+  delete env.DATABASE_NAME;
+  env.NODE_ENV = "production";
+  env.PORT = "2785";
+  env.HOST = "127.0.0.1";
+  env.BIND_HOST = "127.0.0.1";
+  env.AUTO_START_SESSIONS = "true";
+  env.SERVE_DASHBOARD = "false";
+  env.ENABLE_SWAGGER = "false";
+  env.CORS_ORIGINS = "http://127.0.0.1:2785";
+  env.ENGINE_TYPE = "whatsapp-web.js";
+  if (process.platform !== "win32") {
+    env.PUPPETEER_ARGS = "--no-sandbox,--disable-setuid-sandbox,--disable-dev-shm-usage,--disable-gpu";
+  }
+  if (!env.PUPPETEER_CACHE_DIR?.trim()) {
+    env.PUPPETEER_CACHE_DIR = path.join(dataDir(), "puppeteer");
+  }
+  return env;
 }
 
 async function ensureOpenWA() {
-  if (process.env.OPENWA_URL?.trim()) return;
+  if (externalOpenWA()) return;
   if (!installing) {
     installing = installOpenWA().catch((error) => {
       installing = null;
@@ -96,12 +183,18 @@ async function ensureOpenWA() {
   await installing;
   if (await healthy()) return;
   if (!server) {
+    startLog = "";
     server = spawn(process.execPath, ["dist/main.js"], {
-      cwd: openwaDir(),
-      env: { ...process.env, PORT: "2785", NODE_ENV: "production" },
+      cwd: codeDir(),
+      env: gatewayEnv(),
       windowsHide: true,
-      stdio: "ignore",
+      stdio: ["ignore", "pipe", "pipe"],
     });
+    const collect = (chunk: Buffer) => {
+      startLog = (startLog + chunk.toString()).slice(-4000);
+    };
+    server.stdout?.on("data", collect);
+    server.stderr?.on("data", collect);
     server.on("exit", () => {
       server = null;
     });
@@ -111,6 +204,7 @@ async function ensureOpenWA() {
     if (await healthy()) return;
     await sleep(1000);
   }
+  console.error("openwa start", startLog.trim().slice(-500));
   throw new Error("install");
 }
 
@@ -126,10 +220,12 @@ async function healthy() {
 async function apiKey() {
   const fromEnv = process.env.OPENWA_API_KEY?.trim();
   if (fromEnv) return fromEnv;
-  const file = path.join(openwaDir(), "data", ".api-key");
+  const files = [path.join(dataDir(), ".api-key"), path.join(codeDir(), "data", ".api-key")];
   const started = Date.now();
   while (Date.now() - started < 30_000) {
-    if (existsSync(file)) return (await readFile(file, "utf8")).trim();
+    for (const file of files) {
+      if (existsSync(file)) return (await readFile(file, "utf8")).trim();
+    }
     await sleep(500);
   }
   throw new Error("install");
@@ -165,7 +261,7 @@ async function openwa(method: string, pathname: string, body?: unknown) {
 }
 
 function stopGateway() {
-  if (process.env.OPENWA_URL?.trim()) return;
+  if (externalOpenWA()) return;
   const child = server;
   server = null;
   child?.kill();
@@ -199,10 +295,22 @@ function sessionsFrom(payload: unknown) {
   });
 }
 
-async function sweepSessions(db: pg.Client) {
-  if (!(await healthy())) return;
+async function keptKeys(db: pg.Client) {
   const kept = await db.query<{ session_key: string }>("select private.whatsapp_kept_sessions() as session_key");
-  const keep = new Set(kept.rows.map((row) => row.session_key));
+  return new Set(kept.rows.map((row) => row.session_key));
+}
+
+async function sweepSessions(db: pg.Client) {
+  const keep = await keptKeys(db);
+  if (keep.size > 0) {
+    try {
+      await ensureOpenWA();
+    } catch (error) {
+      console.error("openwa start", error instanceof Error ? error.message : error);
+      return;
+    }
+  }
+  if (!(await healthy())) return;
   const listed = await callOpenWA("GET", "/sessions?limit=100");
   if (!listed.ok) return;
   const sessions = sessionsFrom(listed.payload);
@@ -211,10 +319,7 @@ async function sweepSessions(db: pg.Client) {
     if (keep.has(session.id) || (session.name && keep.has(session.name))) continue;
     await closeSession(session.id);
   }
-  const stillUsed = sessions.some(
-    (session) => Boolean(session.id) && (keep.has(session.id) || (session.name !== "" && keep.has(session.name))),
-  );
-  if (!stillUsed) stopGateway();
+  if (keep.size === 0) stopGateway();
 }
 
 function sleep(ms: number) {
@@ -268,7 +373,7 @@ async function runPairing(db: pg.Client, stateId: string) {
       db,
       stateId,
       message === "install"
-        ? "Non sono riuscito a installare OpenWA nel server."
+        ? "Non sono riuscito ad avviare OpenWA sul server."
         : message === "pair-timeout"
           ? "Nessuno ha scansionato il QR in tempo."
           : message === "auth"
