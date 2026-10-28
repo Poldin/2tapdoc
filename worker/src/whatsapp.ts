@@ -135,8 +135,7 @@ async function apiKey() {
   throw new Error("install");
 }
 
-async function openwa(method: string, pathname: string, body?: unknown) {
-  await ensureOpenWA();
+async function callOpenWA(method: string, pathname: string, body?: unknown) {
   const response = await fetch(`${openwaOrigin()}/api${pathname}`, {
     method,
     headers: {
@@ -144,17 +143,78 @@ async function openwa(method: string, pathname: string, body?: unknown) {
       ...(body === undefined ? {} : { "Content-Type": "application/json" }),
     },
     body: body === undefined ? undefined : JSON.stringify(body),
+    signal: AbortSignal.timeout(20_000),
   });
   const text = await response.text();
   const payload = text ? (JSON.parse(text) as unknown) : null;
+  return { ok: response.ok, status: response.status, payload };
+}
+
+async function openwa(method: string, pathname: string, body?: unknown) {
+  await ensureOpenWA();
+  const response = await callOpenWA(method, pathname, body);
   if (!response.ok) {
+    const payload = response.payload;
     const message =
       payload && typeof payload === "object" && payload && "message" in payload
         ? String((payload as { message: unknown }).message)
         : "OpenWA non ha risposto.";
     throw new Error(message.slice(0, 300));
   }
-  return payload;
+  return response.payload;
+}
+
+function stopGateway() {
+  if (process.env.OPENWA_URL?.trim()) return;
+  const child = server;
+  server = null;
+  child?.kill();
+}
+
+async function closeSession(sessionId: string) {
+  if (!/^[0-9a-f-]{36}$/i.test(sessionId)) return;
+  await callOpenWA("POST", `/sessions/${sessionId}/logout`).catch(() => undefined);
+  const deleted = await callOpenWA("DELETE", `/sessions/${sessionId}`).catch(() => undefined);
+  if (deleted && deleted.status !== 404 && !deleted.ok) {
+    await callOpenWA("POST", `/sessions/${sessionId}/force-kill`).catch(() => undefined);
+    await callOpenWA("DELETE", `/sessions/${sessionId}`).catch(() => undefined);
+  }
+}
+
+function sessionsFrom(payload: unknown) {
+  const rows = Array.isArray(payload)
+    ? payload
+    : payload && typeof payload === "object" && Array.isArray((payload as { data?: unknown }).data)
+      ? (payload as { data: unknown[] }).data
+      : [];
+  return rows.flatMap((row) => {
+    if (!row || typeof row !== "object") return [];
+    const session = row as { id?: unknown; name?: unknown };
+    return [
+      {
+        id: typeof session.id === "string" ? session.id : "",
+        name: typeof session.name === "string" ? session.name : "",
+      },
+    ];
+  });
+}
+
+async function sweepSessions(db: pg.Client) {
+  if (!(await healthy())) return;
+  const kept = await db.query<{ session_key: string }>("select private.whatsapp_kept_sessions() as session_key");
+  const keep = new Set(kept.rows.map((row) => row.session_key));
+  const listed = await callOpenWA("GET", "/sessions?limit=100");
+  if (!listed.ok) return;
+  const sessions = sessionsFrom(listed.payload);
+  for (const session of sessions) {
+    if (!session.id) continue;
+    if (keep.has(session.id) || (session.name && keep.has(session.name))) continue;
+    await closeSession(session.id);
+  }
+  const stillUsed = sessions.some(
+    (session) => Boolean(session.id) && (keep.has(session.id) || (session.name !== "" && keep.has(session.name))),
+  );
+  if (!stillUsed) stopGateway();
 }
 
 function sleep(ms: number) {
@@ -182,6 +242,7 @@ export function startWhatsAppSupervisor(db: pg.Client) {
           if (stopped) return;
           await runPairing(db, row.id);
         }
+        await sweepSessions(db);
       } catch (error) {
         console.error("whatsapp pairing", error instanceof Error ? error.message : error);
       }
@@ -192,6 +253,7 @@ export function startWhatsAppSupervisor(db: pg.Client) {
   return {
     stop() {
       stopped = true;
+      stopGateway();
     },
   };
 }
@@ -216,37 +278,58 @@ async function runPairing(db: pg.Client, stateId: string) {
   }
 }
 
+async function pairingActive(db: pg.Client, stateId: string) {
+  try {
+    const result = await db.query<{ ok: boolean }>("select private.whatsapp_pairing_active($1) as ok", [stateId]);
+    return result.rows[0]?.ok === true;
+  } catch (error) {
+    console.error("whatsapp pairing", error instanceof Error ? error.message : error);
+    return true;
+  }
+}
+
 async function pair(db: pg.Client, stateId: string) {
   await ensureOpenWA();
-  const created = (await openwa("POST", "/sessions", { name: stateId })) as { id?: string };
-  if (!created.id) throw new Error("OpenWA non ha aperto la sessione.");
-  await openwa("POST", `/sessions/${created.id}/start`);
-  const deadline = Date.now() + pairTimeoutMs;
-  let sawQr = false;
-  while (Date.now() < deadline) {
-    const session = (await openwa("GET", `/sessions/${created.id}`)) as {
-      status?: string;
-      phone?: string | null;
-      lastError?: string | null;
-    };
-    if (session.status === "qr_ready") {
-      const qr = (await openwa("GET", `/sessions/${created.id}/qr`)) as { qrCode?: string };
-      if (qr.qrCode) {
-        sawQr = true;
-        await db.query("select private.save_whatsapp_qr($1, $2)", [stateId, qr.qrCode]);
+  if (!(await pairingActive(db, stateId))) return;
+  let sessionId: string | undefined;
+  let linked = false;
+  try {
+    const created = (await openwa("POST", "/sessions", { name: stateId })) as { id?: string };
+    if (!created.id) throw new Error("OpenWA non ha aperto la sessione.");
+    sessionId = created.id;
+    if (!(await pairingActive(db, stateId))) return;
+    await openwa("POST", `/sessions/${created.id}/start`);
+    const deadline = Date.now() + pairTimeoutMs;
+    let sawQr = false;
+    while (Date.now() < deadline) {
+      if (!(await pairingActive(db, stateId))) return;
+      const session = (await openwa("GET", `/sessions/${created.id}`)) as {
+        status?: string;
+        phone?: string | null;
+        lastError?: string | null;
+      };
+      if (session.status === "qr_ready") {
+        const qr = (await openwa("GET", `/sessions/${created.id}/qr`)) as { qrCode?: string };
+        if (qr.qrCode) {
+          sawQr = true;
+          await db.query("select private.save_whatsapp_qr($1, $2)", [stateId, qr.qrCode]);
+        }
       }
+      if (session.status === "ready") {
+        const account = (session.phone ?? "").replace(/\D/g, "");
+        const packed = Buffer.from(JSON.stringify({ sessionId: created.id }), "utf8");
+        await db.query("select private.finish_whatsapp_pairing($1, $2, $3)", [stateId, account, packed]);
+        linked = true;
+        console.log("whatsapp linked", stateId);
+        return;
+      }
+      if (session.status === "failed") throw new Error(session.lastError || "auth");
+      await sleep(2000);
     }
-    if (session.status === "ready") {
-      const account = (session.phone ?? "").replace(/\D/g, "");
-      const packed = Buffer.from(JSON.stringify({ sessionId: created.id }), "utf8");
-      await db.query("select private.finish_whatsapp_pairing($1, $2, $3)", [stateId, account, packed]);
-      console.log("whatsapp linked", stateId);
-      return;
-    }
-    if (session.status === "failed") throw new Error(session.lastError || "auth");
-    await sleep(2000);
+    throw new Error(sawQr ? "pair-timeout" : "install");
+  } finally {
+    if (sessionId && !linked && !(await pairingActive(db, stateId))) await closeSession(sessionId);
   }
-  throw new Error(sawQr ? "pair-timeout" : "install");
 }
 
 function sessionIdFrom(session: Buffer) {
