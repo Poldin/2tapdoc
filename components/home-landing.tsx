@@ -1,4 +1,3 @@
-import Link from "next/link";
 import type { ReactNode } from "react";
 import { CharacterEmoji } from "@/components/character-emoji";
 import { DemoChat } from "@/components/demo-chat";
@@ -247,24 +246,6 @@ export function HomeLanding({
       </section>
 
       <section id="demo" className="scroll-mt-28 mx-auto max-w-[1120px] px-5 py-8 sm:px-8 sm:py-12">
-        <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-          <div>
-            <h2 className="text-[clamp(1.7rem,3.4vw,2.4rem)] leading-snug font-semibold tracking-[-0.03em]">
-              Parla con Ginevra.
-            </h2>
-            <p className="mt-2 max-w-xl text-base leading-7 text-muted">
-              Studio Dentistico Demo. Nulla parte verso i pazienti senza la segreteria.
-            </p>
-          </div>
-          <p className="flex gap-4 text-sm">
-            <Link href="/whatsapp" className="font-medium text-ink underline-offset-4 hover:underline">
-              WhatsApp
-            </Link>
-            <Link href="/prezzi" className="font-medium text-ink underline-offset-4 hover:underline">
-              Prezzi
-            </Link>
-          </p>
-        </div>
         <DemoChat />
       </section>
 
@@ -298,27 +279,6 @@ export function HomeLanding({
         </div>
       </section>
 
-      <section className="mx-auto max-w-[1120px] px-5 pt-4 pb-20 sm:px-8 sm:pb-28">
-        <div className="flex flex-col items-start justify-between gap-6 rounded-[32px] bg-violet px-6 py-10 text-white sm:flex-row sm:items-center sm:px-10">
-          <p className="max-w-md text-2xl leading-snug font-semibold tracking-[-0.03em]">
-            WhatsApp è il primo canale. I prezzi sono tre, le persone le stesse.
-          </p>
-          <div className="flex flex-col gap-3 sm:flex-row">
-            <Link
-              href="/whatsapp"
-              className="inline-flex h-12 items-center justify-center rounded-full bg-white px-6 text-[15px] font-medium text-violet hover:bg-violet-soft"
-            >
-              WhatsApp
-            </Link>
-            <Link
-              href="/prezzi"
-              className="inline-flex h-12 items-center justify-center rounded-full border border-white/40 px-6 text-[15px] font-medium text-white hover:bg-white/10"
-            >
-              Prezzi
-            </Link>
-          </div>
-        </div>
-      </section>
     </MarketingFrame>
   );
 }
