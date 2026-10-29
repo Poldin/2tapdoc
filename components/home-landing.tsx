@@ -91,27 +91,31 @@ function AiActIcon() {
 }
 
 function EuropeIcon() {
+  const stars = Array.from({ length: 12 }, (_, index) => {
+    const angle = ((index * 30 - 90) * Math.PI) / 180;
+    return { x: 18 + Math.cos(angle) * 6.4, y: 12 + Math.sin(angle) * 6.4 };
+  });
   return (
-    <svg width="36" height="36" viewBox="0 0 32 32" aria-hidden="true">
-      <path
-        d="M16 3.5c-5 0-9 3.8-9 8.6 0 6.4 9 16.4 9 16.4s9-10 9-16.4c0-4.8-4-8.6-9-8.6z"
-        fill="#003399"
-      />
-      <circle cx="16" cy="12" r="4.2" fill="#FFCC00" />
+    <svg width="42" height="28" viewBox="0 0 36 24" aria-hidden="true">
+      <rect width="36" height="24" fill="#003399" />
+      {stars.map((star) => (
+        <polygon
+          key={`${star.x}-${star.y}`}
+          fill="#FFCC00"
+          points="0,-1.05 .32,-.32 1.08,-.32 .44,.14 .68,.92 0,.48 -.68,.92 -.44,.14 -1.08,-.32 -.32,-.32"
+          transform={`translate(${star.x.toFixed(2)} ${star.y.toFixed(2)})`}
+        />
+      ))}
     </svg>
   );
 }
 
 function TransparencyIcon() {
   return (
-    <svg width="36" height="36" viewBox="0 0 32 32" aria-hidden="true" className="text-violet">
-      <path
-        d="M2.5 16S8 8.5 16 8.5 29.5 16 29.5 16 24 23.5 16 23.5 2.5 16 2.5 16z"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.8"
-      />
-      <circle cx="16" cy="16" r="3.4" fill="currentColor" />
+    <svg width="36" height="36" viewBox="0 0 32 32" aria-hidden="true">
+      <rect x="4" y="5" width="24" height="22" rx="1.4" fill="#D7E6F8" stroke="#6D28D9" strokeWidth="1.6" />
+      <path d="M6.4 7.6h8.4L6.4 17.2z" fill="#fff" />
+      <path d="M17.8 21.6h6.4" stroke="#fff" strokeWidth="1.7" strokeLinecap="round" />
     </svg>
   );
 }
