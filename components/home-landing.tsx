@@ -242,10 +242,10 @@ export function HomeLanding({
             migliorano col tempo e tornano da te quando serve la tua approvazione.
           </p>
           <div aria-hidden="true" className="pointer-events-none absolute -right-3 -bottom-3 sm:hidden">
-            <CharacterEmoji id="smilewoman" size={148} />
+            <CharacterEmoji id="wink" size={148} />
           </div>
           <div aria-hidden="true" className="pointer-events-none absolute -right-5 -bottom-4 hidden sm:block">
-            <CharacterEmoji id="smilewoman" size={232} />
+            <CharacterEmoji id="wink" size={232} />
           </div>
         </div>
       </section>
