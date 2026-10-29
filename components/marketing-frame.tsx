@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import { LandingMenu } from "@/components/landing-menu";
 
 export const marketingNav = [
-  { href: "/#conformita", label: "Conformità" },
+  { href: "/#colleghi", label: "Colleghi" },
   { href: "/#segreteria", label: "Segreteria" },
   { href: "/#demo", label: "Demo" },
   { href: "/whatsapp", label: "WhatsApp" },
@@ -93,7 +93,7 @@ export function MarketingFrame({
           <div>
             <Logo />
             <p className="mt-3 max-w-xs text-sm leading-6 text-muted">
-              Bot AI per studi dentistici e medici, ospitati in Europa. La segreteria detta le regole.
+              Ginevra e i colleghi, per lo studio. La segreteria detta le regole.
             </p>
           </div>
           <div className="flex gap-16 text-sm">

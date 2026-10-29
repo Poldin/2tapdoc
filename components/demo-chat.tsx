@@ -7,10 +7,10 @@ type Turn = { role: "user" | "assistant"; content: string };
 const greeting: Turn = {
   role: "assistant",
   content:
-    "Buongiorno, sono l’assistente AI dello Studio Dentistico Demo. Non sono una persona della segreteria. Come posso aiutarla?",
+    "Buongiorno, sono Ginevra, l’assistente AI dello Studio Dentistico Demo. Non sono una persona della segreteria. Come posso aiutarla?",
 };
 
-const suggestions = ["Avete posto martedì pomeriggio?", "Sei un’intelligenza artificiale?", "Vorrei un controllo."];
+const suggestions = ["Posso spostare giovedì?", "Quanto costa una pulizia?", "Avete posto oggi?"];
 const maxUserTurns = 8;
 
 export function DemoChat() {
@@ -63,10 +63,10 @@ export function DemoChat() {
     <div className="overflow-hidden rounded-[28px] border border-line bg-white shadow-[0_24px_60px_-32px_rgba(60,40,20,0.35)]">
       <div className="flex items-center justify-between gap-3 border-b border-line px-4 py-3.5">
         <div>
-          <p className="text-sm font-medium">Studio Dentistico Demo</p>
+          <p className="text-sm font-medium">Ginevra</p>
           <p className="mt-0.5 flex items-center gap-1.5 text-xs text-muted">
             <span className="h-1.5 w-1.5 rounded-full bg-violet" />
-            Assistente AI · studio di esempio
+            Studio Dentistico Demo · assistente AI
           </p>
         </div>
         <p className="text-[11px] text-muted">Non prenota davvero</p>
