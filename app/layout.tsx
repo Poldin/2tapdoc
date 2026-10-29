@@ -13,8 +13,23 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "2tapdoc",
-  description: "L'AI è la prima interfaccia dello studio.",
+  metadataBase: new URL("https://clinico.xyz"),
+  title: {
+    default: "Clinico",
+    template: "%s · Clinico",
+  },
+  description:
+    "Clinico è l'assistente AI per studi dentistici e medici. Risponde ai pazienti e scrive le prenotazioni in agenda.",
+  applicationName: "Clinico",
+  openGraph: {
+    type: "website",
+    locale: "it_IT",
+    siteName: "Clinico",
+    title: "Clinico",
+    description:
+      "Clinico è l'assistente AI per studi dentistici e medici. Risponde ai pazienti e scrive le prenotazioni in agenda.",
+    url: "https://clinico.xyz",
+  },
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
