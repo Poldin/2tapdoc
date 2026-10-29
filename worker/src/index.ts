@@ -11,6 +11,7 @@ import {
   openDatabase,
 } from "./db.js";
 import { replyToTurn } from "./reply.js";
+import { reconcileWhatsAppSessions, stopAllWhatsAppSessions } from "./whatsapp.js";
 
 const idleMs = 1500;
 let running = true;
@@ -89,6 +90,7 @@ async function runSession() {
 
     while (running) {
       await flushDueAlerts(client);
+      await reconcileWhatsAppSessions(client, workerId);
 
       const turn = await claimTurn(client, workerId);
       if (!turn) {
@@ -113,12 +115,14 @@ async function runSession() {
       }
     }
   } finally {
+    stopAllWhatsAppSessions();
     await client.end().catch(() => undefined);
   }
 }
 
 function stop() {
   running = false;
+  stopAllWhatsAppSessions();
   wakeWait?.();
 }
 

@@ -697,8 +697,8 @@ function IntegrationDetailDialog({
           </div>
           <div>
             <p className="text-xs font-medium tracking-[0.06em] text-muted">Collegamento</p>
-            <p className="mt-1 text-sm">{integration.account || "Numero verificato."}</p>
-            <p className="mt-1 text-sm text-muted">Verificato con Meta.</p>
+            <p className="mt-1 text-sm">{integration.account || "Numero collegato."}</p>
+            <p className="mt-1 text-sm text-muted">Collegato e attivo.</p>
             {linkNote ? <p className="mt-1 text-sm text-teal">{linkNote}</p> : null}
           </div>
           <div>

@@ -304,5 +304,5 @@ export function Markdown({ source, lead }: { source: string; lead?: ReactNode })
     blocks.push(renderParagraph(paragraph, key(), takeLead()));
   }
 
-  return <div className="space-y-2">{blocks}</div>;
+  return <div className="space-y-2 break-words [overflow-wrap:anywhere]">{blocks}</div>;
 }

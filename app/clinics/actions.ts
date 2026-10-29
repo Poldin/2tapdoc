@@ -377,7 +377,6 @@ export async function deleteChat(
   const { data, error } = await supabase.from("chats").delete().eq("id", chatId).select("id");
   if (error || !data?.length) return { error: "Non è stato possibile eliminare la chat." };
 
-  revalidatePath(`/clinics/${clinicId}`);
   return { removed: chatId };
 }
 
@@ -1336,6 +1335,27 @@ export async function dropIntegration(
   if (error || !data?.length) return { error: "Non è stato possibile rimuovere l'integrazione." };
   revalidatePath(`/clinics/${clinicId}`);
   return { sent: Date.now() };
+}
+
+export async function requestWhatsAppQr(
+  clinicId: string,
+  integrationId: string,
+): Promise<FormState> {
+  const user = await requireUser();
+  if (!uuidPattern.test(clinicId) || !uuidPattern.test(integrationId)) {
+    return { error: "Integrazione non valida." };
+  }
+  if (!(await clinicMember(clinicId, user.id))) {
+    return { error: "Non fai parte di questo studio." };
+  }
+
+  const supabase = await createClient();
+  const { error } = await supabase.rpc("request_whatsapp_qr", {
+    p_clinic_id: clinicId,
+    p_integration_id: integrationId,
+  });
+  if (error) return { error: "Non è stato possibile richiedere il QR code." };
+  return {};
 }
 
 export async function connectWhatsApp(

@@ -463,8 +463,10 @@ export function ClinicShell({
   }
   const pendingConfirmation = pendingConfirmations[0] ?? null;
 
+  const activeId = active?.id ?? null;
+
   useEffect(() => {
-    if (opened || !activeChatId || agendaOpen || patientsOpen || settingsOpen) return;
+    if (opened || !activeId || agendaOpen || patientsOpen || settingsOpen) return;
 
     const supabase = createClient();
     let timer = 0;
@@ -473,14 +475,14 @@ export function ClinicShell({
       window.clearTimeout(timer);
       timer = window.setTimeout(() => refreshPage.current(), 50);
     };
-    const channel = supabase.channel(`clinic:${clinicId}:${activeChatId}`);
+    const channel = supabase.channel(`clinic:${clinicId}:${activeId}`);
     channel.on(
       "postgres_changes",
       {
         event: "INSERT",
         schema: "public",
         table: "chat_events",
-        filter: `chat_id=eq.${activeChatId}`,
+        filter: `chat_id=eq.${activeId}`,
       },
       refresh,
     );
@@ -490,14 +492,14 @@ export function ClinicShell({
         event: "UPDATE",
         schema: "public",
         table: "chat_events",
-        filter: `chat_id=eq.${activeChatId}`,
+        filter: `chat_id=eq.${activeId}`,
       },
       refresh,
     );
     channel.on(
       "postgres_changes",
       {
-        event: "*",
+        event: "INSERT",
         schema: "public",
         table: "chat_clinics",
         filter: `clinic_id=eq.${clinicId}`,
@@ -518,7 +520,7 @@ export function ClinicShell({
       window.clearTimeout(timer);
       void supabase.removeChannel(channel);
     };
-  }, [opened, activeChatId, agendaOpen, patientsOpen, settingsOpen, clinicId]);
+  }, [opened, activeId, agendaOpen, patientsOpen, settingsOpen, clinicId]);
 
   useEffect(() => {
     const supabase = createClient();
@@ -576,25 +578,7 @@ export function ClinicShell({
   function onChatRemoved(chatId: string) {
     setAdded((current) => current.filter((entry) => entry.id !== chatId));
     setRemoved((current) => (current.includes(chatId) ? current : [...current, chatId]));
-    const currentId = opened?.id ?? activeChatId;
-    if (currentId !== chatId) {
-      if (opened?.id === chatId) setOpened(null);
-      router.refresh();
-      return;
-    }
-    const next = visibleChats.find((chat) => chat.id !== chatId);
-    if (!next) {
-      setOpened(null);
-      router.replace(`/clinics/${clinicId}`, { scroll: false });
-      return;
-    }
-    if (next.id === activeChatId) {
-      setOpened(null);
-      router.refresh();
-      return;
-    }
-    setOpened({ id: next.id, messages: [], hasEvents: true, from: activeChatId });
-    router.replace(`/clinics/${clinicId}?chat=${next.id}`, { scroll: false });
+    if (opened?.id === chatId) setOpened(null);
   }
 
   useLayoutEffect(() => {
@@ -998,7 +982,7 @@ export function ClinicShell({
               ) : (
                 <div
                   key={entry.message.id}
-                  className={`flex w-fit max-w-[36rem] flex-col items-end gap-1 ${
+                  className={`flex w-fit max-w-[min(36rem,100%)] min-w-0 flex-col items-end gap-1 ${
                     entry.message.mine ? "self-end" : "self-start"
                   } ${
                     entered.has(entry.message.id)
@@ -1009,7 +993,7 @@ export function ClinicShell({
                   }`}
                 >
                   <div
-                    className={`rounded-2xl px-4 py-3 text-sm leading-6 ${
+                    className={`max-w-full min-w-0 break-words [overflow-wrap:anywhere] rounded-2xl px-4 py-3 text-sm leading-6 ${
                       entry.message.mine ? "bg-ink text-paper" : "bg-paper"
                     }`}
                   >
@@ -1037,7 +1021,7 @@ export function ClinicShell({
               ),
             )
           ) : shownHasEvents || !active.bot ? null : (
-            <div className="max-w-[36rem] self-start rounded-2xl bg-paper px-4 py-3 text-sm leading-6">
+            <div className="max-w-[min(36rem,100%)] min-w-0 self-start break-words [overflow-wrap:anywhere] rounded-2xl bg-paper px-4 py-3 text-sm leading-6">
               <Markdown source={botGreeting} lead={<BotLead bot={active.bot} />} />
             </div>
           )}
