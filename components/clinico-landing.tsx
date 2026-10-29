@@ -191,7 +191,7 @@ export function ClinicoLanding({
   };
 
   return (
-    <MarketingFrame headerActions={headerActions} menuActions={menuActions}>
+    <MarketingFrame headerActions={headerActions} menuActions={menuActions} current="whatsapp">
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }} />
         <section className="mx-auto max-w-[1120px] px-5 pt-16 pb-8 sm:px-8 sm:pt-24">
           <p className="inline-flex items-center gap-2 rounded-full border border-line bg-white px-3 py-1 text-sm text-muted">

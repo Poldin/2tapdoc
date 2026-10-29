@@ -1,18 +1,18 @@
 import type { Metadata } from "next";
-import { ClinicoLanding } from "@/components/clinico-landing";
-import { ClosingSession, HeaderSession, HeroSession, MenuSession } from "@/components/marketing-session";
+import { HomeLanding } from "@/components/home-landing";
+import { HeaderSession, MenuSession } from "@/components/marketing-session";
 
 export const metadata: Metadata = {
   title: {
-    absolute: "Clinico — L'assistente AI per lo studio",
+    absolute: "Clinico — Bot AI per lo studio, in Europa",
   },
   description:
-    "Clinico risponde ai pazienti degli studi dentistici e medici, propone gli orari liberi e scrive la visita in agenda. WhatsApp è il primo canale. Piani da €19 al mese, IVA esclusa.",
+    "Bot AI per studi dentistici e medici, ospitati nell’Unione europea. Conformi al GDPR e all’AI Act, con modelli Mistral. La segreteria detta le regole. WhatsApp è il primo canale.",
   alternates: { canonical: "/" },
   openGraph: {
-    title: "Clinico — L'assistente AI per lo studio",
+    title: "Clinico — Bot AI per lo studio, in Europa",
     description:
-      "Risponde ai pazienti, propone gli orari liberi e registra la visita in agenda. Piani da €19 al mese.",
+      "GDPR, AI Act e modelli Mistral in UE. Il bot lavora, la segreteria decide. WhatsApp è il primo canale.",
     url: "https://clinico.xyz",
     locale: "it_IT",
     type: "website",
@@ -20,12 +20,5 @@ export const metadata: Metadata = {
 };
 
 export default function Home() {
-  return (
-    <ClinicoLanding
-      headerActions={<HeaderSession />}
-      menuActions={<MenuSession />}
-      heroActions={<HeroSession />}
-      closingActions={<ClosingSession />}
-    />
-  );
+  return <HomeLanding headerActions={<HeaderSession />} menuActions={<MenuSession />} />;
 }
