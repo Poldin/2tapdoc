@@ -2,6 +2,7 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 import { CharacterEmoji } from "@/components/character-emoji";
 import { DemoChat } from "@/components/demo-chat";
+import { TaskPhones } from "@/components/task-phones";
 import { MarketingFrame } from "@/components/marketing-frame";
 
 const requests = [
@@ -267,7 +268,37 @@ export function HomeLanding({
         <DemoChat />
       </section>
 
-      <section className="mx-auto max-w-[1120px] px-5 pt-8 pb-20 sm:px-8 sm:pb-28">
+      <section className="relative mx-auto max-w-[1120px] px-5 py-6 sm:px-8 sm:py-10">
+        <div className="relative overflow-visible rounded-[36px] bg-[#16141c] px-6 pt-12 pb-36 text-[#f6f3ee] sm:px-12 sm:pt-16 sm:pb-20">
+          <h2 className="max-w-[12ch] text-[clamp(2.1rem,5vw,3.5rem)] leading-[1.05] font-semibold tracking-[-0.04em]">
+            Scrivi ai tuoi assistenti
+            <br />
+            come a dei colleghi
+          </h2>
+          <p className="mt-6 max-w-xl text-base leading-7 text-white/75 sm:text-lg sm:leading-8">
+            Affida i compiti a Ginevra, Franco, Roberta, Sofia e Marco come faresti con una collega, da computer o da
+            telefono. Portano a termine il lavoro dall’inizio alla fine, ricordano come lavora il tuo studio,
+            migliorano col tempo e tornano da te quando serve la tua approvazione.
+          </p>
+          <div aria-hidden="true" className="pointer-events-none absolute -right-1 -bottom-6 h-36 w-36 sm:-right-2 sm:-bottom-10 sm:h-60 sm:w-60">
+            <div className="relative h-full w-full rounded-full bg-white">
+              <span className="absolute top-[38%] left-[30%] h-4 w-4 rounded-full bg-[#1c1915] sm:h-6 sm:w-6" />
+              <span className="absolute top-[38%] right-[30%] h-4 w-4 rounded-full bg-[#1c1915] sm:h-6 sm:w-6" />
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="mx-auto max-w-[1120px] px-5 py-10 sm:px-8 sm:py-14">
+        <h2 className="text-[clamp(1.8rem,4vw,2.8rem)] leading-snug font-semibold tracking-[-0.035em]">
+          Dai a ciascuno un compito
+        </h2>
+        <div className="mt-6">
+          <TaskPhones />
+        </div>
+      </section>
+
+      <section className="mx-auto max-w-[1120px] px-5 pt-4 pb-20 sm:px-8 sm:pb-28">
         <div className="flex flex-col items-start justify-between gap-6 rounded-[32px] bg-violet px-6 py-10 text-white sm:flex-row sm:items-center sm:px-10">
           <p className="max-w-md text-2xl leading-snug font-semibold tracking-[-0.03em]">
             WhatsApp è il primo canale. I prezzi sono tre, le persone le stesse.
