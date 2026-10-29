@@ -35,7 +35,7 @@ async function ClinicsGate() {
 
   return (
     <main className="mx-auto flex w-full max-w-md flex-1 flex-col justify-center px-6 py-16">
-      <p className="text-sm tracking-[0.18em] text-muted uppercase">2tapdoc</p>
+      <p className="text-sm tracking-[0.18em] text-muted uppercase">Clinico</p>
       <h1 className="mt-4 text-3xl font-semibold">Apri il tuo studio</h1>
       <p className="mt-2 text-sm leading-6 text-muted">
         Sei il primo admin. Il nome si può cambiare dopo.
