@@ -937,7 +937,7 @@ export async function moveAgendaEntry(input: {
     if (!existing) {
       const { error: linkError } = await supabase
         .from(targetTable)
-        .insert({ [parent]: id, [targetColumn]: toLaneId });
+        .insert({ [parent]: id, [targetColumn]: toLaneId } as never);
       if (linkError) return { error: "Non è stato possibile spostare." };
     }
 
@@ -989,7 +989,7 @@ async function replaceAgendaLinks(
   if (readError) return "Non è stato possibile aggiornare.";
   const have = new Set(
     (existing ?? []).flatMap((row) => {
-      const value = (row as Record<string, unknown>)[column];
+      const value = (row as unknown as Record<string, unknown>)[column];
       return typeof value === "string" ? [value] : [];
     }),
   );
@@ -997,7 +997,9 @@ async function replaceAgendaLinks(
   const add = ids.filter((item) => !have.has(item));
   const remove = [...have].filter((item) => !want.has(item));
   if (add.length > 0) {
-    const { error } = await supabase.from(table).insert(add.map((item) => ({ [parentColumn]: parentId, [column]: item })));
+    const { error } = await supabase
+      .from(table)
+      .insert(add.map((item) => ({ [parentColumn]: parentId, [column]: item })) as never);
     if (error) return "Non è stato possibile aggiornare.";
   }
   if (remove.length > 0) {
