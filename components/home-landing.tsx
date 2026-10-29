@@ -230,19 +230,22 @@ export function HomeLanding({
       </section>
 
       <section className="relative mx-auto max-w-[1120px] px-5 py-6 sm:px-8 sm:py-10">
-        <div className="relative overflow-hidden rounded-[36px] bg-[#16141c] px-6 pt-12 pb-16 text-[#f6f3ee] sm:px-12 sm:pt-16 sm:pb-20">
+        <div className="relative overflow-hidden rounded-[36px] bg-[#16141c] px-6 pt-12 pb-44 text-[#f6f3ee] sm:px-12 sm:pt-16 sm:pb-16">
           <h2 className="max-w-[12ch] text-[clamp(2.1rem,5vw,3.5rem)] leading-[1.05] font-semibold tracking-[-0.04em]">
             Scrivi ai tuoi assistenti
             <br />
             come a dei colleghi
           </h2>
-          <p className="mt-6 max-w-xl text-base leading-7 text-white/75 sm:text-lg sm:leading-8">
+          <p className="mt-6 max-w-xl text-base leading-7 text-white/75 sm:max-w-[34rem] sm:text-lg sm:leading-8">
             Affida i compiti a Ginevra, Franco, Roberta, Sofia e Marco come faresti con una collega, da computer o da
             telefono. Portano a termine il lavoro dall’inizio alla fine, ricordano come lavora il tuo studio,
             migliorano col tempo e tornano da te quando serve la tua approvazione.
           </p>
-          <div aria-hidden="true" className="pointer-events-none absolute -right-16 -bottom-20 origin-bottom-right scale-[0.55] sm:-right-10 sm:-bottom-24 sm:scale-100">
-            <CharacterEmoji id="smilewoman" size={300} />
+          <div aria-hidden="true" className="pointer-events-none absolute -right-3 -bottom-3 sm:hidden">
+            <CharacterEmoji id="smilewoman" size={148} />
+          </div>
+          <div aria-hidden="true" className="pointer-events-none absolute -right-5 -bottom-4 hidden sm:block">
+            <CharacterEmoji id="smilewoman" size={232} />
           </div>
         </div>
       </section>
