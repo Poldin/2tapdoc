@@ -1,19 +1,9 @@
 import type { ReactNode } from "react";
 import { CharacterEmoji } from "@/components/character-emoji";
 import { DemoChat } from "@/components/demo-chat";
+import { RequestStack } from "@/components/request-stack";
 import { TaskPhones } from "@/components/task-phones";
 import { MarketingFrame } from "@/components/marketing-frame";
-
-const requests = [
-  "Buongiorno, posso spostare l’appuntamento di giovedì? ho un imprevisto",
-  "Salve quanto costa una pulizia?",
-  "Mi si è rotto un pezzo di dente, avete posto oggi??",
-  "mia figlia ha la febbre, il dottore riceve domani?",
-  "Mi serve la fattura della visita di marzo per il 730",
-  "avete parcheggio?",
-  "buonasera, devo fare la ricetta per il solito farmaco",
-  "ciao scusate sono in ritardo di 10 minuti, sto arrivando",
-];
 
 const cast = [
   { id: "ginevra", emoji: "smilewoman", skinTone: undefined },
@@ -176,17 +166,7 @@ export function HomeLanding({
             Lei è Ginevra: ti aiuta a gestire le richieste dei pazienti.
           </h1>
         </div>
-        <div className="mt-12 flex flex-col gap-1">
-          {requests.map((text, index) => (
-            <p
-              key={text}
-              className="rounded-2xl border border-line bg-white px-4 py-3 text-[15px] leading-6"
-              style={{ opacity: 1 - index * 0.1 }}
-            >
-              {text}
-            </p>
-          ))}
-        </div>
+        <RequestStack />
       </section>
 
       <section id="colleghi" className="scroll-mt-28 mx-auto max-w-[760px] px-5 py-12 sm:px-8 sm:py-16">
