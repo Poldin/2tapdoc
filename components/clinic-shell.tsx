@@ -328,9 +328,7 @@ export function ClinicShell({
   canManageRoles,
   canManageAgenda,
   canManageIntegrations,
-  metaAppId,
-  metaConfigId,
-  metaGraphVersion,
+  webhookVerifyToken,
   currentUserId,
   recency: initialRecency,
   confirmations,
@@ -363,9 +361,7 @@ export function ClinicShell({
   canManageRoles: boolean;
   canManageAgenda: boolean;
   canManageIntegrations: boolean;
-  metaAppId: string;
-  metaConfigId: string;
-  metaGraphVersion: string;
+  webhookVerifyToken: string;
   currentUserId: string;
   recency: ClinicRecency;
   confirmations: BotActionRequest[];
@@ -964,9 +960,7 @@ export function ClinicShell({
             assets={assets}
             integrations={integrations}
             canManageIntegrations={canManageIntegrations}
-            metaAppId={metaAppId}
-            metaConfigId={metaConfigId}
-            metaGraphVersion={metaGraphVersion}
+            webhookVerifyToken={webhookVerifyToken}
           />
         ) : showPatients && selectedPatient ? (
           <PatientPage clinicId={clinicId} patient={selectedPatient} />

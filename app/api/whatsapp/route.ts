@@ -22,12 +22,26 @@ export async function GET(request: Request) {
   return new Response(challenge, { status: 200, headers: { "Content-Type": "text/plain" } });
 }
 
+async function signatureAccepted(raw: string, header: string | null) {
+  const platform = process.env.META_APP_SECRET?.trim() ?? "";
+  if (platform && signaturesMatch(raw, header, platform)) return true;
+  const stored = await withDatabase((client) =>
+    client.query<{ app_secret: string }>("select app_secret from private.whatsapp_secrets where app_secret is not null"),
+  );
+  return stored.rows.some((row) => row.app_secret && signaturesMatch(raw, header, row.app_secret));
+}
+
 export async function POST(request: Request) {
-  const secret = process.env.META_APP_SECRET?.trim() ?? "";
   const raw = await request.text();
-  if (!secret || !signaturesMatch(raw, request.headers.get("x-hub-signature-256"), secret)) {
-    return new Response("Forbidden", { status: 403 });
+  const header = request.headers.get("x-hub-signature-256");
+  let accepted = false;
+  try {
+    accepted = await signatureAccepted(raw, header);
+  } catch (error) {
+    console.error("whatsapp signature check failed", error instanceof Error ? error.message : "unknown");
+    return new Response("Unavailable", { status: 500 });
   }
+  if (!accepted) return new Response("Forbidden", { status: 403 });
 
   let payload: unknown;
   try {

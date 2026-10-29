@@ -190,10 +190,39 @@ export async function linkWhatsAppNumber(input: {
   throw new Error("meta_phone");
 }
 
-export async function subscribeWhatsApp(wabaId: string, token: string) {
-  const meta = credentials();
-  if (!meta) return false;
-  return graphPost(`${wabaId}/subscribed_apps`, token, meta.secret, {});
+export async function readClinicWhatsApp(input: {
+  wabaId: string;
+  phoneNumberId: string;
+  accessToken: string;
+  appSecret: string;
+}) {
+  const token = input.accessToken.trim();
+  const secret = input.appSecret.trim();
+  const wabaId = textId(input.wabaId);
+  const phoneNumberId = textId(input.phoneNumberId);
+  if (!wabaId || !phoneNumberId || token.length < 20 || secret.length < 8) throw new Error("meta_phone");
+
+  const phone = (await graphGet(`${phoneNumberId}?fields=display_phone_number`, token, secret)) as {
+    display_phone_number?: unknown;
+  } | null;
+  const ownPhone = displayPhone(phone?.display_phone_number);
+  if (!ownPhone) throw new Error("meta_phone");
+
+  const account = (await graphGet(`${wabaId}?fields=id`, token, secret)) as { id?: unknown } | null;
+  if (textId(account?.id) !== wabaId) throw new Error("meta_phone");
+
+  const numbers = (await graphGet(`${wabaId}/phone_numbers?fields=id,display_phone_number`, token, secret)) as {
+    data?: PhoneRow[];
+  } | null;
+  const listed = numbers?.data?.find((row) => textId(row.id) === phoneNumberId);
+  if (Array.isArray(numbers?.data) && numbers.data.length > 0 && !listed) throw new Error("meta_phone");
+  return displayPhone(listed?.display_phone_number) || ownPhone;
+}
+
+export async function subscribeWhatsApp(wabaId: string, token: string, appSecret?: string) {
+  const secret = appSecret?.trim() || credentials()?.secret;
+  if (!secret) return false;
+  return graphPost(`${wabaId}/subscribed_apps`, token, secret, {});
 }
 
 export async function syncWhatsAppHistory(phoneNumberId: string, token: string) {

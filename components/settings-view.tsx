@@ -1,16 +1,16 @@
 "use client";
 
-import { useActionState, useEffect, useLayoutEffect, useRef, useState, useTransition, type ReactNode } from "react";
+import { useActionState, useEffect, useLayoutEffect, useRef, useState, useTransition, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
-import { Settings } from "lucide-react";
+import { Play, Settings } from "lucide-react";
 import {
   addClinicMember,
-  connectWhatsApp,
   createClinicalObject,
   createDoctor,
   createIntegration,
   createRole,
   dropIntegration,
+  saveWhatsAppCredentials,
   updateClinic,
   updateClinicalObject,
   updateDoctor,
@@ -235,7 +235,7 @@ function SettingsDialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby="settings-dialog-title"
-        className="flex w-full max-w-md flex-col gap-4 rounded-3xl border border-line bg-paper p-5"
+        className="flex max-h-[90vh] w-full max-w-md flex-col gap-4 overflow-y-auto rounded-3xl border border-line bg-paper p-5"
       >
         <div className="flex items-start justify-between gap-3">
           <h2 id="settings-dialog-title" className="text-base font-medium">
@@ -614,123 +614,19 @@ function IntegrationDialog({
   );
 }
 
-type FacebookAuth = {
-  init: (options: { appId: string; autoLogAppEvents: boolean; xfbml: boolean; version: string }) => void;
-  login: (
-    callback: (response: { authResponse?: { code?: string } }) => void,
-    options: Record<string, unknown>,
-  ) => void;
-};
-
-declare global {
-  interface Window {
-    FB?: FacebookAuth;
-    fbAsyncInit?: () => void;
-  }
-}
-
-type SignupIds = { wabaId: string; phoneNumberId: string; businessId: string };
-
-function metaReady(appId: string, configId: string) {
-  return /^[0-9]{5,32}$/.test(appId) && /^[0-9]{5,32}$/.test(configId);
-}
-
-function graphVersion(value: string) {
-  return /^v\d+\.\d+$/.test(value) ? value : "v26.0";
-}
-
-function fromFacebook(origin: string) {
-  try {
-    const host = new URL(origin).hostname;
-    return host === "facebook.com" || host.endsWith(".facebook.com");
-  } catch {
-    return false;
-  }
-}
-
-function readSignup(data: unknown): SignupIds | null {
-  if (typeof data === "string") {
-    try {
-      return readSignup(JSON.parse(data));
-    } catch {
-      return null;
-    }
-  }
-  const row = data && typeof data === "object" ? (data as { type?: unknown; event?: unknown; data?: unknown }) : null;
-  if (!row || row.type !== "WA_EMBEDDED_SIGNUP") return null;
-  const eventName = typeof row.event === "string" ? row.event : "";
-  if (eventName.startsWith("CANCEL") || eventName === "ERROR") return null;
-  const payload = row.data && typeof row.data === "object" ? (row.data as Record<string, unknown>) : {};
-  const id = (value: unknown) => (typeof value === "string" && /^[0-9]{5,32}$/.test(value) ? value : "");
-  const ids = {
-    wabaId: id(payload.waba_id),
-    phoneNumberId: id(payload.phone_number_id),
-    businessId: id(payload.business_id),
-  };
-  return ids.wabaId || ids.phoneNumberId || ids.businessId ? ids : null;
-}
-
-let facebookSdk: Promise<void> | null = null;
-
-function loadFacebookSdk(appId: string, version: string) {
-  if (facebookSdk) return facebookSdk;
-  facebookSdk = new Promise<void>((resolve, reject) => {
-    const finish = () => {
-      window.clearTimeout(timeout);
-      window.FB?.init({ appId, autoLogAppEvents: true, xfbml: false, version });
-      resolve();
-    };
-    const timeout = window.setTimeout(() => {
-      facebookSdk = null;
-      reject(new Error("timeout"));
-    }, 10000);
-    window.fbAsyncInit = finish;
-    if (window.FB) {
-      finish();
-      return;
-    }
-    const script = document.createElement("script");
-    script.src = "https://connect.facebook.net/it_IT/sdk.js";
-    script.async = true;
-    script.onerror = () => {
-      window.clearTimeout(timeout);
-      facebookSdk = null;
-      reject(new Error("script"));
-    };
-    document.body.appendChild(script);
-  });
-  return facebookSdk;
-}
-
-function waitForSignup(ids: { current: SignupIds }) {
-  return new Promise<SignupIds>((resolve) => {
-    const started = Date.now();
-    const timer = window.setInterval(() => {
-      if (ids.current.wabaId || Date.now() - started > 2000) {
-        window.clearInterval(timer);
-        resolve(ids.current);
-      }
-    }, 100);
-  });
-}
-
 function IntegrationDetailDialog({
   open,
   clinicId,
   integration,
   canManage,
-  metaAppId,
-  metaConfigId,
-  metaGraphVersion,
+  webhookVerifyToken,
   onClose,
 }: {
   open: boolean;
   clinicId: string;
   integration: ClinicIntegration;
   canManage: boolean;
-  metaAppId: string;
-  metaConfigId: string;
-  metaGraphVersion: string;
+  webhookVerifyToken: string;
   onClose: () => void;
 }) {
   const router = useRouter();
@@ -740,77 +636,38 @@ function IntegrationDetailDialog({
   );
   const [connectError, setConnectError] = useState<string>();
   const [connectPending, startConnect] = useTransition();
-  const signupRef = useRef<SignupIds>({ wabaId: "", phoneNumberId: "", businessId: "" });
+  const [phoneNumberId, setPhoneNumberId] = useState("");
+  const [wabaId, setWabaId] = useState("");
+  const [accessToken, setAccessToken] = useState("");
+  const [appSecret, setAppSecret] = useState("");
   useCloseWhenSent(open, state.sent, onClose);
   const credit = integration.whatsapp?.creditCents ?? 0;
   const messages = integration.whatsapp?.messageCount ?? 0;
   const linked = integration.status === "connected";
-  const version = graphVersion(metaGraphVersion);
-  const ready = metaReady(metaAppId, metaConfigId);
+  const fieldsReady = phoneNumberId.trim() && wabaId.trim() && accessToken.trim() && appSecret.trim();
 
-  useEffect(() => {
-    if (!open) return;
-    function onMessage(event: MessageEvent) {
-      if (!fromFacebook(event.origin)) return;
-      const ids = readSignup(event.data);
-      if (!ids) return;
-      signupRef.current = {
-        wabaId: ids.wabaId || signupRef.current.wabaId,
-        phoneNumberId: ids.phoneNumberId || signupRef.current.phoneNumberId,
-        businessId: ids.businessId || signupRef.current.businessId,
-      };
-    }
-    window.addEventListener("message", onMessage);
-    return () => window.removeEventListener("message", onMessage);
-  }, [open]);
+  function onFieldKeyDown(event: ReactKeyboardEvent<HTMLInputElement>) {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    if (!connectPending && fieldsReady) saveCredentials();
+  }
 
-  useEffect(() => {
-    if (!open || !canManage || linked || !ready) return;
-    let cancelled = false;
-    loadFacebookSdk(metaAppId, version).catch(() => {
-      if (!cancelled) setConnectError("Meta non si è aperto.");
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [open, canManage, linked, ready, metaAppId, version]);
-
-  function connectNumber() {
-    if (!ready) {
-      setConnectError("Il collegamento Meta non è ancora configurato sulla piattaforma.");
-      return;
-    }
-    if (!window.FB) {
-      setConnectError("Meta non è ancora pronto. Riprova.");
-      return;
-    }
+  function saveCredentials() {
     setConnectError(undefined);
-    signupRef.current = { wabaId: "", phoneNumberId: "", businessId: "" };
-    window.FB.login(
-      (response) => {
-        const code = response.authResponse?.code;
-        if (!code) {
-          setConnectError("Collegamento annullato.");
-          return;
-        }
-        startConnect(async () => {
-          const ids = await waitForSignup(signupRef);
-          const result = await connectWhatsApp(clinicId, integration.id, { code, ...ids });
-          setConnectError(result.error);
-          router.refresh();
-        });
-      },
-      {
-        config_id: metaConfigId,
-        response_type: "code",
-        override_default_response_type: true,
-        extras: {
-          setup: {},
-          featureType: "whatsapp_business_app_onboarding",
-          version: "4",
-        },
-      },
-    );
+    startConnect(async () => {
+      const result = await saveWhatsAppCredentials(clinicId, integration.id, {
+        phoneNumberId,
+        wabaId,
+        accessToken,
+        appSecret,
+      });
+      setConnectError(result.error);
+      if (!result.error) {
+        setAccessToken("");
+        setAppSecret("");
+      }
+      router.refresh();
+    });
   }
 
   return (
@@ -824,7 +681,80 @@ function IntegrationDetailDialog({
       submitLabel="Chiudi"
       allowSubmit={false}
     >
-      {integration.provider === "whatsapp" ? (
+      {integration.provider === "whatsapp" && !linked ? (
+        <>
+          <div className="flex aspect-video items-center justify-center rounded-2xl bg-background">
+            <span className="flex h-12 w-12 items-center justify-center rounded-full border border-line bg-paper">
+              <Play className="h-5 w-5" aria-hidden="true" />
+            </span>
+          </div>
+          {canManage ? (
+            <>
+              <label className="flex flex-col gap-2 text-sm">
+                ID del numero
+                <input
+                  value={phoneNumberId}
+                  onChange={(event) => setPhoneNumberId(event.target.value)}
+                  onKeyDown={onFieldKeyDown}
+                  autoComplete="off"
+                  spellCheck={false}
+                  className={fieldClassName()}
+                />
+              </label>
+              <label className="flex flex-col gap-2 text-sm">
+                ID dell'account WhatsApp
+                <input
+                  value={wabaId}
+                  onChange={(event) => setWabaId(event.target.value)}
+                  onKeyDown={onFieldKeyDown}
+                  autoComplete="off"
+                  spellCheck={false}
+                  className={fieldClassName()}
+                />
+              </label>
+              <label className="flex flex-col gap-2 text-sm">
+                Token
+                <input
+                  type="password"
+                  value={accessToken}
+                  onChange={(event) => setAccessToken(event.target.value)}
+                  onKeyDown={onFieldKeyDown}
+                  autoComplete="off"
+                  spellCheck={false}
+                  className={fieldClassName()}
+                />
+              </label>
+              <label className="flex flex-col gap-2 text-sm">
+                Segreto dell'app
+                <input
+                  type="password"
+                  value={appSecret}
+                  onChange={(event) => setAppSecret(event.target.value)}
+                  onKeyDown={onFieldKeyDown}
+                  autoComplete="off"
+                  spellCheck={false}
+                  className={fieldClassName()}
+                />
+              </label>
+              <p className="text-sm text-muted break-all">
+                Webhook: https://2tapdoc.vercel.app/api/whatsapp
+                {webhookVerifyToken ? `. Token di verifica: ${webhookVerifyToken}` : ""}
+              </p>
+              {connectError ? <p className="text-sm text-teal">{connectError}</p> : null}
+              <button
+                type="button"
+                onClick={saveCredentials}
+                disabled={connectPending || !fieldsReady}
+                className="h-10 self-start rounded-full bg-teal px-4 text-sm text-teal-ink disabled:opacity-50"
+              >
+                {connectPending ? "Collegamento…" : "Collega"}
+              </button>
+            </>
+          ) : (
+            <p className="text-sm text-muted">In attesa del collegamento.</p>
+          )}
+        </>
+      ) : integration.provider === "whatsapp" ? (
         <>
           <div>
             <p className="text-xs font-medium tracking-[0.06em] text-muted">Credito</p>
@@ -833,27 +763,8 @@ function IntegrationDetailDialog({
           </div>
           <div>
             <p className="text-xs font-medium tracking-[0.06em] text-muted">Collegamento</p>
-            {linked ? (
-              <>
-                <p className="mt-1 text-sm">{integration.account || "Numero verificato."}</p>
-                <p className="mt-1 text-sm text-muted">Verificato con Meta.</p>
-              </>
-            ) : (
-              <p className="mt-1 text-sm text-muted">
-                Il numero si verifica con Meta e resta utilizzabile sull'app WhatsApp Business.
-              </p>
-            )}
-            {canManage && !linked ? (
-              <button
-                type="button"
-                onClick={connectNumber}
-                disabled={connectPending}
-                className="mt-3 h-10 rounded-full bg-teal px-4 text-sm text-teal-ink disabled:opacity-50"
-              >
-                {connectPending ? "Collegamento…" : "Collega numero"}
-              </button>
-            ) : null}
-            {connectError ? <p className="mt-2 text-sm text-teal">{connectError}</p> : null}
+            <p className="mt-1 text-sm">{integration.account || "Numero verificato."}</p>
+            <p className="mt-1 text-sm text-muted">Verificato con Meta.</p>
           </div>
           <div>
             <p className="text-xs font-medium tracking-[0.06em] text-muted">Cronologia</p>
@@ -868,7 +779,7 @@ function IntegrationDetailDialog({
       {canManage ? (
         <button
           type="submit"
-          disabled={pending}
+          disabled={pending || connectPending}
           className="h-10 self-start rounded-full border border-line px-4 text-sm disabled:opacity-50"
         >
           {pending ? "Rimozione…" : "Rimuovi"}
@@ -887,9 +798,7 @@ export function SettingsView({
   canManageRoles,
   canManageAgenda,
   canManageIntegrations,
-  metaAppId,
-  metaConfigId,
-  metaGraphVersion,
+  webhookVerifyToken,
   members,
   roles = [],
   specialists = [],
@@ -904,9 +813,7 @@ export function SettingsView({
   canManageRoles: boolean;
   canManageAgenda: boolean;
   canManageIntegrations: boolean;
-  metaAppId: string;
-  metaConfigId: string;
-  metaGraphVersion: string;
+  webhookVerifyToken: string;
   members: ClinicMember[];
   roles?: ClinicRole[];
   specialists?: Specialist[];
@@ -1197,9 +1104,7 @@ export function SettingsView({
           clinicId={clinicId}
           integration={detailIntegration}
           canManage={canManageIntegrations}
-          metaAppId={metaAppId}
-          metaConfigId={metaConfigId}
-          metaGraphVersion={metaGraphVersion}
+          webhookVerifyToken={webhookVerifyToken}
           onClose={() => setDetailIntegrationId(null)}
         />
       ) : null}

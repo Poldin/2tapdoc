@@ -558,9 +558,7 @@ export default async function ClinicPage({
       specialists={specialists}
       assets={assets}
       integrations={integrations}
-      metaAppId={process.env.META_APP_ID?.trim() ?? ""}
-      metaConfigId={process.env.META_CONFIG_ID?.trim() ?? ""}
-      metaGraphVersion={process.env.META_GRAPH_VERSION?.trim() || "v26.0"}
+      webhookVerifyToken={process.env.META_WEBHOOK_VERIFY_TOKEN?.trim() ?? ""}
       canRenameClinic={canRenameClinic}
       canManageMembers={canManageMembers}
       canManageRoles={canManageRoles}
