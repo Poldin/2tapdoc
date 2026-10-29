@@ -246,29 +246,25 @@ export function HomeLanding({
       </section>
 
       <section id="demo" className="scroll-mt-28 mx-auto max-w-[1120px] px-5 py-8 sm:px-8 sm:py-12">
-        <div className="grid items-start gap-8 lg:grid-cols-[0.8fr_1.2fr]">
+        <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div>
-            <div className="flex items-center gap-3">
-              <CharacterEmoji id={cast[0].emoji} size={56} />
-              <h2 className="text-[clamp(1.7rem,3.4vw,2.4rem)] leading-snug font-semibold tracking-[-0.03em]">
-                Parla con Ginevra.
-              </h2>
-            </div>
-            <p className="mt-4 text-base leading-7 text-muted">
-              Studio Dentistico Demo, uno studio finto. Si presenta come intelligenza artificiale e non scrive visite
-              vere in agenda.
-            </p>
-            <p className="mt-6 flex flex-col gap-2 text-sm">
-              <Link href="/whatsapp" className="font-medium text-ink underline-offset-4 hover:underline">
-                Come funziona su WhatsApp
-              </Link>
-              <Link href="/prezzi" className="font-medium text-ink underline-offset-4 hover:underline">
-                Prezzi, da €19 al mese
-              </Link>
+            <h2 className="text-[clamp(1.7rem,3.4vw,2.4rem)] leading-snug font-semibold tracking-[-0.03em]">
+              Parla con Ginevra.
+            </h2>
+            <p className="mt-2 max-w-xl text-base leading-7 text-muted">
+              Studio Dentistico Demo. Nulla parte verso i pazienti senza la segreteria.
             </p>
           </div>
-          <DemoChat />
+          <p className="flex gap-4 text-sm">
+            <Link href="/whatsapp" className="font-medium text-ink underline-offset-4 hover:underline">
+              WhatsApp
+            </Link>
+            <Link href="/prezzi" className="font-medium text-ink underline-offset-4 hover:underline">
+              Prezzi
+            </Link>
+          </p>
         </div>
+        <DemoChat />
       </section>
 
       <section className="mx-auto max-w-[1120px] px-5 pt-8 pb-20 sm:px-8 sm:pb-28">
