@@ -4,15 +4,15 @@ import { HeaderSession, MenuSession } from "@/components/marketing-session";
 
 export const metadata: Metadata = {
   title: {
-    absolute: "Clinico — Bot AI per lo studio, in Europa",
+    absolute: "Clinico — Lei è Ginevra",
   },
   description:
-    "Bot AI per studi dentistici e medici, ospitati nell’Unione europea. Conformi al GDPR e all’AI Act, con modelli Mistral. La segreteria detta le regole. WhatsApp è il primo canale.",
+    "Lei è Ginevra: ti aiuta a gestire le richieste dei pazienti. Con lei Franco, Roberta, Sofia e Marco. La segreteria decide come lavorano.",
   alternates: { canonical: "/" },
   openGraph: {
-    title: "Clinico — Bot AI per lo studio, in Europa",
+    title: "Clinico — Lei è Ginevra",
     description:
-      "GDPR, AI Act e modelli Mistral in UE. Il bot lavora, la segreteria decide. WhatsApp è il primo canale.",
+      "Ginevra prende le richieste dei pazienti. Franco l’agenda, Roberta le email, Sofia i richiami, Marco la memoria.",
     url: "https://clinico.xyz",
     locale: "it_IT",
     type: "website",

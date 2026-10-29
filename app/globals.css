@@ -58,6 +58,12 @@ body {
   height: 100%;
 }
 
+.character-emoji img {
+  max-width: none;
+  max-height: none;
+  height: auto;
+}
+
 .mark-glyph img {
   max-width: none;
   max-height: none;
