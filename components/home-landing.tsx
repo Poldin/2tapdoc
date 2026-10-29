@@ -47,22 +47,112 @@ const colleagues = [
   },
 ];
 
+function EuStars({ radius = 11.2 }: { radius?: number }) {
+  return (
+    <>
+      {Array.from({ length: 12 }, (_, index) => {
+        const angle = ((index * 30 - 90) * Math.PI) / 180;
+        const x = 16 + Math.cos(angle) * radius;
+        const y = 16 + Math.sin(angle) * radius;
+        return (
+          <polygon
+            key={index}
+            fill="#FFCC00"
+            points="0,-1.25 .38,-.4 1.28,-.4 .52,.18 .82,1.1 0,.58 -.82,1.1 -.52,.18 -1.28,-.4 -.38,-.4"
+            transform={`translate(${x.toFixed(2)} ${y.toFixed(2)})`}
+          />
+        );
+      })}
+    </>
+  );
+}
+
+function GdprIcon() {
+  return (
+    <svg width="36" height="36" viewBox="0 0 32 32" aria-hidden="true">
+      <circle cx="16" cy="16" r="15" fill="#003399" />
+      <EuStars />
+      <rect x="12.2" y="15.2" width="7.6" height="6" rx="1" fill="#fff" />
+      <path d="M13.6 15.2v-1.5a2.4 2.4 0 0 1 4.8 0v1.5" fill="none" stroke="#fff" strokeWidth="1.4" />
+    </svg>
+  );
+}
+
+function AiActIcon() {
+  return (
+    <svg width="36" height="36" viewBox="0 0 32 32" aria-hidden="true">
+      <circle cx="16" cy="16" r="15" fill="#003399" />
+      <EuStars radius={11.6} />
+      <text x="16" y="18.2" textAnchor="middle" fill="#fff" fontSize="7" fontWeight="700" fontFamily="sans-serif">
+        AI
+      </text>
+    </svg>
+  );
+}
+
+function EuropeIcon() {
+  return (
+    <svg width="36" height="36" viewBox="0 0 32 32" aria-hidden="true">
+      <path
+        d="M16 3.5c-5 0-9 3.8-9 8.6 0 6.4 9 16.4 9 16.4s9-10 9-16.4c0-4.8-4-8.6-9-8.6z"
+        fill="#003399"
+      />
+      <circle cx="16" cy="12" r="4.2" fill="#FFCC00" />
+    </svg>
+  );
+}
+
+function TransparencyIcon() {
+  return (
+    <svg width="36" height="36" viewBox="0 0 32 32" aria-hidden="true" className="text-violet">
+      <path
+        d="M2.5 16S8 8.5 16 8.5 29.5 16 29.5 16 24 23.5 16 23.5 2.5 16 2.5 16z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+      />
+      <circle cx="16" cy="16" r="3.4" fill="currentColor" />
+    </svg>
+  );
+}
+
+function MistralMark() {
+  return (
+    <svg width="22" height="16" viewBox="0 0 21 15" aria-hidden="true">
+      <path d="M6 0H3V3H6V0Z" fill="#FFAF01" />
+      <path d="M6 9H3V12H6V9Z" fill="#E61300" />
+      <path d="M9 12H0V15H9V12Z" fill="#C4001D" />
+      <path d="M9 3H3V6H9V3Z" fill="#FF8204" />
+      <path d="M12 9H9V12H12V9Z" fill="#E61300" />
+      <path d="M18 6H3V9H18V6Z" fill="#FA500F" />
+      <path d="M18 3H12V6H18V3Z" fill="#FF8204" />
+      <path d="M18 0H15V3H18V0Z" fill="#FFAF01" />
+      <path d="M18 9H15V12H18V9Z" fill="#E61300" />
+      <path d="M21 12H12V15H21V12Z" fill="#C4001D" />
+    </svg>
+  );
+}
+
 const trust = [
   {
     title: "GDPR",
     body: "I dati dei pazienti restano dello studio. Non servono ad addestrare modelli pubblici.",
+    icon: <GdprIcon />,
   },
   {
     title: "AI Act europeo",
     body: "Si presentano come intelligenza artificiale. Non danno pareri clinici e non si fingono la segreteria.",
+    icon: <AiActIcon />,
   },
   {
     title: "Dati in Europa",
     body: "Ospitati nell’Unione europea. I modelli sono di Mistral, anch’essi in UE.",
+    icon: <EuropeIcon />,
   },
   {
     title: "Trasparenza",
     body: "Il paziente sa con chi sta scrivendo. Se serve una persona, la segreteria entra in chat.",
+    icon: <TransparencyIcon />,
   },
 ];
 
@@ -133,14 +223,22 @@ export function HomeLanding({
         <h2 className="max-w-[16ch] text-[clamp(1.7rem,3.4vw,2.4rem)] leading-snug font-semibold tracking-[-0.03em]">
           In Europa, e in chiaro.
         </h2>
-        <div className="mt-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <p className="mt-4 flex items-center gap-2 text-sm text-muted">
+          powered by
+          <MistralMark />
+          <span className="sr-only">Mistral</span>
+        </p>
+        <ul className="mt-10 grid gap-8 sm:grid-cols-2 lg:grid-cols-4">
           {trust.map((item) => (
-            <article key={item.title} className="rounded-[24px] border border-line bg-white p-5">
-              <h3 className="font-semibold tracking-[-0.02em]">{item.title}</h3>
-              <p className="mt-2 text-sm leading-6 text-muted">{item.body}</p>
-            </article>
+            <li key={item.title} className="flex gap-3">
+              <span className="shrink-0">{item.icon}</span>
+              <div>
+                <h3 className="font-semibold tracking-[-0.02em]">{item.title}</h3>
+                <p className="mt-1 text-sm leading-6 text-muted">{item.body}</p>
+              </div>
+            </li>
           ))}
-        </div>
+        </ul>
       </section>
 
       <section id="demo" className="scroll-mt-28 mx-auto max-w-[1120px] px-5 py-8 sm:px-8 sm:py-12">
