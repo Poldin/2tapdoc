@@ -15,28 +15,33 @@ const requests = [
   "ciao scusate sono in ritardo di 10 minuti, sto arrivando",
 ];
 
+const cast = [
+  { id: "ginevra", emoji: "smilewoman", skinTone: undefined },
+  { id: "franco", emoji: "1f474_olderman", skinTone: "medium" as const },
+  { id: "roberta", emoji: "woman_with_head_scarf", skinTone: "medium-dark" as const },
+  { id: "sofia", emoji: "womancurlyhair", skinTone: "dark" as const },
+  { id: "marco", emoji: "manbeard", skinTone: "medium-light" as const },
+];
+
 const colleagues = [
   {
-    id: "franco",
-    emoji: "smileman",
+    ...cast[1],
     line: "Lui è Franco: gestisce l’agenda.",
     example: "Giovedì alle 16 è pieno. Venerdì alle 9:30 è libero, oppure ti tengo in lista se si libera un posto.",
   },
   {
-    id: "roberta",
-    emoji: "officeworkerfemale",
-    line: "Lei è Roberta: gestisce le email.",
-    example: "«Mi mandate la fattura di marzo per il 730?» Roberta trova la visita e risponde con il documento.",
+    ...cast[2],
+    line: "Lei è Roberta: gestisce le email e WhatsApp.",
+    example:
+      "«Mi mandate la fattura di marzo?» arriva per email. «Avete posto oggi??» arriva su WhatsApp. Roberta risponde su entrambi.",
   },
   {
-    id: "sofia",
-    emoji: "womanraisinghand",
+    ...cast[3],
     line: "Lei è Sofia: promemoria e richiami.",
     example: "Domani alle 15:30, controllo. E sei mesi dopo la pulizia, un messaggio per fissare il richiamo.",
   },
   {
-    id: "marco",
-    emoji: "manteacher",
+    ...cast[4],
     line: "Lui è Marco: ricorda tutto di ogni paziente.",
     example: "Preferisce il pomeriggio, l’ultima volta ha chiesto la fattura, e il figlio viene sempre col papà.",
   },
@@ -72,7 +77,7 @@ export function HomeLanding({
     <MarketingFrame headerActions={headerActions} menuActions={menuActions}>
       <section id="ginevra" className="scroll-mt-28 mx-auto max-w-[760px] px-5 pt-16 pb-6 sm:px-8 sm:pt-24">
         <div className="flex items-center gap-4 sm:gap-6">
-          <CharacterEmoji id="smilewoman" size={104} />
+          <CharacterEmoji id={cast[0].emoji} size={104} />
           <h1 className="text-[clamp(1.65rem,4vw,2.6rem)] leading-[1.15] font-semibold tracking-[-0.035em] text-balance">
             Lei è Ginevra: ti aiuta a gestire le richieste dei pazienti.
           </h1>
@@ -90,13 +95,12 @@ export function HomeLanding({
         </div>
       </section>
 
-      <section id="colleghi" className="scroll-mt-28 mx-auto max-w-[760px] px-5 py-16 sm:px-8 sm:py-24">
-        <p className="text-lg leading-8 text-muted">Poi chiama chi sa farle.</p>
-        <div className="mt-14 space-y-16">
+      <section id="colleghi" className="scroll-mt-28 mx-auto max-w-[760px] px-5 py-12 sm:px-8 sm:py-16">
+        <div className="space-y-16">
           {colleagues.map((person) => (
             <article key={person.id} className="scroll-mt-28">
               <div className="flex items-center gap-4 sm:gap-5">
-                <CharacterEmoji id={person.emoji} size={76} />
+                <CharacterEmoji id={person.emoji} skinTone={person.skinTone} size={76} />
                 <h2 className="text-[clamp(1.45rem,3vw,2rem)] leading-snug font-semibold tracking-[-0.03em] text-balance">
                   {person.line}
                 </h2>
@@ -111,11 +115,16 @@ export function HomeLanding({
 
       <section id="segreteria" className="scroll-mt-28 bg-sand-deep">
         <div className="mx-auto max-w-[760px] px-5 py-16 sm:px-8 sm:py-20">
-          <h2 className="text-[clamp(1.7rem,3.4vw,2.4rem)] leading-snug font-semibold tracking-[-0.03em] text-balance">
-            La segreteria decide come lavorano, e può entrare in ogni chat.
+          <div className="flex flex-nowrap items-center justify-start gap-2 sm:gap-4">
+            {cast.map((person) => (
+              <CharacterEmoji key={person.id} id={person.emoji} skinTone={person.skinTone} size={56} />
+            ))}
+          </div>
+          <h2 className="mt-8 text-[clamp(1.7rem,3.4vw,2.4rem)] leading-snug font-semibold tracking-[-0.03em] text-balance">
+            Ginevra, Roberta, Sofia: sono Intelligenze artificiali che ti supportano ogni giorno.
           </h2>
           <p className="mt-4 max-w-xl text-base leading-7 text-muted">
-            Tono, orari, cosa possono dire e cosa no. Se la conversazione esce da lì, una persona prende il filo.
+            Scegli tu i loro nomi, di cosa si occupano e come vuoi che lavorino. Loro eseguono.
           </p>
         </div>
       </section>
@@ -138,7 +147,7 @@ export function HomeLanding({
         <div className="grid items-start gap-8 lg:grid-cols-[0.8fr_1.2fr]">
           <div>
             <div className="flex items-center gap-3">
-              <CharacterEmoji id="smilewoman" size={56} />
+              <CharacterEmoji id={cast[0].emoji} size={56} />
               <h2 className="text-[clamp(1.7rem,3.4vw,2.4rem)] leading-snug font-semibold tracking-[-0.03em]">
                 Parla con Ginevra.
               </h2>
