@@ -1307,7 +1307,7 @@ export async function saveWhatsAppCredentials(
 
   const phoneNumberId = input.phoneNumberId.trim();
   const wabaId = input.wabaId.trim();
-  const accessToken = input.accessToken.trim();
+  const accessToken = input.accessToken.trim().replace(/^Bearer\s+/i, "");
   const appSecret = input.appSecret.trim();
   if (!/^[0-9]{5,32}$/.test(phoneNumberId) || !/^[0-9]{5,32}$/.test(wabaId)) {
     return { error: "Controlla l'ID del numero e l'ID dell'account WhatsApp." };
@@ -1329,7 +1329,10 @@ export async function saveWhatsAppCredentials(
   try {
     displayPhone = await readClinicWhatsApp({ wabaId, phoneNumberId, accessToken, appSecret });
   } catch {
-    return { error: "Meta non ha accettato questi dati." };
+    return {
+      error:
+        "Meta non riconosce questi dati. Token e segreto devono essere della stessa app, e gli ID quelli della configurazione API.",
+    };
   }
 
   try {

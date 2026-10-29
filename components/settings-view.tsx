@@ -1,8 +1,8 @@
 "use client";
 
-import { useActionState, useEffect, useLayoutEffect, useRef, useState, useTransition, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
-import { useRouter } from "next/navigation";
-import { Play, Settings } from "lucide-react";
+import { useActionState, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { Settings } from "lucide-react";
+import { clearWhatsAppSetupDraft, WhatsAppSetupDialog } from "@/components/whatsapp-setup-dialog";
 import {
   addClinicMember,
   createClinicalObject,
@@ -10,7 +10,6 @@ import {
   createIntegration,
   createRole,
   dropIntegration,
-  saveWhatsAppCredentials,
   updateClinic,
   updateClinicalObject,
   updateDoctor,
@@ -629,45 +628,34 @@ function IntegrationDetailDialog({
   webhookVerifyToken: string;
   onClose: () => void;
 }) {
-  const router = useRouter();
   const [state, action, pending] = useActionState<FormState, FormData>(
     dropIntegration.bind(null, clinicId, integration.id),
     {},
   );
-  const [connectError, setConnectError] = useState<string>();
-  const [connectPending, startConnect] = useTransition();
-  const [phoneNumberId, setPhoneNumberId] = useState("");
-  const [wabaId, setWabaId] = useState("");
-  const [accessToken, setAccessToken] = useState("");
-  const [appSecret, setAppSecret] = useState("");
+  const [linkNote, setLinkNote] = useState<string>();
   useCloseWhenSent(open, state.sent, onClose);
+  useEffect(() => {
+    if (state.sent) clearWhatsAppSetupDraft(integration.id);
+  }, [state.sent, integration.id]);
   const credit = integration.whatsapp?.creditCents ?? 0;
   const messages = integration.whatsapp?.messageCount ?? 0;
   const linked = integration.status === "connected";
-  const fieldsReady = phoneNumberId.trim() && wabaId.trim() && accessToken.trim() && appSecret.trim();
 
-  function onFieldKeyDown(event: ReactKeyboardEvent<HTMLInputElement>) {
-    if (event.key !== "Enter") return;
-    event.preventDefault();
-    if (!connectPending && fieldsReady) saveCredentials();
-  }
-
-  function saveCredentials() {
-    setConnectError(undefined);
-    startConnect(async () => {
-      const result = await saveWhatsAppCredentials(clinicId, integration.id, {
-        phoneNumberId,
-        wabaId,
-        accessToken,
-        appSecret,
-      });
-      setConnectError(result.error);
-      if (!result.error) {
-        setAccessToken("");
-        setAppSecret("");
-      }
-      router.refresh();
-    });
+  if (integration.provider === "whatsapp" && !linked) {
+    return (
+      <WhatsAppSetupDialog
+        open={open}
+        clinicId={clinicId}
+        integrationId={integration.id}
+        canManage={canManage}
+        webhookVerifyToken={webhookVerifyToken}
+        dropError={state.error}
+        dropPending={pending}
+        dropAction={action}
+        onClose={onClose}
+        onLinkedNote={setLinkNote}
+      />
+    );
   }
 
   return (
@@ -681,80 +669,7 @@ function IntegrationDetailDialog({
       submitLabel="Chiudi"
       allowSubmit={false}
     >
-      {integration.provider === "whatsapp" && !linked ? (
-        <>
-          <div className="flex aspect-video items-center justify-center rounded-2xl bg-background">
-            <span className="flex h-12 w-12 items-center justify-center rounded-full border border-line bg-paper">
-              <Play className="h-5 w-5" aria-hidden="true" />
-            </span>
-          </div>
-          {canManage ? (
-            <>
-              <label className="flex flex-col gap-2 text-sm">
-                ID del numero
-                <input
-                  value={phoneNumberId}
-                  onChange={(event) => setPhoneNumberId(event.target.value)}
-                  onKeyDown={onFieldKeyDown}
-                  autoComplete="off"
-                  spellCheck={false}
-                  className={fieldClassName()}
-                />
-              </label>
-              <label className="flex flex-col gap-2 text-sm">
-                ID dell'account WhatsApp
-                <input
-                  value={wabaId}
-                  onChange={(event) => setWabaId(event.target.value)}
-                  onKeyDown={onFieldKeyDown}
-                  autoComplete="off"
-                  spellCheck={false}
-                  className={fieldClassName()}
-                />
-              </label>
-              <label className="flex flex-col gap-2 text-sm">
-                Token
-                <input
-                  type="password"
-                  value={accessToken}
-                  onChange={(event) => setAccessToken(event.target.value)}
-                  onKeyDown={onFieldKeyDown}
-                  autoComplete="off"
-                  spellCheck={false}
-                  className={fieldClassName()}
-                />
-              </label>
-              <label className="flex flex-col gap-2 text-sm">
-                Segreto dell'app
-                <input
-                  type="password"
-                  value={appSecret}
-                  onChange={(event) => setAppSecret(event.target.value)}
-                  onKeyDown={onFieldKeyDown}
-                  autoComplete="off"
-                  spellCheck={false}
-                  className={fieldClassName()}
-                />
-              </label>
-              <p className="text-sm text-muted break-all">
-                Webhook: https://2tapdoc.vercel.app/api/whatsapp
-                {webhookVerifyToken ? `. Token di verifica: ${webhookVerifyToken}` : ""}
-              </p>
-              {connectError ? <p className="text-sm text-teal">{connectError}</p> : null}
-              <button
-                type="button"
-                onClick={saveCredentials}
-                disabled={connectPending || !fieldsReady}
-                className="h-10 self-start rounded-full bg-teal px-4 text-sm text-teal-ink disabled:opacity-50"
-              >
-                {connectPending ? "Collegamento…" : "Collega"}
-              </button>
-            </>
-          ) : (
-            <p className="text-sm text-muted">In attesa del collegamento.</p>
-          )}
-        </>
-      ) : integration.provider === "whatsapp" ? (
+      {integration.provider === "whatsapp" ? (
         <>
           <div>
             <p className="text-xs font-medium tracking-[0.06em] text-muted">Credito</p>
@@ -765,6 +680,7 @@ function IntegrationDetailDialog({
             <p className="text-xs font-medium tracking-[0.06em] text-muted">Collegamento</p>
             <p className="mt-1 text-sm">{integration.account || "Numero verificato."}</p>
             <p className="mt-1 text-sm text-muted">Verificato con Meta.</p>
+            {linkNote ? <p className="mt-1 text-sm text-teal">{linkNote}</p> : null}
           </div>
           <div>
             <p className="text-xs font-medium tracking-[0.06em] text-muted">Cronologia</p>
@@ -779,7 +695,7 @@ function IntegrationDetailDialog({
       {canManage ? (
         <button
           type="submit"
-          disabled={pending || connectPending}
+          disabled={pending}
           className="h-10 self-start rounded-full border border-line px-4 text-sm disabled:opacity-50"
         >
           {pending ? "Rimozione…" : "Rimuovi"}
