@@ -250,7 +250,7 @@ export function HomeLanding({
       </section>
 
       <section className="relative mx-auto max-w-[1120px] px-5 py-6 sm:px-8 sm:py-10">
-        <div className="relative overflow-visible rounded-[36px] bg-[#16141c] px-6 pt-12 pb-36 text-[#f6f3ee] sm:px-12 sm:pt-16 sm:pb-20">
+        <div className="relative overflow-hidden rounded-[36px] bg-[#16141c] px-6 pt-12 pb-16 text-[#f6f3ee] sm:px-12 sm:pt-16 sm:pb-20">
           <h2 className="max-w-[12ch] text-[clamp(2.1rem,5vw,3.5rem)] leading-[1.05] font-semibold tracking-[-0.04em]">
             Scrivi ai tuoi assistenti
             <br />
@@ -261,11 +261,8 @@ export function HomeLanding({
             telefono. Portano a termine il lavoro dall’inizio alla fine, ricordano come lavora il tuo studio,
             migliorano col tempo e tornano da te quando serve la tua approvazione.
           </p>
-          <div aria-hidden="true" className="pointer-events-none absolute -right-1 -bottom-6 h-36 w-36 sm:-right-2 sm:-bottom-10 sm:h-60 sm:w-60">
-            <div className="relative h-full w-full rounded-full bg-white">
-              <span className="absolute top-[38%] left-[30%] h-4 w-4 rounded-full bg-[#1c1915] sm:h-6 sm:w-6" />
-              <span className="absolute top-[38%] right-[30%] h-4 w-4 rounded-full bg-[#1c1915] sm:h-6 sm:w-6" />
-            </div>
+          <div aria-hidden="true" className="pointer-events-none absolute -right-16 -bottom-20 origin-bottom-right scale-[0.55] sm:-right-10 sm:-bottom-24 sm:scale-100">
+            <CharacterEmoji id="smilewoman" size={300} />
           </div>
         </div>
       </section>

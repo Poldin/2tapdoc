@@ -201,10 +201,18 @@ function Phone({ task }: { task: Task }) {
               {task.desk}
             </p>
           </div>
-          <div className="mt-auto grid grid-cols-2 gap-2 pt-2">
-            <span className="inline-flex h-10 items-center justify-center rounded-full bg-violet text-sm font-medium text-white">Invia</span>
-            <span className="inline-flex h-10 items-center justify-center rounded-full border border-white/20 text-sm text-white/80">Scarta</span>
-          </div>
+        </div>
+        <div className="flex items-center gap-2 border-t border-white/10 px-3 py-3">
+          <span className="grid h-8 w-8 shrink-0 place-items-center text-lg text-white/70" aria-hidden="true">
+            +
+          </span>
+          <span className="flex h-9 min-w-0 flex-1 items-center rounded-full bg-white/10 px-3 text-sm text-white/40">
+            Scrivi a {task.name}
+          </span>
+          <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" className="shrink-0 text-white/70">
+            <rect x="6" y="1.5" width="4" height="8" rx="2" fill="none" stroke="currentColor" strokeWidth="1.4" />
+            <path d="M4 7.5a4 4 0 0 0 8 0M8 11.5V14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+          </svg>
         </div>
       </div>
     </div>
