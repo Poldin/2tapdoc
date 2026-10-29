@@ -961,6 +961,7 @@ export function ClinicShell({
             integrations={integrations}
             canManageIntegrations={canManageIntegrations}
             webhookVerifyToken={webhookVerifyToken}
+            onCreatedChat={onChatCreated}
           />
         ) : showPatients && selectedPatient ? (
           <PatientPage clinicId={clinicId} patient={selectedPatient} />

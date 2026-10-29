@@ -413,6 +413,45 @@ export async function botCreatePatients(
   return result.rows[0]?.created ?? [];
 }
 
+export async function botListIntegrations(
+  client: pg.Client,
+  workerId: string,
+  jobId: string,
+): Promise<unknown> {
+  const result = await client.query<{ items: unknown }>(
+    "select private.bot_list_integrations($1, $2) as items",
+    [workerId, jobId],
+  );
+  return result.rows[0]?.items ?? [];
+}
+
+export async function botConnectWhatsApp(
+  client: pg.Client,
+  workerId: string,
+  jobId: string,
+  params: {
+    wabaId: string;
+    phoneNumberId: string;
+    displayPhone: string;
+    accessToken: string;
+    appSecret: string;
+  },
+): Promise<unknown> {
+  const result = await client.query<{ connected: unknown }>(
+    "select private.bot_connect_whatsapp($1, $2, $3, $4, $5, $6, $7) as connected",
+    [
+      workerId,
+      jobId,
+      params.wabaId,
+      params.phoneNumberId,
+      params.displayPhone,
+      params.accessToken,
+      params.appSecret,
+    ],
+  );
+  return result.rows[0]?.connected ?? null;
+}
+
 function parseTurn(value: unknown): Turn | null {
   if (value == null) return null;
   if (typeof value !== "object") throw new Error("Unexpected job payload");

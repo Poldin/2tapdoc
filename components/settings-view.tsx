@@ -15,6 +15,7 @@ import {
   updateDoctor,
   updateMember,
   updateRole,
+  type CreatedChat,
   type FormState,
 } from "@/app/clinics/actions";
 import { permissionCatalog, permissionKeys, permissionLabel } from "@/lib/permissions";
@@ -581,13 +582,31 @@ function IntegrationDialog({
   open,
   clinicId,
   onClose,
+  onCreated,
 }: {
   open: boolean;
   clinicId: string;
   onClose: () => void;
+  onCreated: (integrationId?: string) => void;
 }) {
   const [state, action, pending] = useActionState<FormState, FormData>(createIntegration.bind(null, clinicId), {});
-  useCloseWhenSent(open, state.sent, onClose);
+  const seen = useRef(state.sent);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  const onCreatedRef = useRef(onCreated);
+  onCreatedRef.current = onCreated;
+
+  useEffect(() => {
+    if (!open) {
+      seen.current = state.sent;
+      return;
+    }
+    if (state.sent && state.sent !== seen.current) {
+      seen.current = state.sent;
+      onCloseRef.current();
+      onCreatedRef.current(state.integrationId);
+    }
+  }, [open, state.sent, state.integrationId]);
 
   return (
     <SettingsDialog
@@ -620,6 +639,7 @@ function IntegrationDetailDialog({
   canManage,
   webhookVerifyToken,
   onClose,
+  onCreatedChat,
 }: {
   open: boolean;
   clinicId: string;
@@ -627,6 +647,7 @@ function IntegrationDetailDialog({
   canManage: boolean;
   webhookVerifyToken: string;
   onClose: () => void;
+  onCreatedChat?: (chat: CreatedChat) => void;
 }) {
   const [state, action, pending] = useActionState<FormState, FormData>(
     dropIntegration.bind(null, clinicId, integration.id),
@@ -649,11 +670,9 @@ function IntegrationDetailDialog({
         integrationId={integration.id}
         canManage={canManage}
         webhookVerifyToken={webhookVerifyToken}
-        dropError={state.error}
-        dropPending={pending}
-        dropAction={action}
         onClose={onClose}
         onLinkedNote={setLinkNote}
+        onCreatedChat={onCreatedChat}
       />
     );
   }
@@ -720,6 +739,7 @@ export function SettingsView({
   specialists = [],
   assets = [],
   integrations = [],
+  onCreatedChat,
 }: {
   clinicId: string;
   clinicName: string;
@@ -735,6 +755,7 @@ export function SettingsView({
   specialists?: Specialist[];
   assets?: ClinicAsset[];
   integrations?: ClinicIntegration[];
+  onCreatedChat?: (chat: CreatedChat) => void;
 }) {
   const threadRef = useRef<HTMLDivElement>(null);
   const badgeRef = useRef<HTMLParagraphElement>(null);
@@ -749,7 +770,13 @@ export function SettingsView({
   const [assetOpen, setAssetOpen] = useState(false);
   const [integrationOpen, setIntegrationOpen] = useState(false);
   const [detailIntegrationId, setDetailIntegrationId] = useState<string | null>(null);
-  const detailIntegration = integrations.find((integration) => integration.id === detailIntegrationId) ?? null;
+  const [pendingIntegration, setPendingIntegration] = useState<ClinicIntegration | null>(null);
+  const shownIntegrations =
+    pendingIntegration && !integrations.some((item) => item.id === pendingIntegration.id)
+      ? [...integrations, pendingIntegration]
+      : integrations;
+  const detailIntegration =
+    shownIntegrations.find((integration) => integration.id === detailIntegrationId) ?? null;
   const takenUserIds = new Set(
     specialists.flatMap((specialist) => (specialist.userId ? [specialist.userId] : [])),
   );
@@ -944,10 +971,10 @@ export function SettingsView({
               canAdd={canManageIntegrations}
             />
             <DataTable columns={["Integrazione", "Descrizione", "Stato", "Dettaglio"]}>
-              {integrations.length === 0 ? (
+              {shownIntegrations.length === 0 ? (
                 <EmptyRow columns={4}>Nessuna integrazione.</EmptyRow>
               ) : (
-                integrations.map((integration) => (
+                shownIntegrations.map((integration) => (
                   <tr key={integration.id} className="border-t border-line">
                     <td className="px-4 py-3 font-medium">{integrationLabel(integration.provider)}</td>
                     <td className="px-4 py-3 text-muted">{integration.account.trim() || "—"}</td>
@@ -1011,7 +1038,22 @@ export function SettingsView({
         />
       ) : null}
       {integrationOpen ? (
-        <IntegrationDialog open clinicId={clinicId} onClose={() => setIntegrationOpen(false)} />
+        <IntegrationDialog
+          open
+          clinicId={clinicId}
+          onClose={() => setIntegrationOpen(false)}
+          onCreated={(integrationId) => {
+            if (!integrationId) return;
+            setPendingIntegration({
+              id: integrationId,
+              provider: "whatsapp",
+              account: "",
+              status: "pending",
+              whatsapp: { creditCents: 0, messageCount: 0 },
+            });
+            setDetailIntegrationId(integrationId);
+          }}
+        />
       ) : null}
       {detailIntegration ? (
         <IntegrationDetailDialog
@@ -1022,6 +1064,7 @@ export function SettingsView({
           canManage={canManageIntegrations}
           webhookVerifyToken={webhookVerifyToken}
           onClose={() => setDetailIntegrationId(null)}
+          onCreatedChat={onCreatedChat}
         />
       ) : null}
     </>

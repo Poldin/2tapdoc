@@ -1,3 +1,4 @@
+import { createHmac } from "node:crypto";
 import { createMistral } from "@ai-sdk/mistral";
 import { generateText, stepCountIs, tool } from "ai";
 import type pg from "pg";
@@ -8,6 +9,7 @@ import {
   scheduleServerAlerts,
 } from "./alerts.js";
 import {
+  botConnectWhatsApp,
   botCreateAgendaBlocks,
   botCreateAppointments,
   botCreateBots,
@@ -22,6 +24,7 @@ import {
   botListAppointments,
   botListBots,
   botListChats,
+  botListIntegrations,
   botRenameClinic,
   botRenameSelf,
   botSearchPatients,
@@ -143,6 +146,109 @@ function withDayNames(value: unknown): unknown {
   return out;
 }
 
+const metaIdPattern = /^[0-9]{5,32}$/;
+const webhookUrlConst = "https://2tapdoc.vercel.app/api/whatsapp";
+const webhookVerifyTokenConst =
+  process.env.META_WEBHOOK_VERIFY_TOKEN?.trim() || "70f932ajisjfishhfhfsifhsifshfihsisfhd7d700936c2";
+
+function metaGraphUrl(path: string, token: string, secret: string): URL {
+  const version = process.env.META_GRAPH_VERSION?.trim() || "v26.0";
+  const safeVersion = /^v\d+\.\d+$/.test(version) ? version : "v26.0";
+  const url = new URL(`https://graph.facebook.com/${safeVersion}/${path.replace(/^\//, "")}`);
+  const proof = createHmac("sha256", secret).update(token).digest("hex");
+  url.searchParams.set("appsecret_proof", proof);
+  return url;
+}
+
+async function metaGraphGet(path: string, token: string, secret: string): Promise<unknown> {
+  const response = await fetch(metaGraphUrl(path, token, secret), {
+    headers: { Authorization: `Bearer ${token}` },
+    signal: AbortSignal.timeout(20_000),
+  });
+  if (!response.ok) return null;
+  return response.json().catch(() => null);
+}
+
+async function metaGraphPost(path: string, token: string, secret: string, payload: unknown): Promise<boolean> {
+  const response = await fetch(metaGraphUrl(path, token, secret), {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(20_000),
+  });
+  return response.ok;
+}
+
+function cleanDisplayPhone(value: unknown): string {
+  if (typeof value !== "string") return "";
+  const phone = value.trim();
+  return /^[0-9+() -]{1,40}$/.test(phone) ? phone : "";
+}
+
+async function verifyMetaWhatsAppCredentials(input: {
+  wabaId: string;
+  phoneNumberId: string;
+  accessToken: string;
+  appSecret: string;
+}): Promise<{ ok: true; displayPhone: string } | { ok: false; error: string }> {
+  const wabaId = input.wabaId.replace(/\D/g, "");
+  const phoneNumberId = input.phoneNumberId.replace(/\D/g, "");
+  const token = input.accessToken.trim().replace(/^Bearer\s+/i, "");
+  const secret = input.appSecret.trim();
+
+  if (!metaIdPattern.test(wabaId) || !metaIdPattern.test(phoneNumberId)) {
+    return {
+      ok: false,
+      error: "ID del numero e ID dell'account WhatsApp devono essere sequenze numeriche (non il numero +39).",
+    };
+  }
+  if (token.length < 20 || secret.length < 8) {
+    return {
+      ok: false,
+      error: "Token di accesso o Chiave segreta dell'app troppo corti o mancanti.",
+    };
+  }
+
+  const phone = (await metaGraphGet(`${phoneNumberId}?fields=display_phone_number`, token, secret)) as {
+    display_phone_number?: unknown;
+  } | null;
+  const ownPhone = cleanDisplayPhone(phone?.display_phone_number);
+  if (!ownPhone) {
+    return {
+      ok: false,
+      error:
+        "Meta ha rifiutato la lettura del Phone Number ID. Verifica che ID del numero, Token permanente e Chiave segreta dell'app appartengano alla stessa App Meta.",
+    };
+  }
+
+  const account = (await metaGraphGet(`${wabaId}?fields=id`, token, secret)) as { id?: unknown } | null;
+  if (typeof account?.id !== "string" || account.id !== wabaId) {
+    return {
+      ok: false,
+      error: "L'ID dell'account WhatsApp Business (WABA ID) non è riconosciuto da Meta o il token non ha i permessi.",
+    };
+  }
+
+  const numbers = (await metaGraphGet(`${wabaId}/phone_numbers?fields=id,display_phone_number`, token, secret)) as {
+    data?: Array<{ id?: unknown; display_phone_number?: unknown }>;
+  } | null;
+  const listed = numbers?.data?.find((row) => typeof row.id === "string" && row.id === phoneNumberId);
+  if (Array.isArray(numbers?.data) && numbers.data.length > 0 && !listed) {
+    return {
+      ok: false,
+      error: "L'ID del numero di telefono non appartiene a questo ID dell'account WhatsApp Business (WABA ID).",
+    };
+  }
+
+  return {
+    ok: true,
+    displayPhone: cleanDisplayPhone(listed?.display_phone_number) || ownPhone,
+  };
+}
+
 function buildSystemPrompt(turn: Turn, now: Date): string {
   const doctorsList =
     turn.doctors.length > 0
@@ -210,6 +316,18 @@ function buildSystemPrompt(turn: Turn, now: Date): string {
     "  - Usa `setServerAlerts` per programmare uno o più alert/sveglie direttamente nel container del server (specificando `delaySeconds` per attese relative come 'tra 5 minuti' oppure `firesAtIso` per un orario preciso).",
     "  - Quando l'alert scatta sul server, ti risveglierà automaticamente con l'istruzione salvata in `prompt` e potrai scrivere in questa chat (anche controllando l'agenda in quel momento).",
     "  - Usa `listServerAlerts` e `cancelServerAlerts` per vedere o annullare gli alert attivi nel server.",
+    "- **Integrazione WhatsApp (Mastro W / configurazione Meta)**:",
+    "  - **REGOLA ASSOLUTA ANTI-ALLUCINAZIONE**: NON esiste alcun QR code per collegare WhatsApp a 2tapdoc, non si usa WhatsApp Web, e tu non puoi né generare né mostrare QR code o immagini. Non nominare mai QR code. Se l'utente chiede un QR code, spiegagli che il collegamento ufficiale con Meta avviene tramite i 4 codici del suo Business Portfolio Meta (nessun QR code).",
+    "  - Guida l'utente **un solo piccolo passo alla volta** (non scaricare un muro di testo tutto insieme!). Aspetta sempre che l'utente confermi di aver fatto il passo prima di passare al successivo:",
+    "    1. **Business Portfolio e App Meta**: verifica se ha già un Business Portfolio su https://business.facebook.com/ e un'App su https://developers.facebook.com/apps (Crea App → Altro → Aziendale/Business, collegata al Business Portfolio, con aggiunto il prodotto **WhatsApp**).",
+    "    2. **ID del numero (`phoneNumberId`) e ID dell'account WhatsApp Business (`wabaId`)**: falli prendere da https://developers.facebook.com/apps (menu **WhatsApp → Configurazione API**) oppure da https://business.facebook.com/latest/settings/whatsapp_account?detail_view_tab=PHONE_NUMBERS . Spiega che sono due numeri lunghi di sole cifre (es. `109283746...`), NON il numero di telefono `+39...`. Faglieli incollare qui in chat.",
+    "    3. **Segreto dell'app (`appSecret`) e Webhook**:",
+    "       - Su https://developers.facebook.com/apps → **Impostazioni → Di base**, fagli mostrare e copiare la **Chiave segreta dell'app** e incollarla qui in chat.",
+    `       - Sempre nell'app Meta, in **WhatsApp → Configurazione**, sezione **Webhook**, fagli premere **Modifica** e incollare:\n         - **URL di callback**: \`${webhookUrlConst}\`\n         - **Token di verifica**: \`${webhookVerifyTokenConst}\`\n         Poi fagli premere **Verifica e salva**, e sotto **Campi del webhook** fagli attivare la spunta su **\`messages\`**.`,
+    "    4. **Token permanente (`accessToken`)**:",
+    "       - Spiega di NON usare il token temporaneo (che scade dopo 24 ore) della pagina Configurazione API.",
+    "       - Mandalo su https://business.facebook.com/latest/settings/system_users (**Utenti di sistema**): fagli creare un utente di sistema (ruolo **Admin**), cliccare **Aggiungi risorse** (assegnando l'App e l'Account WhatsApp Business con controllo completo), poi **Genera nuovo token** (scadenza: **Mai**) spuntando i permessi `whatsapp_business_messaging` e `whatsapp_business_management`. Fagli incollare il token (`EAA...`) qui in chat.",
+    "    5. **Verifica e collegamento automatico**: appena hai raccolto tutti e 4 i dati (`phoneNumberId`, `wabaId`, `accessToken`, `appSecret`) nella conversazione, invoca subito il tool `connectWhatsApp` che verifica i dati su Meta, iscrive l'app e aggiorna lo stato a **Collegato** nella tabella Integrazioni.",
     "- Non inventare mai di aver eseguito un'azione se non hai chiamato il relativo tool con successo. Se manca un dato essenziale (es. quale medico o quale orario), chiedilo.",
   ].join("\n");
 }
@@ -238,6 +356,7 @@ export async function replyToTurn(
   const canReadPatients = perms.has("patients.read") || perms.has("patients.write");
   const canWritePatients = perms.has("patients.write");
   const canRenameClinic = perms.has("clinic.update");
+  const canManageIntegrations = perms.has("integrations.manage");
 
   const tools = {
     setServerAlerts: tool({
@@ -864,6 +983,82 @@ export async function replyToTurn(
       }),
       execute: async ({ botIds }) => botDeleteBots(client, workerId, turn.id, botIds),
     }),
+
+    listIntegrations: tool({
+      description:
+        "Elenca le integrazioni della clinica (es. WhatsApp, stato pending/connected, numero collegato e credito).",
+      inputSchema: z.object({}),
+      execute: async () => ({
+        integrations: await botListIntegrations(client, workerId, turn.id),
+        webhookUrl: webhookUrlConst,
+        webhookVerifyToken: webhookVerifyTokenConst,
+      }),
+    }),
+
+    connectWhatsApp: tool({
+      description:
+        "Verifica su Meta Graph API e salva il collegamento WhatsApp della clinica usando i 4 dati forniti dall'utente (phoneNumberId, wabaId, accessToken, appSecret).",
+      inputSchema: z.object({
+        phoneNumberId: z
+          .string()
+          .min(5)
+          .max(32)
+          .describe("ID numerico del numero di telefono su Meta (solo cifre, non il +39)"),
+        wabaId: z
+          .string()
+          .min(5)
+          .max(32)
+          .describe("ID numerico dell'account WhatsApp Business (WABA ID, solo cifre)"),
+        accessToken: z
+          .string()
+          .min(20)
+          .max(8192)
+          .describe("Token di accesso permanente dell'utente di sistema Meta (EAA...)"),
+        appSecret: z
+          .string()
+          .min(8)
+          .max(256)
+          .describe("Chiave segreta dell'app Meta (Impostazioni -> Di base)"),
+      }),
+      execute: async ({ phoneNumberId, wabaId, accessToken, appSecret }) => {
+        const cleanPhoneId = phoneNumberId.replace(/\D/g, "");
+        const cleanWabaId = wabaId.replace(/\D/g, "");
+        const cleanToken = accessToken.trim().replace(/^Bearer\s+/i, "");
+        const cleanSecret = appSecret.trim();
+
+        const verification = await verifyMetaWhatsAppCredentials({
+          wabaId: cleanWabaId,
+          phoneNumberId: cleanPhoneId,
+          accessToken: cleanToken,
+          appSecret: cleanSecret,
+        });
+        if (!verification.ok) {
+          return { connected: false, error: verification.error };
+        }
+
+        const saved = await botConnectWhatsApp(client, workerId, turn.id, {
+          wabaId: cleanWabaId,
+          phoneNumberId: cleanPhoneId,
+          displayPhone: verification.displayPhone,
+          accessToken: cleanToken,
+          appSecret: cleanSecret,
+        });
+
+        const subscribed = await metaGraphPost(
+          `${cleanWabaId}/subscribed_apps`,
+          cleanToken,
+          cleanSecret,
+          {},
+        );
+
+        return {
+          connected: true,
+          displayPhone: verification.displayPhone,
+          webhookSubscribed: subscribed,
+          integration: saved,
+        };
+      },
+    }),
   };
 
   type ToolName = keyof typeof tools;
@@ -882,6 +1077,7 @@ export async function replyToTurn(
     "deleteBots",
   ];
   if (canRenameClinic) activeTools.push("renameClinic");
+  if (canManageIntegrations) activeTools.push("listIntegrations", "connectWhatsApp");
   if (canReadAgenda) activeTools.push("listAppointments", "listAgendaBlocks");
   if (canWriteAgenda) {
     activeTools.push(

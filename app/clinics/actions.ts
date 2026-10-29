@@ -6,7 +6,7 @@ import { createClient } from "@/lib/supabase/server";
 import { getSessionUser } from "@/lib/auth/session";
 import { linkWhatsAppNumber, readClinicWhatsApp, subscribeWhatsApp, syncWhatsAppHistory } from "@/lib/meta-whatsapp";
 import { withClinicUser } from "@/lib/postgres";
-import { botGreeting } from "@/lib/bot-greeting";
+import { botGreeting, mastroWGreeting } from "@/lib/bot-greeting";
 import { botFaceIds, channelSymbolIds, isListed, markColorIds } from "@/lib/marks";
 import { listedPermissions, roleSlug } from "@/lib/permissions";
 
@@ -28,6 +28,7 @@ export type FormState = {
   error?: string;
   sent?: number;
   created?: CreatedChat;
+  integrationId?: string;
   removed?: string;
   decided?: string;
 };
@@ -1207,13 +1208,112 @@ export async function createIntegration(clinicId: string, _state: FormState, for
   if (provider !== "whatsapp") return { error: "Integrazione sconosciuta." };
 
   const supabase = await createClient();
-  const { error } = await supabase.rpc("create_integration", {
+  const { data: rpcId, error } = await supabase.rpc("create_integration", {
     p_clinic_id: clinicId,
     p_provider: provider,
   });
   if (error) return { error: "Non è stato possibile aggiungere l'integrazione." };
+
+  let integrationId = typeof rpcId === "string" && uuidPattern.test(rpcId) ? rpcId : undefined;
+  if (!integrationId) {
+    const { data: row } = await supabase
+      .from("integrations")
+      .select("id")
+      .eq("clinic_id", clinicId)
+      .eq("provider", provider)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (row?.id && uuidPattern.test(row.id)) integrationId = row.id;
+  }
+
   revalidatePath(`/clinics/${clinicId}`);
-  return { sent: Date.now() };
+  return { sent: Date.now(), integrationId };
+}
+
+export async function startMastroW(
+  clinicId: string,
+  _state: FormState,
+  _formData: FormData,
+): Promise<FormState> {
+  const user = await requireUser();
+  if (!uuidPattern.test(clinicId)) return { error: "Studio non valido." };
+  if (!(await clinicMember(clinicId, user.id))) return { error: "Non fai parte di questo studio." };
+
+  const name = "Mastro W";
+  const color = "green";
+  const emoji = "1f9d0_facewithmonocle";
+
+  const supabase = await createClient();
+  const { data: bot, error } = await supabase
+    .from("bots")
+    .insert({ owner_user_id: user.id, name, color, shape: "rounded", emoji })
+    .select("id")
+    .single();
+
+  if (error || !bot) return { error: "Non è stato possibile avviare Mastro W." };
+
+  const { error: placeBotError } = await supabase
+    .from("bot_clinics")
+    .insert({ bot_id: bot.id, clinic_id: clinicId });
+  if (placeBotError) {
+    await supabase.from("bots").delete().eq("id", bot.id);
+    return { error: "Non è stato possibile avviare Mastro W." };
+  }
+
+  const { data: chat, error: chatError } = await supabase
+    .from("chats")
+    .insert({ title: name, color, shape: "circle", emoji: "speechbubble" })
+    .select("id")
+    .single();
+
+  if (chatError || !chat) return { error: "Mastro W è stato creato, ma la conversazione no." };
+
+  const { error: placeChatError } = await supabase
+    .from("chat_clinics")
+    .insert({ chat_id: chat.id, clinic_id: clinicId });
+  if (placeChatError) {
+    await supabase.from("chats").delete().eq("id", chat.id);
+    return { error: "Mastro W è stato creato, ma la conversazione no." };
+  }
+
+  const { error: seatError } = await supabase
+    .from("chat_participants")
+    .insert({ chat_id: chat.id, bot_id: bot.id });
+
+  if (seatError) return { error: "Mastro W è stato creato, ma non è entrato nella conversazione." };
+
+  const { error: greetError } = await supabase.from("chat_events").insert({
+    chat_id: chat.id,
+    bot_id: bot.id,
+    kind: "message",
+    payload: { body: mastroWGreeting },
+  });
+  if (greetError) return { error: "Mastro W è entrato, ma il saluto no." };
+
+  const activityAt = new Date().toISOString();
+  revalidatePath(`/clinics/${clinicId}`);
+  return {
+    created: {
+      id: chat.id,
+      title: name,
+      color,
+      emoji: "speechbubble",
+      preview: mastroWGreeting.replace(/\s+/g, " "),
+      activityAt,
+      bot: { id: bot.id, name, color, emoji },
+      messages: [
+        {
+          id: `${chat.id}-greeting`,
+          body: mastroWGreeting,
+          createdAt: activityAt,
+          mine: false,
+          botId: bot.id,
+          preferredAt: null,
+        },
+      ],
+    },
+  };
 }
 
 export async function dropIntegration(
