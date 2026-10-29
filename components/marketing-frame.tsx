@@ -3,10 +3,11 @@ import type { ReactNode } from "react";
 import { LandingMenu } from "@/components/landing-menu";
 
 export const marketingNav = [
-  { href: "/#funzioni", label: "Funzioni" },
-  { href: "/#come-funziona", label: "Come funziona" },
+  { href: "/#conformita", label: "Conformità" },
+  { href: "/#segreteria", label: "Segreteria" },
+  { href: "/#demo", label: "Demo" },
+  { href: "/whatsapp", label: "WhatsApp" },
   { href: "/prezzi", label: "Prezzi" },
-  { href: "/#domande", label: "Domande" },
 ];
 
 function Mark({ className = "h-8 w-8" }: { className?: string }) {
@@ -39,7 +40,7 @@ export function MarketingFrame({
   children: ReactNode;
   headerActions: ReactNode;
   menuActions: ReactNode;
-  current?: "prezzi";
+  current?: "prezzi" | "whatsapp";
 }) {
   return (
     <div className="marketing flex flex-1 flex-col bg-sand text-ink">
@@ -54,7 +55,9 @@ export function MarketingFrame({
           <Logo />
           <nav className="hidden items-center gap-6 text-sm text-muted lg:flex" aria-label="Sezioni">
             {marketingNav.map((item) => {
-              const active = current === "prezzi" && item.href === "/prezzi";
+              const active =
+                (current === "prezzi" && item.href === "/prezzi") ||
+                (current === "whatsapp" && item.href === "/whatsapp");
               return (
                 <Link
                   key={item.href}
@@ -90,7 +93,7 @@ export function MarketingFrame({
           <div>
             <Logo />
             <p className="mt-3 max-w-xs text-sm leading-6 text-muted">
-              L’assistente AI per studi dentistici e medici. Risponde ai pazienti e tiene l’agenda.
+              Bot AI per studi dentistici e medici, ospitati in Europa. La segreteria detta le regole.
             </p>
           </div>
           <div className="flex gap-16 text-sm">
