@@ -17,8 +17,8 @@ const requests = [
 
 const cast = [
   { id: "ginevra", emoji: "smilewoman", skinTone: undefined },
-  { id: "franco", emoji: "1f474_olderman", skinTone: "medium" as const },
-  { id: "roberta", emoji: "woman_with_head_scarf", skinTone: "medium-dark" as const },
+  { id: "franco", emoji: "smileman", skinTone: "light" as const },
+  { id: "roberta", emoji: "womanraisinghand", skinTone: "light" as const },
   { id: "sofia", emoji: "womancurlyhair", skinTone: "dark" as const },
   { id: "marco", emoji: "manbeard", skinTone: "medium-light" as const },
 ];
