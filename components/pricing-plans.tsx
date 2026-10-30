@@ -2,17 +2,6 @@ import Link from "next/link";
 
 const plans = [
   {
-    id: "base",
-    name: "Base",
-    price: "€19",
-    popular: false,
-    points: [
-      "€9,50 al mese di utilizzo AI incluso",
-      "Messaggi WhatsApp a consumo, con ricarico",
-      "Oltre la quota AI, ricariche a consumo",
-    ],
-  },
-  {
     id: "studio",
     name: "Studio",
     price: "€29",
@@ -34,6 +23,20 @@ const plans = [
       "€10 al mese di messaggi WhatsApp inclusi",
       "WhatsApp oltre la quota: al costo, senza ricarico",
       "Assistenza prioritaria",
+      "Oltre la quota AI, ricariche a consumo",
+    ],
+  },
+  {
+    id: "gruppo",
+    name: "Gruppo",
+    price: "€149",
+    popular: false,
+    points: [
+      "€74,50 al mese di utilizzo AI incluso",
+      "€20 al mese di messaggi WhatsApp inclusi",
+      "WhatsApp oltre la quota: al costo, senza ricarico",
+      "Assistenza prioritaria",
+      "Per gruppi di cliniche e studi con più sedi",
       "Oltre la quota AI, ricariche a consumo",
     ],
   },
@@ -60,9 +63,9 @@ export function PricingPlans({ cardsOnly = false }: { cardsOnly?: boolean } = {}
             ))}
           </ul>
           <p className="mt-4 text-sm leading-6 text-muted">
-            Le funzioni sono le stesse in ogni piano. Cambia il budget incluso e, solo in Clinica, l’assistenza. L’AI inclusa
-            è un importo in euro, non un numero di conversazioni: se serve di più, si compra una ricarica. Integrazione
-            ufficiale WhatsApp in arrivo. Prezzi IVA esclusa.
+            Le funzioni sono le stesse in ogni piano. Cambia il budget incluso e, in Clinica e Gruppo, l’assistenza.
+            L’AI inclusa è un importo in euro, non un numero di conversazioni: se serve di più, si compra una ricarica.
+            Integrazione ufficiale WhatsApp in arrivo. Prezzi IVA esclusa.
           </p>
         </>
       ) : null}

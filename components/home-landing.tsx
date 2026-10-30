@@ -160,11 +160,11 @@ const homeFaq = [
   },
   {
     q: "Cosa copre il credito WhatsApp?",
-    a: "Studio include €5 al mese di messaggi, Clinica €10. Oltre quella quota i messaggi si pagano al costo, senza ricarico. Nel piano Base non c’è una quota messaggi: i costi WhatsApp sono ribaltati con un ricarico fin dal primo messaggio. La quota è quella del mese. Integrazione ufficiale WhatsApp in arrivo: questi importi si riferiscono a quella.",
+    a: "Studio include €5 al mese di messaggi, Clinica €10, Gruppo €20. Oltre quella quota i messaggi si pagano al costo, senza ricarico. La quota è quella del mese. Integrazione ufficiale WhatsApp in arrivo: questi importi si riferiscono a quella.",
   },
   {
     q: "Posso cambiare piano?",
-    a: "Sì, quando vuoi. Le funzioni restano le stesse. Cambiano il canone, il budget AI incluso, la quota messaggi WhatsApp e, solo nel piano Clinica, l’assistenza prioritaria.",
+    a: "Sì, quando vuoi. Le funzioni restano le stesse. Cambiano il canone, il budget AI incluso, la quota messaggi WhatsApp e, in Clinica e Gruppo, l’assistenza prioritaria.",
   },
 ];
 

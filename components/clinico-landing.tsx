@@ -379,7 +379,7 @@ export function ClinicoLanding({
               Tre piani. Le stesse funzioni.
             </h2>
             <p className="mt-4 max-w-xl text-lg leading-8 text-muted">
-              Da €19 al mese, IVA esclusa. Cambia il budget di AI incluso e come si pagano i messaggi WhatsApp.
+              Da €29 al mese, IVA esclusa. Cambia il budget di AI incluso e come si pagano i messaggi WhatsApp.
               L’assistenza prioritaria è solo nel piano Clinica.
             </p>
             <div className="mt-12">
