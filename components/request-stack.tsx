@@ -13,6 +13,11 @@ const requests = [
   "ciao scusate sono in ritardo di 10 minuti, sto arrivando",
 ];
 
+/** Fixed row + gap so stack height never shifts when copy wraps differently. */
+const ROW_PX = 72;
+const GAP_PX = 4;
+const STACK_PX = requests.length * ROW_PX + (requests.length - 1) * GAP_PX;
+
 export function RequestStack() {
   const [order, setOrder] = useState(() => requests.map((_, index) => index));
   const [phase, setPhase] = useState<"spin" | "done" | "leaving">("spin");
@@ -86,26 +91,33 @@ export function RequestStack() {
   }, [order, reduced]);
 
   return (
-    <ul ref={listRef} className="mt-12 flex flex-col gap-1">
-      {order.map((id, index) => {
-        const leaving = !reduced && phase === "leaving" && index === 0;
-        const baseOpacity = 1 - index * 0.1;
-        return (
-          <li
-            key={id}
-            data-request={id}
-            className="flex items-center gap-3 rounded-2xl border border-line bg-white px-4 py-3 text-[15px] leading-6 transition-[transform,opacity] duration-700 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none"
-            style={{
-              opacity: leaving ? 0 : baseOpacity,
-              transform: leaving ? "translateY(12px)" : undefined,
-            }}
-          >
-            <span className="min-w-0 flex-1">{requests[id]}</span>
-            {index === 0 && !reduced ? phase === "spin" ? <Spinner /> : <Check /> : null}
-          </li>
-        );
-      })}
-    </ul>
+    <div className="relative mt-12 overflow-hidden" style={{ height: STACK_PX }} aria-live="polite">
+      <ul
+        ref={listRef}
+        className="absolute inset-x-0 top-0 flex w-full flex-col"
+        style={{ gap: GAP_PX }}
+      >
+        {order.map((id, index) => {
+          const leaving = !reduced && phase === "leaving" && index === 0;
+          const baseOpacity = 1 - index * 0.1;
+          return (
+            <li
+              key={id}
+              data-request={id}
+              className="flex items-center gap-3 overflow-hidden rounded-2xl border border-line bg-white px-4 text-[15px] leading-6 transition-[transform,opacity] duration-700 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none"
+              style={{
+                height: ROW_PX,
+                opacity: leaving ? 0 : baseOpacity,
+                transform: leaving ? "translateY(12px)" : undefined,
+              }}
+            >
+              <span className="min-w-0 flex-1 line-clamp-2">{requests[id]}</span>
+              {index === 0 && !reduced ? phase === "spin" ? <Spinner /> : <Check /> : null}
+            </li>
+          );
+        })}
+      </ul>
+    </div>
   );
 }
 
