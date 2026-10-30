@@ -6,6 +6,12 @@ import { initialClinicState, type ClinicState } from "@/lib/demo-clinic";
 type ChatRole = "user" | "assistant";
 type ChatItem = { role: ChatRole; content: string };
 
+type PendingAction = {
+  name: string;
+  label: string;
+  clinic: ClinicState;
+};
+
 const SUGGESTIONS = [
   "Sposta l'appuntamento di Rossi a giovedì",
   "Manda un promemoria WhatsApp ai pazienti di domani",
@@ -14,6 +20,27 @@ const SUGGESTIONS = [
 ];
 
 const MAX_TURNS = 15;
+
+const IMPORTANT_TOOLS = new Set(["move_appointment", "book_appointment", "draft_whatsapp_reminder"]);
+
+function actionLabel(name: string, args?: Record<string, unknown>) {
+  if (name === "move_appointment") {
+    const patient = typeof args?.patient === "string" ? args.patient : "il paziente";
+    const day = typeof args?.new_day === "string" ? args.new_day : "";
+    const time = typeof args?.new_time === "string" ? args.new_time : "";
+    return `L'assistente vuole spostare l'appuntamento di ${patient}${day ? ` a ${day}` : ""}${time ? ` ${time}` : ""}.`;
+  }
+  if (name === "book_appointment") {
+    const patient = typeof args?.patient === "string" ? args.patient : "un paziente";
+    return `L'assistente vuole prenotare un appuntamento per ${patient}.`;
+  }
+  if (name === "draft_whatsapp_reminder") {
+    const audience = typeof args?.audience === "string" ? args.audience : "i pazienti";
+    return `L'assistente vuole preparare un promemoria WhatsApp per ${audience}.`;
+  }
+  return "L'assistente chiede conferma per un'azione.";
+}
+
 
 export function DemoChat() {
   const [clinic, setClinic] = useState<ClinicState>(() => initialClinicState());
@@ -28,6 +55,10 @@ export function DemoChat() {
   const [steps, setSteps] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState<PendingAction | null>(null);
+  const clinicRef = useRef(clinic);
+  clinicRef.current = clinic;
+  const pendingRef = useRef<PendingAction | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
 
   const userTurns = useMemo(() => messages.filter((item) => item.role === "user").length, [messages]);
@@ -82,6 +113,7 @@ export function DemoChat() {
             message?: string;
             clinic?: ClinicState;
             name?: string;
+            args?: Record<string, unknown>;
           };
           try {
             event = JSON.parse(raw) as typeof event;
@@ -90,8 +122,24 @@ export function DemoChat() {
           }
           if (event.type === "step" && event.text) {
             setSteps((prev) => [...prev.slice(-4), event.text!]);
+          } else if (event.type === "tool" && event.name && IMPORTANT_TOOLS.has(event.name)) {
+            setSteps((prev) => [...prev.slice(-4), "In attesa di conferma…"]);
+            const action: PendingAction = {
+              name: event.name,
+              label: actionLabel(event.name, event.args),
+              clinic: clinicRef.current,
+            };
+            pendingRef.current = action;
+            setPending(action);
           } else if (event.type === "clinic" && event.clinic) {
-            setClinic(event.clinic);
+            const nextClinic = event.clinic;
+            if (pendingRef.current && IMPORTANT_TOOLS.has(pendingRef.current.name)) {
+              const updated = { ...pendingRef.current, clinic: nextClinic };
+              pendingRef.current = updated;
+              setPending(updated);
+            } else {
+              setClinic(nextClinic);
+            }
           } else if (event.type === "delta" && event.text) {
             assistant += event.text;
             const snapshot = assistant;
@@ -103,8 +151,14 @@ export function DemoChat() {
           } else if (event.type === "error") {
             throw new Error(event.message || "Errore demo.");
           } else if (event.type === "done" && event.clinic) {
-            setClinic(event.clinic);
-            setSteps((prev) => (prev.includes("Confermato ✓") ? prev : [...prev, "Confermato ✓"]));
+            if (pendingRef.current && IMPORTANT_TOOLS.has(pendingRef.current.name)) {
+              const updated = { ...pendingRef.current, clinic: event.clinic };
+              pendingRef.current = updated;
+              setPending(updated);
+            } else {
+              setClinic(event.clinic);
+              setSteps((prev) => (prev.includes("Confermato ✓") ? prev : [...prev, "Confermato ✓"]));
+            }
           }
         }
       }
@@ -144,9 +198,25 @@ export function DemoChat() {
     void send(input);
   }
 
+  function confirmPending() {
+    const action = pendingRef.current || pending;
+    if (!action) return;
+    setClinic(action.clinic);
+    setSteps((prev) => [...prev.filter((s) => s !== "In attesa di conferma…"), "Confermato ✓"]);
+    pendingRef.current = null;
+    setPending(null);
+  }
+
+  function cancelPending() {
+    if (!pendingRef.current && !pending) return;
+    setSteps((prev) => [...prev.filter((s) => s !== "In attesa di conferma…"), "Annullato"]);
+    pendingRef.current = null;
+    setPending(null);
+  }
+
   return (
     <div className="grid gap-4 lg:grid-cols-[minmax(0,1.15fr)_minmax(280px,0.85fr)]">
-      <div className="overflow-hidden rounded-3xl border border-sand-200 bg-white shadow-sm">
+      <div className="relative overflow-hidden rounded-3xl border border-sand-200 bg-white shadow-sm">
         <div className="flex items-center justify-between gap-3 border-b border-sand-100 px-4 py-3 sm:px-5">
           <div>
             <p className="text-sm font-semibold text-sand-950">Prova l&apos;assistente</p>
@@ -221,6 +291,38 @@ export function DemoChat() {
             {error ? <span className="text-red-600"> · {error}</span> : null}
           </p>
         </div>
+
+        {pending ? (
+          <div className="absolute inset-0 z-10 flex items-end justify-center bg-sand-950/25 p-4 sm:items-center">
+            <div className="w-full max-w-sm rounded-2xl border border-sand-200 bg-white p-5 shadow-lg">
+              <div className="flex items-start gap-3">
+                <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-violet-100 text-sm font-semibold text-violet-700">
+                  AI
+                </span>
+                <div>
+                  <p className="text-sm font-semibold text-sand-950">Conferma richiesta</p>
+                  <p className="mt-1.5 text-sm leading-relaxed text-sand-700">{pending.label}</p>
+                </div>
+              </div>
+              <div className="mt-5 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={cancelPending}
+                  className="rounded-xl border border-sand-200 bg-white px-4 py-2 text-sm font-medium text-sand-700 hover:bg-sand-50"
+                >
+                  Annulla
+                </button>
+                <button
+                  type="button"
+                  onClick={confirmPending}
+                  className="rounded-xl bg-violet-600 px-4 py-2 text-sm font-semibold text-white hover:bg-violet-500"
+                >
+                  Conferma
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
       </div>
 
       <aside className="overflow-hidden rounded-3xl border border-sand-200 bg-white shadow-sm">

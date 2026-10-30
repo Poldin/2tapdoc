@@ -227,6 +227,43 @@ export function HomeLanding({
         <DemoChat />
       </section>
 
+      <section id="controllo" className="scroll-mt-28 mx-auto max-w-[760px] px-5 py-12 sm:px-8 sm:py-16">
+        <h2 className="text-center text-2xl font-semibold tracking-tight text-sand-950 sm:text-3xl">
+          Hai il controllo su ogni azione
+        </h2>
+
+        <div className="relative mx-auto mt-8 max-w-md">
+          <div className="rounded-3xl border border-sand-200 bg-sand-50/80 p-4 shadow-sm">
+            <div className="rounded-2xl border border-sand-200 bg-white p-5 shadow-md">
+              <div className="flex items-start gap-3">
+                <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-violet-100 text-sm font-semibold text-violet-700">
+                  AI
+                </span>
+                <div>
+                  <p className="text-sm font-semibold text-sand-950">Conferma richiesta</p>
+                  <p className="mt-1.5 text-sm leading-relaxed text-sand-700">
+                    L&apos;assistente vuole spostare l&apos;appuntamento di Mario Rossi a giovedì 10:30.
+                  </p>
+                </div>
+              </div>
+              <div className="mt-5 flex justify-end gap-2">
+                <span className="rounded-xl border border-sand-200 bg-white px-4 py-2 text-sm font-medium text-sand-700">
+                  Annulla
+                </span>
+                <span className="rounded-xl bg-violet-600 px-4 py-2 text-sm font-semibold text-white">
+                  Conferma
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <p className="mx-auto mt-6 max-w-lg text-center text-sm text-sand-600 sm:text-base">
+          Ti chiediamo il permesso per ogni azione importante che chiedi di eseguire all&apos;AI.
+        </p>
+      </section>
+
+
 
       <section id="colleghi" className="scroll-mt-28 mx-auto max-w-[760px] px-5 py-12 sm:px-8 sm:py-16">
         <div className="space-y-16">
