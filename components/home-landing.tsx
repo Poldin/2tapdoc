@@ -214,6 +214,20 @@ export function HomeLanding({
         <RequestStack />
       </section>
 
+      <section id="demo" className="scroll-mt-28 mx-auto max-w-[1120px] px-5 py-10 sm:px-8 sm:py-14">
+        <div className="mb-6 max-w-2xl">
+          <p className="text-sm font-semibold uppercase tracking-wide text-violet-700">Prova l&apos;assistente</p>
+          <h2 className="mt-2 text-2xl font-semibold tracking-tight text-sand-950 sm:text-3xl">
+            Chiedi qualcosa allo Studio Dentistico Demo
+          </h2>
+          <p className="mt-2 text-sm text-sand-600 sm:text-base">
+            Sposta un appuntamento, prepara un promemoria WhatsApp o chiedi prezzi e privacy. I dati sono fittizi e niente parte davvero.
+          </p>
+        </div>
+        <DemoChat />
+      </section>
+
+
       <section id="colleghi" className="scroll-mt-28 mx-auto max-w-[760px] px-5 py-12 sm:px-8 sm:py-16">
         <div className="space-y-16">
           {colleagues.map((person) => (
@@ -270,11 +284,7 @@ export function HomeLanding({
         </ul>
       </section>
 
-      <section id="demo" className="scroll-mt-28 mx-auto max-w-[1120px] px-5 py-8 sm:px-8 sm:py-12">
-        <DemoChat />
-      </section>
-
-      <section className="relative mx-auto max-w-[1120px] px-5 py-6 sm:px-8 sm:py-10">
+            <section className="relative mx-auto max-w-[1120px] px-5 py-6 sm:px-8 sm:py-10">
         <div className="relative overflow-hidden rounded-[36px] bg-[#16141c] px-6 pt-12 pb-44 text-[#f6f3ee] sm:px-12 sm:pt-16 sm:pb-16">
           <h2 className="max-w-[12ch] text-[clamp(2.1rem,5vw,3.5rem)] leading-[1.05] font-semibold tracking-[-0.04em]">
             Scrivi ai tuoi assistenti virtuali

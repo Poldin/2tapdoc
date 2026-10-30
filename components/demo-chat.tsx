@@ -1,248 +1,279 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { CharacterEmoji } from "@/components/character-emoji";
+import { FormEvent, useMemo, useRef, useState } from "react";
+import { initialClinicState, type ClinicState } from "@/lib/demo-clinic";
 
-type Skin = "light" | "medium-light" | "medium" | "medium-dark" | "dark";
+type ChatRole = "user" | "assistant";
+type ChatItem = { role: ChatRole; content: string };
 
-const assistants = [
-  { id: "ginevra", name: "Ginevra", emoji: "smilewoman", skinTone: undefined, active: true },
-  { id: "franco", name: "Franco", emoji: "smileman", skinTone: "light" as Skin, active: false },
-  { id: "roberta", name: "Roberta", emoji: "womanraisinghand", skinTone: "light" as Skin, active: false },
-  { id: "sofia", name: "Sofia", emoji: "womancurlyhair", skinTone: "dark" as Skin, active: false },
-  { id: "marco", name: "Marco", emoji: "manbeard", skinTone: "medium-light" as Skin, active: false },
+const SUGGESTIONS = [
+  "Sposta l'appuntamento di Rossi a giovedì",
+  "Manda un promemoria WhatsApp ai pazienti di domani",
+  "Com'è gestita la privacy?",
+  "Quanto costa?",
 ];
 
-type ScriptItem =
-  | { kind: "system"; text: string }
-  | { kind: "chip"; text: string }
-  | { kind: "status"; text: string }
-  | { kind: "bubble"; from: "ginevra" | "segreteria"; text: string; reaction?: string };
-
-const script: ScriptItem[] = [
-  { kind: "system", text: "Messaggi da 🟣 Franco e 🟢 Sofia" },
-  {
-    kind: "bubble",
-    from: "ginevra",
-    text: "Franco mi ha passato 6 richieste di agenda. Due le tengo ferme: lo spostamento di giovedì della sig.ra Bianchi e il dente scheggiato di stamattina. Non scrivo al paziente finché non confermi.",
-  },
-  { kind: "status", text: "✓ Agenda → 6 richieste gestite · 2 in attesa di conferma" },
-  {
-    kind: "bubble",
-    from: "ginevra",
-    text: "Sofia ha i richiami della settimana in bozza. Restano qui, non partono da soli.",
-  },
-  { kind: "chip", text: "⏱ Promemoria creato: Richiami settimanali" },
-  {
-    kind: "bubble",
-    from: "segreteria",
-    text: "Conferma lo spostamento a venerdì alle 9:30. Per il dente scheggiato niente WhatsApp: lo chiamo io.",
-    reaction: "👍",
-  },
-  {
-    kind: "bubble",
-    from: "ginevra",
-    text: "Nessun messaggio è partito. Il testo resta in questa chat: lo invii tu.",
-  },
-];
-
-type LiveTurn = { from: "ginevra" | "segreteria"; text: string };
-
-const maxUserTurns = 8;
+const MAX_TURNS = 15;
 
 export function DemoChat() {
-  const [live, setLive] = useState<LiveTurn[]>([]);
-  const [draft, setDraft] = useState("");
-  const [pending, setPending] = useState(false);
-  const logRef = useRef<HTMLDivElement>(null);
-  const userTurns = live.filter((turn) => turn.from === "segreteria").length;
-  const closed = userTurns >= maxUserTurns;
+  const [clinic, setClinic] = useState<ClinicState>(() => initialClinicState());
+  const [messages, setMessages] = useState<ChatItem[]>([
+    {
+      role: "assistant",
+      content:
+        "Ciao! Sono la demo di Clinico per lo Studio Dentistico Demo. Prova a spostare un appuntamento, preparare un promemoria WhatsApp o chiedermi prezzi e privacy. I dati sono fittizi.",
+    },
+  ]);
+  const [input, setInput] = useState("");
+  const [steps, setSteps] = useState<string[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const scroller = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    const log = logRef.current;
-    if (!log) return;
-    log.scrollTop = log.scrollHeight;
-  }, [live, pending]);
+  const userTurns = useMemo(() => messages.filter((item) => item.role === "user").length, [messages]);
+  const capped = userTurns >= MAX_TURNS;
 
   async function send(text: string) {
-    const content = text.trim();
-    if (!content || pending || closed) return;
-    const history = [...live, { from: "segreteria" as const, text: content }];
-    setLive(history);
-    setDraft("");
-    setPending(true);
+    const trimmed = text.trim();
+    if (!trimmed || busy || capped) return;
+    setError(null);
+    setBusy(true);
+    setSteps(["Invio…"]);
+    const nextMessages: ChatItem[] = [...messages, { role: "user", content: trimmed }];
+    setMessages(nextMessages);
+    setInput("");
+    setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
+
     try {
-      const response = await fetch("/api/demo", {
+      const res = await fetch("/api/demo-chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          messages: history.map((turn) => ({
-            role: turn.from === "segreteria" ? "user" : "assistant",
-            content: turn.text,
-          })),
+          messages: nextMessages.map(({ role, content }) => ({ role, content })),
+          clinic,
         }),
       });
-      const data = (await response.json().catch(() => null)) as { reply?: unknown } | null;
-      const answer = typeof data?.reply === "string" && data.reply.trim() ? data.reply.trim() : null;
-      setLive((current) => [
-        ...current,
-        {
-          from: "ginevra",
-          text: answer ?? "In questo momento non riesco a rispondere. Riprova tra poco.",
-        },
-      ]);
-    } catch {
-      setLive((current) => [
-        ...current,
-        { from: "ginevra", text: "In questo momento non riesco a rispondere. Riprova tra poco." },
-      ]);
+
+      if (!res.ok) {
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(data.error || "Demo non disponibile al momento.");
+      }
+      if (!res.body) throw new Error("Risposta vuota dal server.");
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let assistant = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const chunks = buffer.split("\n\n");
+        buffer = chunks.pop() || "";
+        for (const chunk of chunks) {
+          const line = chunk.trim();
+          if (!line.startsWith("data:")) continue;
+          const raw = line.slice(5).trim();
+          if (!raw) continue;
+          let event: {
+            type?: string;
+            text?: string;
+            message?: string;
+            clinic?: ClinicState;
+            name?: string;
+          };
+          try {
+            event = JSON.parse(raw) as typeof event;
+          } catch {
+            continue;
+          }
+          if (event.type === "step" && event.text) {
+            setSteps((prev) => [...prev.slice(-4), event.text!]);
+          } else if (event.type === "clinic" && event.clinic) {
+            setClinic(event.clinic);
+          } else if (event.type === "delta" && event.text) {
+            assistant += event.text;
+            const snapshot = assistant;
+            setMessages((prev) => {
+              const copy = [...prev];
+              copy[copy.length - 1] = { role: "assistant", content: snapshot };
+              return copy;
+            });
+          } else if (event.type === "error") {
+            throw new Error(event.message || "Errore demo.");
+          } else if (event.type === "done" && event.clinic) {
+            setClinic(event.clinic);
+            setSteps((prev) => (prev.includes("Confermato ✓") ? prev : [...prev, "Confermato ✓"]));
+          }
+        }
+      }
+
+      if (!assistant.trim()) {
+        setMessages((prev) => {
+          const copy = [...prev];
+          copy[copy.length - 1] = {
+            role: "assistant",
+            content: "Non sono riuscita a rispondere. Riprova con una domanda più semplice.",
+          };
+          return copy;
+        });
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Qualcosa non ha funzionato. Riprova tra poco.";
+      setError(message);
+      setMessages((prev) => {
+        const copy = [...prev];
+        if (copy[copy.length - 1]?.role === "assistant" && !copy[copy.length - 1]?.content) {
+          copy[copy.length - 1] = { role: "assistant", content: message };
+        } else {
+          copy.push({ role: "assistant", content: message });
+        }
+        return copy;
+      });
     } finally {
-      setPending(false);
+      setBusy(false);
+      requestAnimationFrame(() => {
+        scroller.current?.scrollTo({ top: scroller.current.scrollHeight, behavior: "smooth" });
+      });
     }
   }
 
+  function onSubmit(event: FormEvent) {
+    event.preventDefault();
+    void send(input);
+  }
+
   return (
-    <div className="overflow-hidden rounded-[28px] bg-[#16141c] text-[#f6f3ee] shadow-[0_30px_80px_-36px_rgba(40,20,60,0.55)]">
-      <div className="flex items-center gap-2 px-4 py-3">
-        <span className="h-3 w-3 rounded-full bg-[#ff5f57]" />
-        <span className="h-3 w-3 rounded-full bg-[#febc2e]" />
-        <span className="h-3 w-3 rounded-full bg-[#28c840]" />
-      </div>
-      <div className="flex h-[34rem] border-t border-white/10 sm:h-[36rem]">
-        <aside className="flex w-14 shrink-0 flex-col items-center gap-2 border-r border-white/10 py-3 sm:w-[4.5rem]">
-          {assistants.map((person) => (
-            <span
-              key={person.id}
-              className={`grid h-11 w-11 place-items-center rounded-2xl ${person.active ? "bg-violet/30" : ""}`}
-              title={person.name}
-            >
-              <CharacterEmoji id={person.emoji} skinTone={person.skinTone} size={30} />
-            </span>
-          ))}
-          <div className="mt-auto flex flex-col items-center gap-2 pb-1">
-            <button
-              type="button"
-              aria-label="Nuova chat"
-              className="grid h-9 w-9 place-items-center rounded-full border border-white/15 text-lg text-white/70"
-            >
-              +
-            </button>
-            <span className="grid h-9 w-9 place-items-center rounded-full bg-violet text-[11px] font-semibold text-white">
-              SM
-            </span>
+    <div className="grid gap-4 lg:grid-cols-[minmax(0,1.15fr)_minmax(280px,0.85fr)]">
+      <div className="overflow-hidden rounded-3xl border border-sand-200 bg-white shadow-sm">
+        <div className="flex items-center justify-between gap-3 border-b border-sand-100 px-4 py-3 sm:px-5">
+          <div>
+            <p className="text-sm font-semibold text-sand-950">Prova l&apos;assistente</p>
+            <p className="text-xs text-sand-500">Studio Dentistico Demo · dati fittizi</p>
           </div>
-        </aside>
-        <div className="flex min-w-0 flex-1 flex-col">
-          <div className="flex items-center justify-between gap-3 border-b border-white/10 px-3 py-2.5 sm:px-4">
-            <div className="flex min-w-0 items-center gap-2">
-              <CharacterEmoji id="smilewoman" size={28} />
-              <p className="truncate text-sm font-medium">Ginevra</p>
+          <span className="rounded-full bg-violet-50 px-2.5 py-1 text-[11px] font-medium text-violet-700">
+            Demo live
+          </span>
+        </div>
+
+        <div ref={scroller} className="flex max-h-[420px] min-h-[280px] flex-col gap-3 overflow-y-auto px-4 py-4 sm:px-5">
+          {messages.map((item, index) => (
+            <div
+              key={`${item.role}-${index}`}
+              className={`max-w-[92%] rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed ${
+                item.role === "user"
+                  ? "ml-auto bg-violet-600 text-white"
+                  : "mr-auto border border-sand-100 bg-sand-50 text-sand-900"
+              }`}
+            >
+              {item.content || (busy && index === messages.length - 1 ? "…" : "")}
             </div>
-            <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true" className="shrink-0 text-white/70">
-              <circle cx="9" cy="9" r="7.25" fill="none" stroke="currentColor" strokeWidth="1.4" />
-              <circle cx="9" cy="6.2" r="0.8" fill="currentColor" />
-              <path d="M9 8.2v4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-            </svg>
-          </div>
-          <div ref={logRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-4 sm:px-4" aria-live="polite">
-            {script.map((item, index) => (
-              <ScriptRow key={`${item.kind}-${index}`} item={item} />
-            ))}
-            {live.map((turn, index) => (
-              <Bubble key={`live-${index}`} from={turn.from} text={turn.text} />
-            ))}
-            {pending ? <p className="text-xs text-white/45">Ginevra sta scrivendo…</p> : null}
-          </div>
-          <form
-            className="flex items-center gap-2 border-t border-white/10 px-3 py-3 sm:px-4"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void send(draft);
-            }}
-          >
-            <button
-              type="button"
-              aria-label="Allega"
-              className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-lg text-white/70"
-            >
-              +
-            </button>
-            <label className="min-w-0 flex-1">
-              <span className="sr-only">Messaggio per Ginevra</span>
-              <input
-                value={draft}
-                maxLength={500}
-                disabled={pending || closed}
-                onChange={(event) => setDraft(event.target.value)}
-                placeholder={closed ? "Demo conclusa" : "Scrivi a Ginevra"}
-                className="h-10 w-full rounded-full bg-white/10 px-4 text-sm text-[#f6f3ee] outline-none placeholder:text-white/40 focus:bg-white/15 disabled:opacity-60"
-              />
-            </label>
-            {draft.trim() ? (
-              <button
-                type="submit"
-                disabled={pending || closed}
-                aria-label="Invia"
-                className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-violet text-white disabled:opacity-50"
+          ))}
+        </div>
+
+        {steps.length > 0 ? (
+          <div className="flex flex-wrap gap-2 border-t border-sand-100 px-4 py-2.5 sm:px-5">
+            {steps.map((step, index) => (
+              <span
+                key={`${step}-${index}`}
+                className="rounded-full bg-sand-100 px-2.5 py-1 text-[11px] font-medium text-sand-700"
               >
-                <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
-                  <path d="M2 8h12M9 3l5 5-5 5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
+                {step}
+              </span>
+            ))}
+          </div>
+        ) : null}
+
+        <div className="border-t border-sand-100 px-4 py-3 sm:px-5">
+          <div className="mb-3 flex flex-wrap gap-2">
+            {SUGGESTIONS.map((chip) => (
+              <button
+                key={chip}
+                type="button"
+                disabled={busy || capped}
+                onClick={() => void send(chip)}
+                className="rounded-full border border-sand-200 bg-white px-3 py-1.5 text-left text-xs text-sand-700 transition hover:border-violet-300 hover:text-violet-700 disabled:opacity-50"
+              >
+                {chip}
               </button>
-            ) : (
-              <button type="button" aria-label="Microfono" className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-white/70">
-                <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
-                  <rect x="6" y="1.5" width="4" height="8" rx="2" fill="none" stroke="currentColor" strokeWidth="1.4" />
-                  <path d="M4 7.5a4 4 0 0 0 8 0M8 11.5V14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-                </svg>
-              </button>
-            )}
+            ))}
+          </div>
+          <form onSubmit={onSubmit} className="flex gap-2">
+            <input
+              value={input}
+              onChange={(event) => setInput(event.target.value)}
+              maxLength={500}
+              disabled={busy || capped}
+              placeholder={capped ? "Limite demo raggiunto — ricarica la pagina" : "Scrivi un messaggio…"}
+              className="min-w-0 flex-1 rounded-2xl border border-sand-200 bg-sand-50 px-3.5 py-2.5 text-sm text-sand-900 outline-none ring-violet-400 placeholder:text-sand-400 focus:ring-2 disabled:opacity-60"
+            />
+            <button
+              type="submit"
+              disabled={busy || capped || !input.trim()}
+              className="rounded-2xl bg-violet-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-violet-500 disabled:opacity-50"
+            >
+              Invia
+            </button>
           </form>
+          <p className="mt-2 text-[11px] text-sand-500">
+            Demo con dati fittizi · max {MAX_TURNS} messaggi per sessione
+            {error ? <span className="text-red-600"> · {error}</span> : null}
+          </p>
         </div>
       </div>
-    </div>
-  );
-}
 
-function ScriptRow({ item }: { item: ScriptItem }) {
-  if (item.kind === "system") {
-    return <p className="text-center text-xs text-white/50">{item.text}</p>;
-  }
-  if (item.kind === "chip") {
-    return (
-      <p className="mx-auto w-fit rounded-full bg-white/10 px-3 py-1 text-xs text-white/80">{item.text}</p>
-    );
-  }
-  if (item.kind === "status") {
-    return <p className="text-xs leading-5 text-violet">{item.text}</p>;
-  }
-  return <Bubble from={item.from} text={item.text} reaction={item.reaction} />;
-}
+      <aside className="overflow-hidden rounded-3xl border border-sand-200 bg-white shadow-sm">
+        <div className="border-b border-sand-100 px-4 py-3 sm:px-5">
+          <p className="text-sm font-semibold text-sand-950">Agenda demo</p>
+          <p className="text-xs text-sand-500">Si aggiorna quando l&apos;assistente usa i tool</p>
+        </div>
+        <div className="space-y-3 px-4 py-4 sm:px-5">
+          <div className="space-y-2">
+            {clinic.appointments.map((item) => (
+              <div key={item.id} className="rounded-2xl border border-sand-100 bg-sand-50 px-3 py-2.5">
+                <div className="flex items-start justify-between gap-2">
+                  <p className="text-sm font-medium text-sand-950">{item.patient}</p>
+                  <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-medium text-violet-700">
+                    {item.type}
+                  </span>
+                </div>
+                <p className="mt-1 text-xs capitalize text-sand-600">
+                  {item.day} · {item.time}
+                </p>
+              </div>
+            ))}
+          </div>
 
-function Bubble({
-  from,
-  text,
-  reaction,
-}: {
-  from: "ginevra" | "segreteria";
-  text: string;
-  reaction?: string;
-}) {
-  const mine = from === "segreteria";
-  return (
-    <div className={`flex ${mine ? "justify-end" : "justify-start"}`}>
-      <div className={`relative max-w-[85%] ${reaction ? "mb-2" : ""}`}>
-        <p
-          className={`rounded-2xl px-3 py-2 text-sm leading-6 ${
-            mine ? "rounded-br-md bg-[#f7f4f1] text-[#1c1915]" : "rounded-bl-md bg-[#322e3a] text-[#f6f3ee]"
-          }`}
-        >
-          {text}
-        </p>
-        {reaction ? (
-          <span className="absolute -bottom-2.5 right-3 rounded-full bg-[#3a3544] px-1.5 py-0.5 text-xs shadow">{reaction}</span>
-        ) : null}
-      </div>
+          {clinic.drafts.length > 0 ? (
+            <div>
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-sand-500">Bozze WhatsApp</p>
+              <div className="space-y-2">
+                {clinic.drafts.map((draft) => (
+                  <div key={draft.id} className="rounded-2xl border border-violet-100 bg-violet-50/60 px-3 py-2.5">
+                    <p className="text-xs font-medium text-violet-800">A: {draft.audience}</p>
+                    <p className="mt-1 text-xs text-sand-700">{draft.text}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          {clinic.recalls.length > 0 ? (
+            <div>
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-sand-500">Richiami</p>
+              <div className="space-y-2">
+                {clinic.recalls.map((item) => (
+                  <div key={`${item.patient}-${item.reason}`} className="rounded-2xl border border-sand-100 bg-white px-3 py-2.5">
+                    <p className="text-sm font-medium text-sand-900">{item.patient}</p>
+                    <p className="text-xs text-sand-600">{item.reason}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </div>
+      </aside>
     </div>
   );
 }
