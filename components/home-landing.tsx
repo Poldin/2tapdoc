@@ -308,9 +308,9 @@ export function HomeLanding({
       <section id="prezzi" className="scroll-mt-28 bg-sand-deep">
         <div className="mx-auto max-w-[1120px] px-5 py-16 sm:px-8 sm:py-24">
           <h2 className="text-[clamp(1.8rem,4vw,2.8rem)] leading-snug font-semibold tracking-[-0.035em]">
-            Prezzi
+            Scegli il piano per te
           </h2>
-          <p className="mt-3 text-base leading-7 text-muted sm:text-lg">Disdici quando vuoi</p>
+          <p className="mt-3 text-base leading-7 text-muted sm:text-lg">Disdici quando vuoi.</p>
           <div className="mt-10">
             <PricingPlans cardsOnly />
           </div>
