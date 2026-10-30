@@ -203,7 +203,7 @@ export function DemoChat() {
 
   return (
     <div className="relative mx-auto max-w-2xl">
-      <div ref={scroller} className="flex max-h-[520px] min-h-[220px] flex-col gap-4 overflow-y-auto py-1">
+      <div ref={scroller} className="flex min-h-[480px] max-h-[70vh] flex-col gap-4 overflow-y-auto py-1 sm:min-h-[560px] sm:max-h-[720px]">
         {messages.map((item, index) => {
           if (item.role === "assistant") {
             return (
@@ -233,11 +233,10 @@ export function DemoChat() {
                 type="button"
                 disabled={busy || capped}
                 onClick={() => void send(chip)}
-                className="inline-flex max-w-full items-center gap-2 rounded-full border border-sand-200/80 bg-sand-50/80 px-3.5 py-2 text-left text-sm font-normal text-sand-500 transition hover:border-sand-300 hover:bg-sand-100 hover:text-sand-700 disabled:opacity-50"
+                className="inline-flex max-w-full items-center rounded-full border border-sand-100 bg-sand-50/60 px-3.5 py-2 text-left text-sm font-normal text-sand-500 transition hover:border-sand-200/70 hover:bg-sand-100/80 hover:text-sand-700 disabled:opacity-50"
               >
                 <span className="min-w-0 flex-1">{chip}</span>
-                <span aria-hidden className="shrink-0 text-sand-400">→</span>
-              </button>
+</button>
             ))}
           </div>
         ) : null}
