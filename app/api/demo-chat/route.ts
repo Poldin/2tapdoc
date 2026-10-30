@@ -93,6 +93,12 @@ export async function POST(req: Request) {
   let payload: {
     messages?: { role: string; content: string }[];
     clinic?: ClinicState;
+    confirmation?: {
+      confirmed?: boolean;
+      action?: string;
+      args?: Record<string, unknown>;
+      label?: string;
+    };
   };
   try {
     payload = await req.json();
@@ -112,6 +118,88 @@ export async function POST(req: Request) {
       }),
       { status: 400, headers: { "Content-Type": "application/json" } },
     );
+  }
+
+  let clinic: ClinicState =
+    payload.clinic && Array.isArray(payload.clinic.appointments)
+      ? payload.clinic
+      : initialClinicState();
+
+  // Follow-up after Conferma / Annulla on an important tool action
+  if (payload.confirmation && typeof payload.confirmation.confirmed === "boolean") {
+    if (!process.env.MISTRAL_API_KEY) {
+      return new Response(
+        JSON.stringify({ error: "Al momento non riesco a rispondere. Riprova tra poco." }),
+        { status: 503, headers: { "Content-Type": "application/json" } },
+      );
+    }
+
+    const confirmed = payload.confirmation.confirmed;
+    const action = String(payload.confirmation.action || "azione");
+    const label = String(payload.confirmation.label || "");
+    const args = payload.confirmation.args && typeof payload.confirmation.args === "object"
+      ? payload.confirmation.args
+      : {};
+
+    const history: MistralMessage[] = [
+      { role: "system", content: SYSTEM_PROMPT },
+      ...incoming
+        .filter((item) => item.role === "user" || item.role === "assistant")
+        .slice(-24)
+        .map((item) => ({
+          role: item.role,
+          content: String(item.content ?? "").slice(0, MAX_MESSAGE_CHARS),
+        })),
+      {
+        role: "user",
+        content: confirmed
+          ? `[Conferma UI] L'utente ha premuto Conferma per l'azione "${action}". Dettagli: ${JSON.stringify({ label, args }).slice(0, 400)}. Scrivi UNA breve risposta (1-2 frasi) che conferma l'esito in modo umano (es. WhatsApp inviato / appuntamento spostato). Non chiamare tool. Non ripetere il popup.`
+          : `[Conferma UI] L'utente ha premuto Annulla per l'azione "${action}". Dettagli: ${JSON.stringify({ label, args }).slice(0, 400)}. Scrivi UNA breve risposta (1-2 frasi) che riconosce l'annullamento e offre di modificare. Non chiamare tool. Non ripetere il popup.`,
+      },
+    ];
+
+    const stream = new ReadableStream({
+      async start(controller) {
+        const enc = new TextEncoder();
+        const push = (data: unknown) => controller.enqueue(enc.encode(sse(data)));
+        try {
+          const res = await mistralChat({
+            messages: history,
+            temperature: 0.4,
+            max_tokens: 220,
+            stream: false,
+          });
+          const json = (await res.json()) as {
+            choices?: { message?: { content?: string | null } }[];
+          };
+          const text =
+            (json.choices?.[0]?.message?.content || "").trim() ||
+            (confirmed
+              ? "Fatto, azione confermata."
+              : "Ok, azione annullata. Dimmi se vuoi cambiare qualcosa.");
+          const chunkSize = 24;
+          for (let i = 0; i < text.length; i += chunkSize) {
+            push({ type: "delta", text: text.slice(i, i + chunkSize) });
+          }
+          push({ type: "done", clinic });
+          controller.close();
+        } catch {
+          push({
+            type: "error",
+            message: "Qualcosa non ha funzionato. Riprova tra poco.",
+          });
+          controller.close();
+        }
+      },
+    });
+
+    return new Response(stream, {
+      headers: {
+        "Content-Type": "text/event-stream; charset=utf-8",
+        "Cache-Control": "no-cache, no-transform",
+        Connection: "keep-alive",
+      },
+    });
   }
 
   const last = incoming[incoming.length - 1];
@@ -142,11 +230,6 @@ export async function POST(req: Request) {
       { status: 503, headers: { "Content-Type": "application/json" } },
     );
   }
-
-  let clinic: ClinicState =
-    payload.clinic && Array.isArray(payload.clinic.appointments)
-      ? payload.clinic
-      : initialClinicState();
 
   const history: MistralMessage[] = [
     { role: "system", content: SYSTEM_PROMPT },

@@ -12,6 +12,7 @@ type PendingAction = {
   name: string;
   label: string;
   clinic: ClinicState;
+  args?: Record<string, unknown>;
 };
 
 const OPENING = "Ciao, sono Ginevra. Come posso aiutarti?";
@@ -42,6 +43,28 @@ function actionLabel(name: string, args?: Record<string, unknown>) {
     return `Ginevra vuole preparare un messaggio WhatsApp per ${audience}.`;
   }
   return "Ginevra chiede conferma per un'azione.";
+}
+
+function followUpFallback(action: PendingAction, confirmed: boolean) {
+  const args = action.args || {};
+  if (action.name === "draft_whatsapp_reminder") {
+    const who = typeof args.audience === "string" && args.audience ? args.audience : "la paziente";
+    return confirmed
+      ? `Fatto! Ho inviato il promemoria WhatsApp a **${who}**.`
+      : "Ok, nessun messaggio inviato. Vuoi che lo modifichi?";
+  }
+  if (action.name === "move_appointment") {
+    const who = typeof args.patient === "string" && args.patient ? args.patient : "il paziente";
+    const day = typeof args.new_day === "string" ? args.new_day : "";
+    const time = typeof args.new_time === "string" ? args.new_time : "";
+    return confirmed
+      ? `Fatto! Ho spostato l'appuntamento di **${who}**${day ? ` a ${day}` : ""}${time ? ` alle ${time}` : ""}.`
+      : "Ok, l'appuntamento resta com'era. Vuoi proporre un altro orario?";
+  }
+  if (action.name === "book_appointment") {
+    return confirmed ? "Fatto! Appuntamento prenotato." : "Ok, nessuna prenotazione fatta. Vuoi cambiare qualcosa?";
+  }
+  return confirmed ? "Fatto, azione confermata." : "Ok, azione annullata.";
 }
 
 export function DemoChat() {
@@ -119,6 +142,7 @@ export function DemoChat() {
               name: event.name,
               label: actionLabel(event.name, event.args),
               clinic: clinicRef.current,
+              args: event.args,
             };
             pendingRef.current = action;
             setPending(action);
@@ -187,22 +211,91 @@ export function DemoChat() {
     void send(input);
   }
 
+  async function followUp(action: PendingAction, confirmed: boolean) {
+    setBusy(true);
+    setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
+    const fallback = followUpFallback(action, confirmed);
+    let text = "";
+    try {
+      const res = await fetch("/api/demo-chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: messages.map(({ role, content }) => ({ role, content })),
+          clinic: confirmed ? action.clinic : clinicRef.current,
+          confirmation: {
+            confirmed,
+            action: action.name,
+            args: action.args || {},
+            label: action.label,
+          },
+        }),
+      });
+      if (!res.ok || !res.body) throw new Error("followup failed");
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const chunks = buffer.split("\n\n");
+        buffer = chunks.pop() || "";
+        for (const chunk of chunks) {
+          const line = chunk.trim();
+          if (!line.startsWith("data:")) continue;
+          try {
+            const event = JSON.parse(line.slice(5).trim()) as { type?: string; text?: string };
+            if (event.type === "delta" && event.text) {
+              text += event.text;
+              const snapshot = text;
+              setMessages((prev) => {
+                const copy = [...prev];
+                copy[copy.length - 1] = { role: "assistant", content: snapshot };
+                return copy;
+              });
+            } else if (event.type === "error") {
+              throw new Error("followup error");
+            }
+          } catch (err) {
+            if (err instanceof Error && err.message === "followup error") throw err;
+          }
+        }
+      }
+      if (!text.trim()) throw new Error("empty");
+    } catch {
+      setMessages((prev) => {
+        const copy = [...prev];
+        copy[copy.length - 1] = { role: "assistant", content: fallback };
+        return copy;
+      });
+    } finally {
+      setBusy(false);
+      requestAnimationFrame(() => {
+        scroller.current?.scrollTo({ top: scroller.current.scrollHeight, behavior: "smooth" });
+      });
+    }
+  }
+
   function confirmPending() {
     const action = pendingRef.current || pending;
     if (!action) return;
     setClinic(action.clinic);
     pendingRef.current = null;
     setPending(null);
+    void followUp(action, true);
   }
 
   function cancelPending() {
-    if (!pendingRef.current && !pending) return;
+    const action = pendingRef.current || pending;
+    if (!action) return;
     pendingRef.current = null;
     setPending(null);
+    void followUp(action, false);
   }
 
   return (
-    <div className="relative mx-auto max-w-2xl">
+    <div className="relative mx-auto max-w-2xl rounded-3xl border border-black/[0.03] bg-sand-50/70 p-3 sm:p-5">
       <div ref={scroller} className="flex min-h-[480px] max-h-[70vh] flex-col gap-4 overflow-y-auto py-1 sm:min-h-[560px] sm:max-h-[720px]">
         {messages.map((item, index) => {
           if (item.role === "assistant") {
