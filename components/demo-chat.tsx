@@ -209,7 +209,7 @@ export function DemoChat() {
             return (
               <div key={`a-${index}`} className="flex items-start gap-3">
                 <CharacterEmoji id="smilewoman" size={36} animated={false} />
-                <div className="max-w-[85%] rounded-2xl rounded-tl-md bg-sand-100/90 px-3.5 py-2.5 text-sm leading-relaxed text-sand-900">
+                <div className="max-w-[85%] rounded-2xl rounded-tl-md bg-white px-3.5 py-2.5 text-sm leading-relaxed text-sand-900 shadow-sm">
                   {item.content ? <Markdown source={item.content} /> : busy && index === messages.length - 1 ? "…" : null}
                 </div>
               </div>
@@ -233,12 +233,10 @@ export function DemoChat() {
                 type="button"
                 disabled={busy || capped}
                 onClick={() => void send(chip)}
-                className="inline-flex max-w-full items-center gap-2 rounded-full border border-violet-300 bg-transparent px-3.5 py-2 text-left text-sm font-medium text-violet-700 transition hover:border-violet-400 hover:bg-violet-50 hover:text-violet-800 disabled:opacity-50"
+                className="inline-flex max-w-full items-center gap-2 rounded-full border border-sand-200/80 bg-sand-50/80 px-3.5 py-2 text-left text-sm font-normal text-sand-500 transition hover:border-sand-300 hover:bg-sand-100 hover:text-sand-700 disabled:opacity-50"
               >
                 <span className="min-w-0 flex-1">{chip}</span>
-                <span aria-hidden className="shrink-0 text-violet-500">
-                  →
-                </span>
+                <span aria-hidden className="shrink-0 text-sand-400">→</span>
               </button>
             ))}
           </div>

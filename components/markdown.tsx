@@ -15,6 +15,20 @@ import type { ReactNode } from "react";
 
 const safeUrl = (href: string) => /^(https?:\/\/|mailto:)/i.test(href);
 
+/** Models sometimes wrap CF/codes as `**CODE**` — show the bare code in the pill. */
+function cleanCodeText(value: string) {
+  let text = value.trim();
+  // Repeatedly strip wrapping bold/italic/strike markers
+  for (let i = 0; i < 3; i += 1) {
+    const wrapped = text.match(/^(\*\*\*|___|\*\*|__|\*|_|~~)([\s\S]+)\1$/);
+    if (!wrapped) break;
+    text = wrapped[2].trim();
+  }
+  // Also drop leftover ** pairs that only wrap the whole token
+  text = text.replace(/^\*\*([^*]+)\*\*$/g, "$1");
+  return text;
+}
+
 function parseInline(text: string, keyPrefix: string): ReactNode[] {
   const nodes: ReactNode[] = [];
   let rest = text;
@@ -43,7 +57,7 @@ function parseInline(text: string, keyPrefix: string): ReactNode[] {
             key={key()}
             className="rounded-md bg-[color-mix(in_srgb,currentColor_14%,transparent)] px-1 py-0.5 font-mono text-[0.85em]"
           >
-            {rest.slice(fence.length, end)}
+            {cleanCodeText(rest.slice(fence.length, end))}
           </code>,
         );
         rest = rest.slice(end + fence.length);
@@ -179,7 +193,7 @@ export function Markdown({ source, lead }: { source: string; lead?: ReactNode })
           className="overflow-x-auto rounded-xl bg-[color-mix(in_srgb,currentColor_10%,transparent)] p-3 font-mono text-xs leading-5"
         >
           {takeLead()}
-          <code>{code.join("\n")}</code>
+          <code>{cleanCodeText(code.join("\n"))}</code>
         </pre>,
       );
       continue;

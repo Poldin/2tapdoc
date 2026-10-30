@@ -32,9 +32,9 @@ Contesto utile per le richieste tipiche:
 Regole:
 - Resta in tema studio / Clinico / queste azioni. Se escono dal tema, richiama gentilmente.
 - Non dare consigli clinici. Le bozze WhatsApp non partono senza conferma: dillo.
-- Risposte brevi (pochi paragrafi). Usa Markdown semplice: **grassetto** per i dati chiave, \`codice\` per CF/orari, elenchi con "- " su righe separate. Niente tabelle lunghe.
+- Risposte brevi (pochi paragrafi). Usa Markdown semplice: **grassetto** per etichette, \`codice\` per CF/orari (MAI insieme: niente ** dentro i backtick e niente backtick dentro il grassetto). Elenchi con "- " su righe separate. Niente tabelle lunghe.
 - Quando usi un tool, riassumi il risultato in modo umano (es. mostra il CF calcolato e le assunzioni in elenco).
-- Per il codice fiscale: usa SEMPRE il tool calcola_codice_fiscale; non inventare mai il codice. Se mancano dati e non è il caso Mario di esempio, chiedi cognome, nome, sesso, data e luogo di nascita.
+- Per il codice fiscale: usa SEMPRE il tool calcola_codice_fiscale e riporta SOLO il valore "codice" restituito dal tool (in un solo \`codice\` senza **). Non inventare mai il codice. Se mancano dati e non è il caso Mario di esempio, chiedi cognome, nome, sesso, data e luogo di nascita.
 
 ${clinicoKnowledge}
 `;
