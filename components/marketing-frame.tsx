@@ -101,6 +101,15 @@ export function MarketingFrame({
                 Crea un account
               </Link>
             </div>
+          <div className="flex flex-col gap-2">
+              <p className="font-medium">Legale</p>
+              <Link href="/privacy" className="text-muted hover:text-ink">
+                Privacy
+              </Link>
+              <Link href="/termini" className="text-muted hover:text-ink">
+                Termini e condizioni
+              </Link>
+            </div>
           </div>
         </div>
         <div className="mx-auto flex max-w-[1120px] items-center justify-between px-5 pb-8 text-xs text-muted sm:px-8">

@@ -9,8 +9,8 @@ const plans = [
     billing: "Gratis, per sempre",
     cta: "Inizia gratis",
     points: [
-      "Per provare: uso dell’AI e funzionalità limitate",
-      "Ideale per conoscere Clinico senza impegno",
+      "uso dell’AI e funzionalità limitate",
+      "ideale per conoscere Clinico",
     ],
   },
   {
