@@ -1,3 +1,9 @@
+import {
+  calcolaCodiceFiscaleTool,
+  computeCodiceFiscale,
+  executeCalcolaCodiceFiscale,
+} from "@/lib/codice-fiscale";
+
 export type Appointment = {
   id: string;
   patient: string;
@@ -46,87 +52,16 @@ export const initialClinicState = (): ClinicState => ({
   recalls: [],
 });
 
-const MONTH_CODES = ["A", "B", "C", "D", "E", "H", "L", "M", "P", "R", "S", "T"] as const;
-
-const ODD_MAP: Record<string, number> = {
-  "0": 1, "1": 0, "2": 5, "3": 7, "4": 9, "5": 13, "6": 15, "7": 17, "8": 19, "9": 21,
-  A: 1, B: 0, C: 5, D: 7, E: 9, F: 13, G: 15, H: 17, I: 19, J: 21, K: 2, L: 4, M: 18,
-  N: 20, O: 11, P: 3, Q: 6, R: 8, S: 12, T: 14, U: 16, V: 10, W: 22, X: 25, Y: 24, Z: 23,
-};
-const EVEN_MAP: Record<string, number> = {
-  "0": 0, "1": 1, "2": 2, "3": 3, "4": 4, "5": 5, "6": 6, "7": 7, "8": 8, "9": 9,
-  A: 0, B: 1, C: 2, D: 3, E: 4, F: 5, G: 6, H: 7, I: 8, J: 9, K: 10, L: 11, M: 12,
-  N: 13, O: 14, P: 15, Q: 16, R: 17, S: 18, T: 19, U: 20, V: 21, W: 22, X: 23, Y: 24, Z: 25,
-};
-const CHECK_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-
-function onlyLetters(value: string) {
-  return value
-    .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
-    .toUpperCase()
-    .replace(/[^A-Z]/g, "");
-}
-
-function consonants(value: string) {
-  return onlyLetters(value).replace(/[AEIOU]/g, "");
-}
-
-function vowels(value: string) {
-  return onlyLetters(value).replace(/[^AEIOU]/g, "");
-}
-
-function encodeSurname(surname: string) {
-  return (consonants(surname) + vowels(surname) + "XXX").slice(0, 3);
-}
-
-function encodeName(name: string) {
-  const cons = consonants(name);
-  const raw = cons.length >= 4 ? cons[0] + cons[2] + cons[3] : cons + vowels(name) + "XXX";
-  return raw.slice(0, 3);
-}
-
-function checkChar(partial: string) {
-  let sum = 0;
-  for (let i = 0; i < partial.length; i += 1) {
-    const ch = partial[i];
-    sum += i % 2 === 0 ? ODD_MAP[ch] ?? 0 : EVEN_MAP[ch] ?? 0;
-  }
-  return CHECK_CHARS[sum % 26];
-}
-
-/** Fictional defaults for "Mario" when the user doesn't supply full anagrafica. */
+/** Fictional defaults for the landing "Mario" suggestion when anagrafica is incomplete. */
 export const MARIO_DEFAULTS = {
-  firstName: "Mario",
-  lastName: "Rossi",
-  sex: "M" as const,
-  birthDay: 15,
-  birthMonth: 3,
-  birthYear: 1985,
-  birthPlace: "Roma",
-  cadastralCode: "H501",
+  cognome: "Rossi",
+  nome: "Mario",
+  sesso: "M" as const,
+  dataNascita: "1985-03-15",
+  luogoNascita: "Roma",
 };
 
-export function computeCodiceFiscale(input: {
-  firstName: string;
-  lastName: string;
-  sex: "M" | "F";
-  birthDay: number;
-  birthMonth: number;
-  birthYear: number;
-  cadastralCode: string;
-}) {
-  const surname = encodeSurname(input.lastName);
-  const name = encodeName(input.firstName);
-  const yy = String(input.birthYear).slice(-2).padStart(2, "0");
-  const mm = MONTH_CODES[input.birthMonth - 1] ?? "A";
-  let day = input.birthDay;
-  if (input.sex === "F") day += 40;
-  const dd = String(day).padStart(2, "0");
-  const place = onlyLetters(input.cadastralCode).slice(0, 4).padEnd(4, "X");
-  const partial = `${surname}${name}${yy}${mm}${dd}${place}`;
-  return partial + checkChar(partial);
-}
+export { computeCodiceFiscale };
 
 export const mistralTools = [
   {
@@ -142,7 +77,7 @@ export const mistralTools = [
     function: {
       name: "move_appointment",
       description:
-        "Sposta un appuntamento. Per il figlio di Elena usa patient='Galli Luca' oppure 'figlio di Elena'.",
+        "Sposta un appuntamento. Per il figlio di Elena usa patient='Galli Luca' oppure 'figlio di Elena'. Se l'utente non indica giorno/ora, proponi giovedì 16:30 e chiama subito questo tool con quei valori (la UI chiederà conferma).",
       parameters: {
         type: "object",
         properties: {
@@ -191,32 +126,7 @@ export const mistralTools = [
       },
     },
   },
-  {
-    type: "function",
-    function: {
-      name: "calculate_codice_fiscale",
-      description:
-        "Calcola un codice fiscale italiano. Se mancano dati per Mario, usa i default fittizi (Rossi Mario, M, 15/03/1985, Roma H501) e segnala le assunzioni.",
-      parameters: {
-        type: "object",
-        properties: {
-          first_name: { type: "string" },
-          last_name: { type: "string" },
-          sex: { type: "string", description: "M o F" },
-          birth_day: { type: "number" },
-          birth_month: { type: "number" },
-          birth_year: { type: "number" },
-          birth_place: { type: "string" },
-          cadastral_code: { type: "string", description: "Codice catastale comune, es. H501 Roma" },
-          use_mario_defaults: {
-            type: "boolean",
-            description: "true se l'utente chiede il CF di Mario senza altri dati",
-          },
-        },
-        additionalProperties: false,
-      },
-    },
-  },
+  calcolaCodiceFiscaleTool,
   {
     type: "function",
     function: {
@@ -307,7 +217,7 @@ export function applyDemoTool(
       type: String(args.type ?? "Visita"),
     };
     clinic.appointments.push(next);
-    return { step: `Confermato ✓ Prenotato ${next.patient}`, result: { ok: true, appointment: next }, clinic };
+    return { step: `Confermato — Prenotato ${next.patient}`, result: { ok: true, appointment: next }, clinic };
   }
 
   if (name === "draft_whatsapp_reminder") {
@@ -335,52 +245,107 @@ export function applyDemoTool(
     };
   }
 
-  if (name === "calculate_codice_fiscale") {
+  if (name === "calcola_codice_fiscale" || name === "calculate_codice_fiscale") {
     const assumptions: string[] = [];
-    const useDefaults = args.use_mario_defaults === true || (!args.last_name && !args.first_name);
-    const firstName = String(args.first_name ?? (useDefaults ? MARIO_DEFAULTS.firstName : "")).trim() || MARIO_DEFAULTS.firstName;
-    const lastName = String(args.last_name ?? (useDefaults ? MARIO_DEFAULTS.lastName : "")).trim() || MARIO_DEFAULTS.lastName;
-    if (!args.first_name || !args.last_name || useDefaults) {
-      assumptions.push("Nome e cognome: Mario Rossi (esempio)");
+    const looksLikeMario =
+      (typeof args.nome === "string" && /^mario$/i.test(args.nome.trim()) && !args.cognome) ||
+      (typeof args.first_name === "string" && /^mario$/i.test(args.first_name.trim())) ||
+      args.use_mario_defaults === true;
+
+    let cognome =
+      (typeof args.cognome === "string" && args.cognome) ||
+      (typeof args.last_name === "string" && args.last_name) ||
+      "";
+    let nome =
+      (typeof args.nome === "string" && args.nome) ||
+      (typeof args.first_name === "string" && args.first_name) ||
+      "";
+    let sesso =
+      (typeof args.sesso === "string" && args.sesso) ||
+      (typeof args.sex === "string" && args.sex) ||
+      "";
+    let dataNascita =
+      (typeof args.data_nascita === "string" && args.data_nascita) ||
+      (typeof args.dataNascita === "string" && args.dataNascita) ||
+      "";
+    let luogoNascita =
+      (typeof args.luogo_nascita === "string" && args.luogo_nascita) ||
+      (typeof args.luogoNascita === "string" && args.luogoNascita) ||
+      (typeof args.birth_place === "string" && args.birth_place) ||
+      (typeof args.cadastral_code === "string" && args.cadastral_code) ||
+      "";
+
+    // Legacy numeric birth fields from older tool schema
+    if (!dataNascita && (args.birth_year != null || args.birth_month != null || args.birth_day != null)) {
+      const y = Number(args.birth_year);
+      const m = Number(args.birth_month);
+      const d = Number(args.birth_day);
+      if (y && m && d) {
+        dataNascita = `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+      }
     }
-    const sexRaw = String(args.sex ?? MARIO_DEFAULTS.sex).toUpperCase();
-    const sex = sexRaw.startsWith("F") ? "F" : "M";
-    if (!args.sex) assumptions.push("Sesso: M");
-    const birthDay = Number(args.birth_day ?? MARIO_DEFAULTS.birthDay);
-    const birthMonth = Number(args.birth_month ?? MARIO_DEFAULTS.birthMonth);
-    const birthYear = Number(args.birth_year ?? MARIO_DEFAULTS.birthYear);
-    if (args.birth_day == null || args.birth_month == null || args.birth_year == null) {
-      assumptions.push("Data di nascita: 15/03/1985");
+
+    const missing =
+      !cognome.trim() || !nome.trim() || !sesso.trim() || !dataNascita.trim() || !luogoNascita.trim();
+
+    if (missing && looksLikeMario) {
+      if (!cognome.trim()) {
+        cognome = MARIO_DEFAULTS.cognome;
+        assumptions.push("Cognome: Rossi (esempio)");
+      }
+      if (!nome.trim()) {
+        nome = MARIO_DEFAULTS.nome;
+        assumptions.push("Nome: Mario (esempio)");
+      }
+      if (!sesso.trim()) {
+        sesso = MARIO_DEFAULTS.sesso;
+        assumptions.push("Sesso: M (esempio)");
+      }
+      if (!dataNascita.trim()) {
+        dataNascita = MARIO_DEFAULTS.dataNascita;
+        assumptions.push("Data di nascita: 15/03/1985 (esempio)");
+      }
+      if (!luogoNascita.trim()) {
+        luogoNascita = MARIO_DEFAULTS.luogoNascita;
+        assumptions.push("Luogo di nascita: Roma / H501 (esempio)");
+      }
     }
-    const birthPlace = String(args.birth_place ?? MARIO_DEFAULTS.birthPlace);
-    const cadastralCode = String(args.cadastral_code ?? MARIO_DEFAULTS.cadastralCode);
-    if (!args.cadastral_code) assumptions.push("Luogo di nascita: Roma (H501)");
-    const code = computeCodiceFiscale({
-      firstName,
-      lastName,
-      sex,
-      birthDay,
-      birthMonth,
-      birthYear,
-      cadastralCode,
+
+    const executed = executeCalcolaCodiceFiscale({
+      cognome,
+      nome,
+      sesso,
+      data_nascita: dataNascita,
+      luogo_nascita: luogoNascita,
     });
+
+    if (!executed.ok) {
+      return {
+        step: "Codice fiscale: dati incompleti",
+        result: executed,
+        clinic,
+      };
+    }
+
     clinic.lastCodiceFiscale = {
-      fullName: `${lastName} ${firstName}`,
-      code,
+      fullName: `${executed.cognome} ${executed.nome}`,
+      code: executed.codice,
       assumptions,
     };
+
     return {
       step: "Codice fiscale calcolato",
       result: {
         ok: true,
-        code,
-        fullName: `${lastName} ${firstName}`,
-        sex,
-        birthDate: `${String(birthDay).padStart(2, "0")}/${String(birthMonth).padStart(2, "0")}/${birthYear}`,
-        birthPlace,
-        cadastralCode,
+        codice: executed.codice,
+        code: executed.codice,
+        fullName: `${executed.cognome} ${executed.nome}`,
+        sesso: executed.sesso,
+        dataNascita: executed.dataNascita,
+        luogoNascita: executed.luogoNascita,
+        codiceCatastale: executed.codiceCatastale,
         assumptions,
-        note: "Calcolo di esempio su dati fittizi o dichiarati dall'utente.",
+        note: "Calcolato con algoritmo ufficiale. Non inventare mai il CF: usa sempre questo tool.",
       },
       clinic,
     };
