@@ -386,7 +386,7 @@ export function ClinicoLanding({
               <PricingPlans />
             </div>
             <p className="mt-8 text-sm leading-6 text-muted">
-              <Link href="/prezzi#domande-prezzi" className="font-medium text-ink underline-offset-4 hover:underline">
+              <Link href="/#domande" className="font-medium text-ink underline-offset-4 hover:underline">
                 Ricariche, credito WhatsApp e cambio piano
               </Link>
             </p>

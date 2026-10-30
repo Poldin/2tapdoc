@@ -7,7 +7,7 @@ export const marketingNav = [
   { href: "/#segreteria", label: "Segreteria" },
   { href: "/#demo", label: "Demo" },
   { href: "/whatsapp", label: "WhatsApp" },
-  { href: "/prezzi", label: "Prezzi" },
+  { href: "/#prezzi", label: "Prezzi" },
 ];
 
 function Mark({ className = "h-8 w-8" }: { className?: string }) {
@@ -40,7 +40,7 @@ export function MarketingFrame({
   children: ReactNode;
   headerActions: ReactNode;
   menuActions: ReactNode;
-  current?: "prezzi" | "whatsapp";
+  current?: "whatsapp";
 }) {
   return (
     <div className="marketing flex flex-1 flex-col bg-sand text-ink">
@@ -55,9 +55,7 @@ export function MarketingFrame({
           <Logo />
           <nav className="hidden items-center gap-6 text-sm text-muted lg:flex" aria-label="Sezioni">
             {marketingNav.map((item) => {
-              const active =
-                (current === "prezzi" && item.href === "/prezzi") ||
-                (current === "whatsapp" && item.href === "/whatsapp");
+              const active = current === "whatsapp" && item.href === "/whatsapp";
               return (
                 <Link
                   key={item.href}

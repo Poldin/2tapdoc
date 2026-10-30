@@ -46,23 +46,27 @@ const shared = [
   "Stesso assistente, anche quando arriveranno altri canali",
 ];
 
-export function PricingPlans() {
+export function PricingPlans({ cardsOnly = false }: { cardsOnly?: boolean } = {}) {
   return (
     <div>
-      <ul className="grid gap-3 sm:grid-cols-2">
-        {shared.map((item) => (
-          <li key={item} className="flex items-start gap-3 rounded-2xl bg-white px-4 py-3 text-sm leading-6 ring-1 ring-line">
-            <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-violet" />
-            {item}
-          </li>
-        ))}
-      </ul>
-      <p className="mt-4 text-sm leading-6 text-muted">
-        Le funzioni sono le stesse in ogni piano. Cambia il budget incluso e, solo in Clinica, l’assistenza. L’AI inclusa
-        è un importo in euro, non un numero di conversazioni: se serve di più, si compra una ricarica. Integrazione
-        ufficiale WhatsApp in arrivo. Prezzi IVA esclusa.
-      </p>
-      <div className="mt-8 grid items-stretch gap-4 lg:grid-cols-3">
+      {!cardsOnly ? (
+        <>
+          <ul className="grid gap-3 sm:grid-cols-2">
+            {shared.map((item) => (
+              <li key={item} className="flex items-start gap-3 rounded-2xl bg-white px-4 py-3 text-sm leading-6 ring-1 ring-line">
+                <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-violet" />
+                {item}
+              </li>
+            ))}
+          </ul>
+          <p className="mt-4 text-sm leading-6 text-muted">
+            Le funzioni sono le stesse in ogni piano. Cambia il budget incluso e, solo in Clinica, l’assistenza. L’AI inclusa
+            è un importo in euro, non un numero di conversazioni: se serve di più, si compra una ricarica. Integrazione
+            ufficiale WhatsApp in arrivo. Prezzi IVA esclusa.
+          </p>
+        </>
+      ) : null}
+      <div className={`grid items-stretch gap-4 lg:grid-cols-3 ${cardsOnly ? "" : "mt-8"}`}>
         {plans.map((plan) => (
           <article
             key={plan.id}
@@ -84,7 +88,7 @@ export function PricingPlans() {
               <span className="text-5xl font-semibold tracking-[-0.04em]">{plan.price}</span>
               <span className="pb-1 text-sm text-muted">/ mese</span>
             </p>
-            <p className="mt-1 text-xs text-muted">IVA esclusa</p>
+            <p className="mt-1 text-xs text-muted">+IVA, fatturato mensilmente</p>
             <ul className="mt-6 flex-1 space-y-3 text-sm leading-6">
               {plan.points.map((point) => (
                 <li key={point} className="flex items-start gap-2.5">

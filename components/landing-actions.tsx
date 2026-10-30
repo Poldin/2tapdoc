@@ -93,7 +93,7 @@ export function LandingActions({
         >
           Crea un account
         </Link>
-        <Link href="/prezzi" className="text-sm font-medium text-white/90 underline-offset-4 hover:underline">
+        <Link href="/#prezzi" className="text-sm font-medium text-white/90 underline-offset-4 hover:underline">
           Vedi i prezzi
         </Link>
       </div>
@@ -109,7 +109,7 @@ export function LandingActions({
       <Link href="/register" className={primary}>
         Apri lo studio
       </Link>
-      <Link href="/prezzi" className={secondary}>
+      <Link href="/#prezzi" className={secondary}>
         Vedi i prezzi
       </Link>
     </div>

@@ -15,9 +15,9 @@ const requests = [
 
 export function RequestStack() {
   const [order, setOrder] = useState(() => requests.map((_, index) => index));
-  const [phase, setPhase] = useState<"spin" | "done">("spin");
+  const [phase, setPhase] = useState<"spin" | "done" | "leaving">("spin");
   const [reduced, setReduced] = useState(false);
-  const listRef = useRef<HTMLOListElement>(null);
+  const listRef = useRef<HTMLUListElement>(null);
   const firstRects = useRef<Map<number, DOMRect>>(new Map());
 
   useEffect(() => {
@@ -37,6 +37,12 @@ export function RequestStack() {
 
   useEffect(() => {
     if (reduced || phase !== "done") return;
+    const timer = window.setTimeout(() => setPhase("leaving"), 1000);
+    return () => window.clearTimeout(timer);
+  }, [phase, reduced]);
+
+  useEffect(() => {
+    if (reduced || phase !== "leaving") return;
     const timer = window.setTimeout(() => {
       const list = listRef.current;
       if (list) {
@@ -48,7 +54,7 @@ export function RequestStack() {
       }
       setOrder((current) => [...current.slice(1), current[0]]);
       setPhase("spin");
-    }, 1000);
+    }, 700);
     return () => window.clearTimeout(timer);
   }, [phase, reduced]);
 
@@ -64,6 +70,7 @@ export function RequestStack() {
       if (Math.abs(delta) < 1) return;
       item.style.transition = "none";
       item.style.transform = `translateY(${delta}px)`;
+      item.style.opacity = "";
       moving.push(item);
     });
     firstRects.current = new Map();
@@ -80,17 +87,24 @@ export function RequestStack() {
 
   return (
     <ul ref={listRef} className="mt-12 flex flex-col gap-1">
-      {order.map((id, index) => (
-        <li
-          key={id}
-          data-request={id}
-          className="flex items-center gap-3 rounded-2xl border border-line bg-white px-4 py-3 text-[15px] leading-6 transition-[transform,opacity] duration-700 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none"
-          style={{ opacity: 1 - index * 0.1 }}
-        >
-          <span className="min-w-0 flex-1">{requests[id]}</span>
-          {index === 0 && !reduced ? phase === "spin" ? <Spinner /> : <Check /> : null}
-        </li>
-      ))}
+      {order.map((id, index) => {
+        const leaving = !reduced && phase === "leaving" && index === 0;
+        const baseOpacity = 1 - index * 0.1;
+        return (
+          <li
+            key={id}
+            data-request={id}
+            className="flex items-center gap-3 rounded-2xl border border-line bg-white px-4 py-3 text-[15px] leading-6 transition-[transform,opacity] duration-700 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none"
+            style={{
+              opacity: leaving ? 0 : baseOpacity,
+              transform: leaving ? "translateY(12px)" : undefined,
+            }}
+          >
+            <span className="min-w-0 flex-1">{requests[id]}</span>
+            {index === 0 && !reduced ? phase === "spin" ? <Spinner /> : <Check /> : null}
+          </li>
+        );
+      })}
     </ul>
   );
 }

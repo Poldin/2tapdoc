@@ -4,6 +4,7 @@ import { DemoChat } from "@/components/demo-chat";
 import { RequestStack } from "@/components/request-stack";
 import { TaskPhones } from "@/components/task-phones";
 import { MarketingFrame } from "@/components/marketing-frame";
+import { PricingPlans } from "@/components/pricing-plans";
 
 const cast = [
   { id: "ginevra", emoji: "smilewoman", skinTone: undefined },
@@ -126,6 +127,46 @@ function MistralMark() {
     </svg>
   );
 }
+
+
+const homeFaq = [
+  {
+    q: "Clinico sostituisce il gestionale?",
+    a: "No. Cartelle, contabilità e piani di cura restano dove sono. Clinico è l’assistente che parla con i pazienti e tiene le prenotazioni in agenda.",
+  },
+  {
+    q: "Funziona solo su WhatsApp?",
+    a: "WhatsApp è il primo canale, ed è quello con cui si parte. L’integrazione ufficiale WhatsApp è in arrivo. Clinico è l’assistente dello studio: sito, telefono e gli altri messaggi useranno lo stesso modo di rispondere e di prenotare.",
+  },
+  {
+    q: "La prenotazione finisce davvero in agenda?",
+    a: "Sì. Il paziente sceglie tra gli orari liberi e la visita compare sull’agenda del professionista, con nome e motivo. Puoi spostarla o annullarla come qualsiasi altro appuntamento.",
+  },
+  {
+    q: "Chi vede messaggi e pazienti?",
+    a: "Ogni persona vede solo i dati che il suo ruolo, in quella clinica, le consente di raggiungere. I pazienti appartengono allo studio, non a un account personale.",
+  },
+  {
+    q: "Quanto ci vuole per partire?",
+    a: "Pochi minuti. Si crea l’account, si dà un nome allo studio, si indicano orari e professionisti e si collega il numero WhatsApp. Non c’è nulla da installare in reception.",
+  },
+  {
+    q: "Va bene anche per uno studio medico?",
+    a: "Sì. È pensato per studi dentistici e per studi medici: la segreteria, i professionisti e l’agenda funzionano allo stesso modo.",
+  },
+  {
+    q: "Cos’è una ricarica?",
+    a: "È utilizzo AI in più, quando finisce la quota mensile del piano. Si paga a consumo, senza cambiare piano. Non c’è un numero fisso di conversazioni: il budget è in euro, e il consumo dipende da come lo studio usa l’assistente.",
+  },
+  {
+    q: "Cosa copre il credito WhatsApp?",
+    a: "Studio include €5 al mese di messaggi, Clinica €10. Oltre quella quota i messaggi si pagano al costo, senza ricarico. Nel piano Base non c’è una quota messaggi: i costi WhatsApp sono ribaltati con un ricarico fin dal primo messaggio. La quota è quella del mese. Integrazione ufficiale WhatsApp in arrivo: questi importi si riferiscono a quella.",
+  },
+  {
+    q: "Posso cambiare piano?",
+    a: "Sì, quando vuoi. Le funzioni restano le stesse. Cambiano il canone, il budget AI incluso, la quota messaggi WhatsApp e, solo nel piano Clinica, l’assistenza prioritaria.",
+  },
+];
 
 const trust = [
   {
@@ -256,6 +297,38 @@ export function HomeLanding({
         </h2>
         <div className="mt-6">
           <TaskPhones />
+        </div>
+      </section>
+
+
+      <section id="prezzi" className="scroll-mt-28 bg-sand-deep">
+        <div className="mx-auto max-w-[1120px] px-5 py-16 sm:px-8 sm:py-24">
+          <p className="text-sm font-medium text-violet">Prezzi</p>
+          <h2 className="mt-3 max-w-[16ch] text-[clamp(1.8rem,4vw,2.8rem)] leading-snug font-semibold tracking-[-0.035em] text-balance">
+            Tre piani. Le stesse funzioni.
+          </h2>
+          <div className="mt-10">
+            <PricingPlans cardsOnly />
+          </div>
+        </div>
+      </section>
+
+      <section id="domande" className="scroll-mt-28 mx-auto max-w-[1120px] px-5 py-16 sm:px-8 sm:py-24">
+        <h2 className="text-[clamp(1.8rem,4vw,2.8rem)] leading-snug font-semibold tracking-[-0.035em]">
+          Domande frequenti
+        </h2>
+        <div className="mt-8 border-t border-line">
+          {homeFaq.map((item) => (
+            <details key={item.q} className="group border-b border-line">
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-6 py-5 text-lg font-medium tracking-[-0.02em] [&::-webkit-details-marker]:hidden">
+                {item.q}
+                <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full border border-line text-xl leading-none text-muted transition-transform group-open:rotate-45">
+                  +
+                </span>
+              </summary>
+              <p className="max-w-2xl pb-5 text-sm leading-7 text-muted">{item.a}</p>
+            </details>
+          ))}
         </div>
       </section>
 
