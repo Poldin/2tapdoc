@@ -233,7 +233,7 @@ export function DemoChat() {
                 type="button"
                 disabled={busy || capped}
                 onClick={() => void send(chip)}
-                className="inline-flex max-w-full items-center rounded-full border border-sand-100 bg-sand-50/60 px-3.5 py-2 text-left text-sm font-normal text-sand-500 transition hover:border-sand-200/70 hover:bg-sand-100/80 hover:text-sand-700 disabled:opacity-50"
+                className="inline-flex max-w-full items-center rounded-full border border-black/5 bg-sand-50/60 px-3.5 py-2 text-left text-sm font-normal text-sand-500 transition hover:border-black/10 hover:bg-sand-100/80 hover:text-sand-700 disabled:opacity-50"
               >
                 <span className="min-w-0 flex-1">{chip}</span>
 </button>
