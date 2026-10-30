@@ -22,6 +22,11 @@ const nextConfig: NextConfig = {
         destination: "/#prezzi",
         permanent: true,
       },
+      {
+        source: "/whatsapp",
+        destination: "/",
+        permanent: true,
+      },
     ];
   },
 };

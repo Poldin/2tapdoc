@@ -20,30 +20,6 @@ export function MenuSession() {
   );
 }
 
-export function HeroSession() {
-  return (
-    <Suspense fallback={<LandingActions signedIn={false} placement="hero" />}>
-      <HeroActions />
-    </Suspense>
-  );
-}
-
-export function ClosingSession() {
-  return (
-    <Suspense fallback={<LandingActions signedIn={false} placement="closing" />}>
-      <ClosingActions />
-    </Suspense>
-  );
-}
-
-export function AccountSession() {
-  return (
-    <Suspense fallback={<LandingActions signedIn={false} placement="account" />}>
-      <AccountActions />
-    </Suspense>
-  );
-}
-
 async function NavActions() {
   const user = await loadUser();
   return <LandingActions signedIn={Boolean(user)} placement="nav" />;
@@ -52,19 +28,4 @@ async function NavActions() {
 async function MenuActions() {
   const user = await loadUser();
   return <LandingActions signedIn={Boolean(user)} placement="menu" />;
-}
-
-async function HeroActions() {
-  const user = await loadUser();
-  return <LandingActions signedIn={Boolean(user)} placement="hero" />;
-}
-
-async function ClosingActions() {
-  const user = await loadUser();
-  return <LandingActions signedIn={Boolean(user)} placement="closing" />;
-}
-
-async function AccountActions() {
-  const user = await loadUser();
-  return <LandingActions signedIn={Boolean(user)} placement="account" />;
 }
