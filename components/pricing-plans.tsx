@@ -9,6 +9,7 @@ const plans = [
     billing: "Gratis, per sempre",
     cta: "Inizia gratis",
     points: [
+      "utenti limitati",
       "uso dell’AI e funzionalità limitate",
       "ideale per conoscere Clinico",
     ],
@@ -21,10 +22,10 @@ const plans = [
     billing: "+IVA, fatturato mensilmente",
     cta: "Inizia con Studio",
     points: [
-      "€14,50 al mese di utilizzo AI incluso",
+      "utenti illimitati",
+      "5 milioni di token AI inclusi",
       "€5 al mese di messaggi WhatsApp inclusi",
-      "WhatsApp oltre la quota: al costo, senza ricarico",
-      "Oltre la quota AI, ricariche a consumo",
+      "ricarica l'AI senza passare al piano successivo",
     ],
   },
   {
@@ -35,11 +36,11 @@ const plans = [
     billing: "+IVA, fatturato mensilmente",
     cta: "Inizia con Clinica",
     points: [
-      "€39,50 al mese di utilizzo AI incluso",
+      "utenti illimitati",
+      "20 milioni di token AI inclusi",
       "€10 al mese di messaggi WhatsApp inclusi",
-      "WhatsApp oltre la quota: al costo, senza ricarico",
       "Assistenza prioritaria",
-      "Oltre la quota AI, ricariche a consumo",
+      "ricarica l'AI senza passare al piano successivo",
     ],
   },
   {
@@ -50,12 +51,11 @@ const plans = [
     billing: "+IVA, fatturato mensilmente",
     cta: "Inizia con Gruppo",
     points: [
-      "€74,50 al mese di utilizzo AI incluso",
+      "utenti illimitati",
+      "50 milioni di token AI inclusi",
       "€20 al mese di messaggi WhatsApp inclusi",
-      "WhatsApp oltre la quota: al costo, senza ricarico",
       "Assistenza prioritaria",
-      "Per gruppi di cliniche e studi con più sedi",
-      "Oltre la quota AI, ricariche a consumo",
+      "ricarica AI scontata",
     ],
   },
 ] as const;
