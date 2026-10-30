@@ -155,6 +155,10 @@ const homeFaq = [
     a: "Sì. È pensato per studi dentistici e per studi medici: la segreteria, i professionisti e l’agenda funzionano allo stesso modo.",
   },
   {
+    q: "C’è un piano gratuito?",
+    a: "Sì. Free è gratis per sempre, con uso dell’AI e funzionalità limitate, per provare Clinico. Quando serve di più, passi a Studio, Clinica o Gruppo.",
+  },
+  {
     q: "Cos’è una ricarica?",
     a: "È utilizzo AI in più, quando finisce la quota mensile del piano. Si paga a consumo, senza cambiare piano. Non c’è un numero fisso di conversazioni: il budget è in euro, e il consumo dipende da come lo studio usa l’assistente.",
   },
@@ -164,7 +168,7 @@ const homeFaq = [
   },
   {
     q: "Posso cambiare piano?",
-    a: "Sì, quando vuoi. Le funzioni restano le stesse. Cambiano il canone, il budget AI incluso, la quota messaggi WhatsApp e, in Clinica e Gruppo, l’assistenza prioritaria.",
+    a: "Sì, quando vuoi, anche dal piano Free. Nei piani a pagamento cambiano il canone, il budget AI incluso, la quota messaggi WhatsApp e, in Clinica e Gruppo, l’assistenza prioritaria. Puoi disdire quando vuoi.",
   },
 ];
 
@@ -303,10 +307,10 @@ export function HomeLanding({
 
       <section id="prezzi" className="scroll-mt-28 bg-sand-deep">
         <div className="mx-auto max-w-[1120px] px-5 py-16 sm:px-8 sm:py-24">
-          <p className="text-sm font-medium text-violet">Prezzi</p>
-          <h2 className="mt-3 max-w-[16ch] text-[clamp(1.8rem,4vw,2.8rem)] leading-snug font-semibold tracking-[-0.035em] text-balance">
-            Tre piani. Le stesse funzioni.
+          <h2 className="text-[clamp(1.8rem,4vw,2.8rem)] leading-snug font-semibold tracking-[-0.035em]">
+            Prezzi
           </h2>
+          <p className="mt-3 text-base leading-7 text-muted sm:text-lg">Disdici quando vuoi</p>
           <div className="mt-10">
             <PricingPlans cardsOnly />
           </div>

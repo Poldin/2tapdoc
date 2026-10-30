@@ -175,7 +175,7 @@ export function TaskPhones() {
 
 function Phone({ task }: { task: Task }) {
   return (
-    <div className="rounded-[2.2rem] bg-[#0e0c12] p-2 shadow-[0_24px_50px_-28px_rgba(20,10,30,0.65)]">
+    <div className="rounded-[2.2rem] bg-[#0e0c12] p-2">
       <div className="flex h-[34rem] flex-col overflow-hidden rounded-[1.8rem] bg-[#1a1720] text-[#f6f3ee]">
         <div className="mx-auto mt-2 h-5 w-24 rounded-b-2xl bg-black" />
         <div className="mx-3 mt-3 flex items-center gap-2 rounded-full bg-white/10 px-2.5 py-1.5">

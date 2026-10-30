@@ -2,10 +2,24 @@ import Link from "next/link";
 
 const plans = [
   {
+    id: "free",
+    name: "Free",
+    price: "€0",
+    popular: false,
+    billing: "Gratis, per sempre",
+    cta: "Inizia gratis",
+    points: [
+      "Per provare: uso dell’AI e funzionalità limitate",
+      "Ideale per conoscere Clinico senza impegno",
+    ],
+  },
+  {
     id: "studio",
     name: "Studio",
     price: "€29",
     popular: true,
+    billing: "+IVA, fatturato mensilmente",
+    cta: "Inizia con Studio",
     points: [
       "€14,50 al mese di utilizzo AI incluso",
       "€5 al mese di messaggi WhatsApp inclusi",
@@ -18,6 +32,8 @@ const plans = [
     name: "Clinica",
     price: "€79",
     popular: false,
+    billing: "+IVA, fatturato mensilmente",
+    cta: "Inizia con Clinica",
     points: [
       "€39,50 al mese di utilizzo AI incluso",
       "€10 al mese di messaggi WhatsApp inclusi",
@@ -31,6 +47,8 @@ const plans = [
     name: "Gruppo",
     price: "€149",
     popular: false,
+    billing: "+IVA, fatturato mensilmente",
+    cta: "Inizia con Gruppo",
     points: [
       "€74,50 al mese di utilizzo AI incluso",
       "€20 al mese di messaggi WhatsApp inclusi",
@@ -63,17 +81,17 @@ export function PricingPlans({ cardsOnly = false }: { cardsOnly?: boolean } = {}
             ))}
           </ul>
           <p className="mt-4 text-sm leading-6 text-muted">
-            Le funzioni sono le stesse in ogni piano. Cambia il budget incluso e, in Clinica e Gruppo, l’assistenza.
-            L’AI inclusa è un importo in euro, non un numero di conversazioni: se serve di più, si compra una ricarica.
-            Integrazione ufficiale WhatsApp in arrivo. Prezzi IVA esclusa.
+            Parti gratis, poi scegli il budget che serve allo studio. Nei piani a pagamento cambia l’AI inclusa, la
+            quota WhatsApp e, in Clinica e Gruppo, l’assistenza. L’AI inclusa è un importo in euro: se serve di più, si
+            compra una ricarica. Integrazione ufficiale WhatsApp in arrivo. Prezzi IVA esclusa.
           </p>
         </>
       ) : null}
-      <div className={`grid items-stretch gap-4 lg:grid-cols-3 ${cardsOnly ? "" : "mt-8"}`}>
+      <div className={`grid items-stretch gap-4 sm:grid-cols-2 xl:grid-cols-4 ${cardsOnly ? "" : "mt-8"}`}>
         {plans.map((plan) => (
           <article
             key={plan.id}
-            className={`flex flex-col rounded-[28px] p-6 sm:p-8 ${
+            className={`flex flex-col rounded-[28px] p-6 sm:p-7 ${
               plan.popular
                 ? "border-2 border-violet bg-white shadow-[0_24px_60px_-28px_rgba(109,40,217,0.55)]"
                 : "border border-line bg-white"
@@ -91,7 +109,7 @@ export function PricingPlans({ cardsOnly = false }: { cardsOnly?: boolean } = {}
               <span className="text-5xl font-semibold tracking-[-0.04em]">{plan.price}</span>
               <span className="pb-1 text-sm text-muted">/ mese</span>
             </p>
-            <p className="mt-1 text-xs text-muted">+IVA, fatturato mensilmente</p>
+            <p className="mt-1 text-xs text-muted">{plan.billing}</p>
             <ul className="mt-6 flex-1 space-y-3 text-sm leading-6">
               {plan.points.map((point) => (
                 <li key={point} className="flex items-start gap-2.5">
@@ -108,7 +126,7 @@ export function PricingPlans({ cardsOnly = false }: { cardsOnly?: boolean } = {}
                   : "border border-line bg-white text-ink hover:bg-sand-deep"
               }`}
             >
-              Inizia con {plan.name}
+              {plan.cta}
             </Link>
           </article>
         ))}
