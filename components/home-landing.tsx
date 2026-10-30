@@ -205,7 +205,7 @@ export function HomeLanding({
   return (
     <MarketingFrame headerActions={headerActions} menuActions={menuActions}>
       <section id="ginevra" className="scroll-mt-28 mx-auto max-w-[760px] px-5 pt-16 pb-6 sm:px-8 sm:pt-24">
-        <div className="flex items-center gap-4 sm:gap-6">
+        <div className="flex min-h-[104px] items-center gap-4 sm:gap-6">
           <CharacterEmoji id={cast[0].emoji} size={104} />
           <h1 className="text-[clamp(1.65rem,4vw,2.6rem)] leading-[1.15] font-semibold tracking-[-0.035em] text-balance">
             Lei è Ginevra: ti aiuta a gestire le richieste dei pazienti.

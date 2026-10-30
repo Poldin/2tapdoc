@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 const requests = [
   "Buongiorno, posso spostare l’appuntamento di giovedì? ho un imprevisto",
@@ -13,17 +13,19 @@ const requests = [
   "ciao scusate sono in ritardo di 10 minuti, sto arrivando",
 ];
 
-/** Fixed row + gap so stack height never shifts when copy wraps differently. */
+/** Explicit geometry — wrapper height never depends on content or enter/exit. */
 const ROW_PX = 72;
 const GAP_PX = 4;
 const STACK_PX = requests.length * ROW_PX + (requests.length - 1) * GAP_PX;
+const SLOT_STRIDE = ROW_PX + GAP_PX;
 
 export function RequestStack() {
   const [order, setOrder] = useState(() => requests.map((_, index) => index));
   const [phase, setPhase] = useState<"spin" | "done" | "leaving">("spin");
   const [reduced, setReduced] = useState(false);
-  const listRef = useRef<HTMLUListElement>(null);
-  const firstRects = useRef<Map<number, DOMRect>>(new Map());
+  const [skipTransformId, setSkipTransformId] = useState<number | null>(null);
+  const orderRef = useRef(order);
+  orderRef.current = order;
 
   useEffect(() => {
     const query = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -49,74 +51,60 @@ export function RequestStack() {
   useEffect(() => {
     if (reduced || phase !== "leaving") return;
     const timer = window.setTimeout(() => {
-      const list = listRef.current;
-      if (list) {
-        const map = new Map<number, DOMRect>();
-        list.querySelectorAll<HTMLElement>("[data-request]").forEach((item) => {
-          map.set(Number(item.dataset.request), item.getBoundingClientRect());
-        });
-        firstRects.current = map;
-      }
+      const leavingId = orderRef.current[0] ?? null;
+      setSkipTransformId(leavingId);
       setOrder((current) => [...current.slice(1), current[0]]);
       setPhase("spin");
     }, 700);
     return () => window.clearTimeout(timer);
   }, [phase, reduced]);
 
-  useLayoutEffect(() => {
-    const map = firstRects.current;
-    if (map.size === 0 || reduced) return;
-    const nodes = Array.from(listRef.current?.querySelectorAll<HTMLElement>("[data-request]") ?? []);
-    const moving: HTMLElement[] = [];
-    nodes.forEach((item) => {
-      const first = map.get(Number(item.dataset.request));
-      if (!first) return;
-      const delta = first.top - item.getBoundingClientRect().top;
-      if (Math.abs(delta) < 1) return;
-      item.style.transition = "none";
-      item.style.transform = `translateY(${delta}px)`;
-      item.style.opacity = "";
-      moving.push(item);
+  useEffect(() => {
+    if (skipTransformId == null) return;
+    const id = window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => setSkipTransformId(null));
     });
-    firstRects.current = new Map();
-    if (moving.length === 0) return;
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        moving.forEach((item) => {
-          item.style.transition = "";
-          item.style.transform = "";
-        });
-      });
-    });
-  }, [order, reduced]);
+    return () => window.cancelAnimationFrame(id);
+  }, [skipTransformId, order]);
 
   return (
-    <div className="relative mt-12 overflow-hidden" style={{ height: STACK_PX }} aria-live="polite">
-      <ul
-        ref={listRef}
-        className="absolute inset-x-0 top-0 flex w-full flex-col"
-        style={{ gap: GAP_PX }}
-      >
-        {order.map((id, index) => {
-          const leaving = !reduced && phase === "leaving" && index === 0;
-          const baseOpacity = 1 - index * 0.1;
-          return (
-            <li
-              key={id}
-              data-request={id}
-              className="flex items-center gap-3 overflow-hidden rounded-2xl border border-line bg-white px-4 text-[15px] leading-6 transition-[transform,opacity] duration-700 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none"
-              style={{
-                height: ROW_PX,
-                opacity: leaving ? 0 : baseOpacity,
-                transform: leaving ? "translateY(12px)" : undefined,
-              }}
-            >
-              <span className="min-w-0 flex-1 line-clamp-2">{requests[id]}</span>
-              {index === 0 && !reduced ? phase === "spin" ? <Spinner /> : <Check /> : null}
-            </li>
-          );
-        })}
-      </ul>
+    <div
+      data-request-stack
+      className="relative mt-12 h-[604px] max-h-[604px] min-h-[604px] overflow-hidden sm:h-[604px]"
+      style={{ height: STACK_PX, minHeight: STACK_PX, maxHeight: STACK_PX }}
+      aria-live="polite"
+    >
+      {order.map((id, index) => {
+        const leaving = !reduced && phase === "leaving" && index === 0;
+        const baseOpacity = 1 - index * 0.1;
+        const y = index * SLOT_STRIDE + (leaving ? 12 : 0);
+        const skip = skipTransformId === id;
+        return (
+          <div
+            key={id}
+            data-request={id}
+            data-slot={index}
+            className="absolute left-0 right-0 flex items-center gap-3 overflow-hidden rounded-2xl border border-line bg-white px-4 text-[15px] leading-6 will-change-transform motion-reduce:transition-none"
+            style={{
+              top: 0,
+              height: ROW_PX,
+              width: "100%",
+              opacity: leaving ? 0 : baseOpacity,
+              transform: `translate3d(0, ${y}px, 0)`,
+              transition: reduced
+                ? undefined
+                : skip
+                  ? "opacity 700ms cubic-bezier(0.22, 1, 0.36, 1)"
+                  : "transform 700ms cubic-bezier(0.22, 1, 0.36, 1), opacity 700ms cubic-bezier(0.22, 1, 0.36, 1)",
+              zIndex: leaving ? 0 : requests.length - index,
+              pointerEvents: "none",
+            }}
+          >
+            <span className="min-w-0 flex-1 line-clamp-2">{requests[id]}</span>
+            {index === 0 && !reduced ? (phase === "spin" ? <Spinner /> : <Check />) : null}
+          </div>
+        );
+      })}
     </div>
   );
 }
