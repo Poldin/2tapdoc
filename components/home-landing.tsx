@@ -277,7 +277,7 @@ export function HomeLanding({
       <section className="relative mx-auto max-w-[1120px] px-5 py-6 sm:px-8 sm:py-10">
         <div className="relative overflow-hidden rounded-[36px] bg-[#16141c] px-6 pt-12 pb-44 text-[#f6f3ee] sm:px-12 sm:pt-16 sm:pb-16">
           <h2 className="max-w-[12ch] text-[clamp(2.1rem,5vw,3.5rem)] leading-[1.05] font-semibold tracking-[-0.04em]">
-            Scrivi ai tuoi assistenti
+            Scrivi ai tuoi assistenti virtuali
             <br />
             come a dei colleghi
           </h2>
