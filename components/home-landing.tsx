@@ -252,6 +252,9 @@ export function HomeLanding({
           <p className="mt-4 max-w-xl text-base leading-7 text-muted">
             Scegli tu i loro nomi, di cosa si occupano e come vuoi che lavorino. Loro eseguono.
           </p>
+          <p className="mt-3 max-w-xl text-base leading-7 text-muted">
+            Puoi anche lasciare loro compiti quando nessuno ha dispositivi connessi: lavorano anche quando tu sei in pausa.
+          </p>
         </div>
       </section>
 
