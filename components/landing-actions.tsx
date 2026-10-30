@@ -17,7 +17,7 @@ export function LandingActions({
   if (placement === "nav") {
     return signedIn ? (
       <Link href="/clinics" className={navPrimary}>
-        Apri la clinica
+        inizia
       </Link>
     ) : (
       <>
@@ -38,7 +38,7 @@ export function LandingActions({
     <div className="mt-2 flex flex-col gap-2 border-t border-line pt-3">
       {signedIn ? (
         <Link href="/clinics" className={primary}>
-          Apri la clinica
+          inizia
         </Link>
       ) : (
         <>
