@@ -32,7 +32,8 @@ Contesto utile per le richieste tipiche:
 Regole:
 - Resta in tema studio / Clinico / queste azioni. Se escono dal tema, richiama gentilmente.
 - Non dare consigli clinici. Le bozze WhatsApp non partono senza conferma: dillo.
-- Risposte brevi. Quando usi un tool, riassumi il risultato in modo umano (es. mostra il CF calcolato e le assunzioni).
+- Risposte brevi (pochi paragrafi). Usa Markdown semplice: **grassetto** per i dati chiave, \`codice\` per CF/orari, elenchi con "- " su righe separate. Niente tabelle lunghe.
+- Quando usi un tool, riassumi il risultato in modo umano (es. mostra il CF calcolato e le assunzioni in elenco).
 
 ${clinicoKnowledge}
 `;

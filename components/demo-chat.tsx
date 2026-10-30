@@ -2,6 +2,7 @@
 
 import { FormEvent, useMemo, useRef, useState } from "react";
 import { CharacterEmoji } from "@/components/character-emoji";
+import { Markdown } from "@/components/markdown";
 import { initialClinicState, type ClinicState } from "@/lib/demo-clinic";
 
 type ChatRole = "user" | "assistant";
@@ -201,15 +202,15 @@ export function DemoChat() {
   }
 
   return (
-    <div className="relative mx-auto max-w-2xl overflow-hidden rounded-3xl border border-sand-200 bg-white shadow-sm">
-      <div ref={scroller} className="flex max-h-[520px] min-h-[220px] flex-col gap-4 overflow-y-auto px-4 py-5 sm:px-6">
+    <div className="relative mx-auto max-w-2xl">
+      <div ref={scroller} className="flex max-h-[520px] min-h-[220px] flex-col gap-4 overflow-y-auto py-1">
         {messages.map((item, index) => {
           if (item.role === "assistant") {
             return (
               <div key={`a-${index}`} className="flex items-start gap-3">
                 <CharacterEmoji id="smilewoman" size={36} animated={false} />
-                <div className="max-w-[85%] rounded-2xl rounded-tl-md border border-sand-100 bg-sand-50 px-3.5 py-2.5 text-sm leading-relaxed text-sand-900">
-                  {item.content || (busy && index === messages.length - 1 ? "…" : "")}
+                <div className="max-w-[85%] rounded-2xl rounded-tl-md bg-sand-100/90 px-3.5 py-2.5 text-sm leading-relaxed text-sand-900">
+                  {item.content ? <Markdown source={item.content} /> : busy && index === messages.length - 1 ? "…" : null}
                 </div>
               </div>
             );
@@ -217,7 +218,7 @@ export function DemoChat() {
           return (
             <div
               key={`u-${index}`}
-              className="ml-auto max-w-[85%] rounded-2xl rounded-tr-md bg-violet-600 px-3.5 py-2.5 text-sm leading-relaxed text-white"
+              className="ml-auto max-w-[85%] rounded-2xl rounded-tr-md bg-violet-600 px-3.5 py-2.5 text-sm leading-relaxed text-white shadow-sm"
             >
               {item.content}
             </div>
@@ -225,23 +226,26 @@ export function DemoChat() {
         })}
 
         {showSuggestions && userTurns === 0 ? (
-          <div className="flex flex-col gap-2 pl-12">
+          <div className="ml-auto flex w-full max-w-[92%] flex-col items-end gap-2 sm:max-w-[85%]">
             {SUGGESTIONS.map((chip) => (
               <button
                 key={chip}
                 type="button"
                 disabled={busy || capped}
                 onClick={() => void send(chip)}
-                className="rounded-2xl border border-sand-200 bg-white px-3.5 py-2.5 text-left text-sm text-sand-800 transition hover:border-violet-300 hover:text-violet-700 disabled:opacity-50"
+                className="inline-flex max-w-full items-center gap-2 rounded-full border border-violet-300 bg-transparent px-3.5 py-2 text-left text-sm font-medium text-violet-700 transition hover:border-violet-400 hover:bg-violet-50 hover:text-violet-800 disabled:opacity-50"
               >
-                {chip}
+                <span className="min-w-0 flex-1">{chip}</span>
+                <span aria-hidden className="shrink-0 text-violet-500">
+                  →
+                </span>
               </button>
             ))}
           </div>
         ) : null}
       </div>
 
-      <div className="border-t border-sand-100 px-4 py-3 sm:px-6">
+      <div className="mt-4">
         <form onSubmit={onSubmit} className="flex gap-2">
           <input
             value={input}
@@ -249,7 +253,7 @@ export function DemoChat() {
             maxLength={500}
             disabled={busy || capped}
             placeholder={capped ? "Limite raggiunto — ricarica la pagina" : "Scrivi un messaggio…"}
-            className="min-w-0 flex-1 rounded-2xl border border-sand-200 bg-sand-50 px-3.5 py-2.5 text-sm text-sand-900 outline-none ring-violet-400 placeholder:text-sand-400 focus:ring-2 disabled:opacity-60"
+            className="min-w-0 flex-1 rounded-2xl border border-violet-200/70 bg-white/60 px-3.5 py-2.5 text-sm text-sand-900 shadow-none outline-none ring-violet-300 placeholder:text-sand-400 focus:border-violet-300 focus:ring-2 disabled:opacity-60"
           />
           <button
             type="submit"
@@ -262,15 +266,15 @@ export function DemoChat() {
       </div>
 
       {pending ? (
-        <div className="absolute inset-0 z-10 flex items-end justify-center bg-sand-950/25 p-4 sm:items-center">
-          <div className="w-full max-w-sm rounded-2xl border border-sand-200 bg-white p-5 shadow-lg">
+        <div className="absolute inset-0 z-10 flex items-end justify-center bg-sand-950/20 p-4 sm:items-center">
+          <div className="w-full max-w-sm rounded-2xl bg-white p-5 shadow-lg ring-1 ring-violet-100">
             <p className="text-sm font-semibold text-sand-950">Conferma richiesta</p>
             <p className="mt-1.5 text-sm leading-relaxed text-sand-700">{pending.label}</p>
             <div className="mt-5 flex justify-end gap-2">
               <button
                 type="button"
                 onClick={cancelPending}
-                className="rounded-xl border border-sand-200 bg-white px-4 py-2 text-sm font-medium text-sand-700 hover:bg-sand-50"
+                className="rounded-xl border border-violet-200 bg-white px-4 py-2 text-sm font-medium text-sand-700 hover:bg-violet-50"
               >
                 Annulla
               </button>
