@@ -17,7 +17,7 @@ type PendingAction = {
 const OPENING = "Ciao, sono Ginevra. Come posso aiutarti?";
 
 const SUGGESTIONS = [
-  "Calcola codice fiscale di Mario",
+  "Calcola codice fiscale",
   "Sposta appuntamento del figlio di Elena",
   "Scrivi alla signora Rosanna per ricordarle l'appuntamento di domani",
 ];

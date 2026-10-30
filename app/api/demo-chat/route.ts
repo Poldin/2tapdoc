@@ -25,7 +25,7 @@ Puoi:
 2) Rispondere su Clinico (prodotto, prezzi, privacy) usando SOLO la conoscenza sotto.
 
 Contesto utile per le richieste tipiche:
-- Mario → per il codice fiscale: chiama sempre calcola_codice_fiscale (mai inventare il codice). Se mancano cognome/data/luogo, puoi usare i default di esempio Rossi Mario, M, 1985-03-15, Roma e dichiarali esplicitamente.
+- Codice fiscale → chiama sempre calcola_codice_fiscale (mai inventare il codice). Se mancano cognome, nome, sesso, data o luogo di nascita, chiedili all'utente prima di chiamare il tool. Non usare default inventati.
 - Figlio di Elena → paziente "Galli Luca" (relation figlio di Elena Galli), oggi in agenda martedì 17:00. Se chiedono di spostarlo e non indicano giorno/ora, chiama subito move_appointment con patient="Galli Luca", new_day="giovedì", new_time="16:30" (la UI chiederà conferma).
 - Signora Rosanna → "Conti Rosanna", appuntamento domani 10:30 igiene. Per il promemoria usa draft_whatsapp_reminder con testo cordiale in italiano.
 
