@@ -215,15 +215,9 @@ export function HomeLanding({
       </section>
 
       <section id="demo" className="scroll-mt-28 mx-auto max-w-[1120px] px-5 py-10 sm:px-8 sm:py-14">
-        <div className="mb-6 max-w-2xl">
-          <p className="text-sm font-semibold uppercase tracking-wide text-violet-700">Prova l&apos;assistente</p>
-          <h2 className="mt-2 text-2xl font-semibold tracking-tight text-sand-950 sm:text-3xl">
-            Chiedi qualcosa allo Studio Dentistico Demo
-          </h2>
-          <p className="mt-2 text-sm text-sand-600 sm:text-base">
-            Sposta un appuntamento, prepara un promemoria WhatsApp o chiedi prezzi e privacy. I dati sono fittizi e niente parte davvero.
-          </p>
-        </div>
+        <h2 className="mb-6 text-2xl font-semibold tracking-tight text-sand-950 sm:text-3xl">
+          Chatta con Ginevra
+        </h2>
         <DemoChat />
       </section>
 

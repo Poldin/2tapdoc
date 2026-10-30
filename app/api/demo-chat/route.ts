@@ -17,18 +17,22 @@ type MistralMessage = Record<string, unknown>;
 type RateBucket = { count: number; resetAt: number };
 const rateByIp = new Map<string, RateBucket>();
 
-const SYSTEM_PROMPT = `Sei l'assistente demo di Clinico per lo "Studio Dentistico Demo" (dati fittizi).
-Parli italiano, tono chiaro e cordiale da segreteria digitale.
+const SYSTEM_PROMPT = `Sei Ginevra, assistente AI dello studio dentistico (dati di esempio, conversazione sul sito Clinico).
+Parli italiano, tono caldo, chiaro e professionale da collega di segreteria. Ti presenti come AI.
 
 Puoi:
-1) Agire sull'agenda demo con i tool (sposta/prenota appuntamenti, bozze WhatsApp, lista richiami). I tool aggiornano un pannello demo: usali quando l'utente chiede di fare qualcosa sull'agenda.
-2) Rispondere a domande su Clinico (prodotto, prezzi, privacy, come funziona) usando SOLO la conoscenza sotto. Non inventare certificazioni.
+1) Usare i tool sull'agenda e sui messaggi: spostare/prenotare appuntamenti, bozze WhatsApp, calcolare codice fiscale, elenchi.
+2) Rispondere su Clinico (prodotto, prezzi, privacy) usando SOLO la conoscenza sotto.
+
+Contesto utile per le richieste tipiche:
+- Mario → per il codice fiscale, se non ti danno altri dati, chiama calculate_codice_fiscale con use_mario_defaults=true (Rossi Mario, M, 15/03/1985, Roma H501) e dichiara le assunzioni.
+- Figlio di Elena → paziente "Galli Luca" (relation figlio di Elena Galli), oggi in agenda martedì 17:00. Se chiedono di spostarlo e non indicano giorno/ora, proponi un'alternativa plausibile (es. giovedì 16:30) e usa move_appointment.
+- Signora Rosanna → "Conti Rosanna", appuntamento domani 10:30 igiene. Per il promemoria usa draft_whatsapp_reminder con testo cordiale in italiano.
 
 Regole:
-- Resta in tema: Clinico, demo studio, agenda, prezzi, privacy. Se escono dal tema, richiama gentilmente.
-- Non dare consigli clinici/medici. Non inventare dati pazienti oltre lo stato demo.
-- Le bozze WhatsApp NON vengono inviate davvero: dillo sempre.
-- Risposte brevi (poche frasi) salvo quando serve un elenco.
+- Resta in tema studio / Clinico / queste azioni. Se escono dal tema, richiama gentilmente.
+- Non dare consigli clinici. Le bozze WhatsApp non partono senza conferma: dillo.
+- Risposte brevi. Quando usi un tool, riassumi il risultato in modo umano (es. mostra il CF calcolato e le assunzioni).
 
 ${clinicoKnowledge}
 `;
@@ -102,7 +106,7 @@ export async function POST(req: Request) {
   if (userTurns > MAX_USER_TURNS) {
     return new Response(
       JSON.stringify({
-        error: "Hai raggiunto il limite di messaggi per questa sessione demo. Ricarica la pagina per ricominciare.",
+        error: "Hai raggiunto il limite di messaggi per questa sessione. Ricarica la pagina per ricominciare.",
       }),
       { status: 400, headers: { "Content-Type": "application/json" } },
     );
@@ -131,7 +135,7 @@ export async function POST(req: Request) {
   if (!process.env.MISTRAL_API_KEY) {
     return new Response(
       JSON.stringify({
-        error: "Demo temporaneamente non disponibile. Riprova tra poco.",
+        error: "Al momento non riesco a rispondere. Riprova tra poco.",
       }),
       { status: 503, headers: { "Content-Type": "application/json" } },
     );
@@ -264,8 +268,8 @@ export async function POST(req: Request) {
       } catch (error) {
         const message =
           error instanceof Error && error.message === "MISSING_KEY"
-            ? "Demo temporaneamente non disponibile. Riprova tra poco."
-            : "Qualcosa non ha funzionato con la demo. Riprova tra poco.";
+            ? "Al momento non riesco a rispondere. Riprova tra poco."
+            : "Qualcosa non ha funzionato. Riprova tra poco.";
         push({ type: "error", message });
         controller.close();
       }
