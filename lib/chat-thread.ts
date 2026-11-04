@@ -142,7 +142,7 @@ export async function loadChatThread(
     const marker = row.bot_id ? takeReplyMarker(row.body) : null;
     const replyId = row.reply_to_id ?? marker?.id ?? null;
     const target = replyId ? byId.get(replyId) : undefined;
-    const body = marker && (row.reply_to_id || target) ? marker.body : row.body;
+    const body = marker ? marker.body : row.body;
     return [
       {
         id: row.id,

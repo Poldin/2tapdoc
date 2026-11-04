@@ -1277,7 +1277,7 @@ export async function replyToTurn(
         if (!message.includes("Reply target is not a message")) throw error;
       }
     }
-    if (quoted) content = marker.body;
+    content = marker.body;
   }
   if (!content) {
     if (reacted || quoted) return "";

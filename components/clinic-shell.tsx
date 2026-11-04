@@ -139,6 +139,58 @@ function messageStamp(messages: ChatMessage[]) {
     .join("\u001e");
 }
 
+type Outgoing = {
+  id: string;
+  chatId: string;
+  body: string;
+  createdAt: string;
+  replyTo: ChatReply | null;
+  error: string | null;
+  seenIds: string[];
+};
+
+function outgoingMessage(item: Outgoing): ChatMessage {
+  return {
+    id: item.id,
+    seq: Number.MAX_SAFE_INTEGER,
+    body: item.body,
+    createdAt: item.createdAt,
+    mine: true,
+    botId: null,
+    preferredAt: null,
+    reaction: null,
+    replyTo: item.replyTo,
+    emojis: [],
+  };
+}
+
+function reconcileOutgoing(
+  items: Outgoing[],
+  chatId: string | null,
+  server: ChatMessage[],
+  known: Set<string>,
+) {
+  if (!chatId) return items;
+  const mine = server.filter((message) => message.mine);
+  const used = new Set<string>();
+  let changed = false;
+  const next = items.filter((item) => {
+    if (item.chatId !== chatId || item.error) return true;
+    const match = mine.find(
+      (message) =>
+        !used.has(message.id) &&
+        !item.seenIds.includes(message.id) &&
+        message.body.trim() === item.body,
+    );
+    if (!match) return true;
+    used.add(match.id);
+    known.add(match.id);
+    changed = true;
+    return false;
+  });
+  return changed ? next : items;
+}
+
 function mergeThread(current: ChatMessage[], incoming: ChatMessage[]) {
   const byId = new Map<string, ChatMessage>();
   for (const message of current) byId.set(message.id, message);
@@ -246,20 +298,42 @@ function draftKey(clinicId: string, chatId: string) {
   return `composer:${clinicId}:${chatId}`;
 }
 
-/** Desktop con puntatore fine: il cursore può tornare nel campo senza aprire una tastiera. */
+/** Telefono e tablet no: il focus aprirebbe la tastiera. Un portatile touch con trackpad sì. */
 function desktopTyping() {
-  return window.matchMedia("(hover: hover) and (pointer: fine)").matches;
+  return (
+    window.matchMedia("(any-hover: hover)").matches &&
+    window.matchMedia("(any-pointer: fine)").matches
+  );
 }
 
-function focusDesktopField(field: HTMLTextAreaElement | null, force = false) {
-  if (!field || !desktopTyping()) return;
-  if (document.querySelector("[role='dialog']")) return;
-  if (!force) {
+function scheduleDesktopCaret(fieldRef: { current: HTMLTextAreaElement | null }) {
+  let first = 0;
+  let second = 0;
+  const run = () => {
+    const field = fieldRef.current;
+    if (!field || field.disabled || !desktopTyping()) return;
+    if (document.querySelector("[role='dialog']")) return;
     const active = document.activeElement;
-    if (active && active !== document.body && active !== field) return;
-    if (document.getSelection()?.toString()) return;
-  }
-  field.focus({ preventScroll: true });
+    const submit = field.form?.querySelector("button[type='submit']");
+    const idle =
+      !active ||
+      active === document.body ||
+      active === document.documentElement ||
+      active === field ||
+      active === submit;
+    if (!idle) return;
+    if (active !== field && document.getSelection()?.toString()) return;
+    field.focus({ preventScroll: true });
+  };
+  run();
+  first = window.requestAnimationFrame(() => {
+    run();
+    second = window.requestAnimationFrame(run);
+  });
+  return () => {
+    window.cancelAnimationFrame(first);
+    window.cancelAnimationFrame(second);
+  };
 }
 
 function readDraft(clinicId: string, chatId: string) {
@@ -286,33 +360,61 @@ function MessageComposer({
   replyTo,
   onClearReply,
   onWaiting,
-  armCaret,
+  caretEpoch,
+  onOutgoing,
+  onOutgoingError,
 }: {
   clinicId: string;
   chatId: string;
   replyTo: ReplyDraft | null;
   onClearReply: () => void;
   onWaiting?: (waiting: boolean) => void;
-  armCaret?: boolean;
+  caretEpoch: number;
+  onOutgoing?: (input: { id: string; chatId: string; body: string; replyTo: ReplyDraft | null }) => void;
+  onOutgoingError?: (id: string, error: string) => void;
 }) {
   const formRef = useRef<HTMLFormElement>(null);
   const fieldRef = useRef<HTMLTextAreaElement>(null);
   const onWaitingRef = useRef(onWaiting);
+  const onClearReplyRef = useRef(onClearReply);
   const sentRef = useRef<number | undefined>(undefined);
+  const sentSnapshot = useRef<string | null>(null);
+  const outgoingId = useRef<string | null>(null);
+  const reportedFail = useRef<number | undefined>(undefined);
+  const onOutgoingRef = useRef(onOutgoing);
+  const onOutgoingErrorRef = useRef(onOutgoingError);
   onWaitingRef.current = onWaiting;
+  onClearReplyRef.current = onClearReply;
+  onOutgoingRef.current = onOutgoing;
+  onOutgoingErrorRef.current = onOutgoingError;
   const [ready, setReady] = useState(false);
-  const [state, action, pending] = useActionState<FormState, FormData>(
-    sendMessage.bind(null, clinicId, chatId),
+  const [desktop, setDesktop] = useState(false);
+  const [state, action, pending] = useActionState<FormState & { failed?: number }, FormData>(
+    async (previous, formData) => {
+      const result = await sendMessage(clinicId, chatId, previous, formData);
+      return result.error ? { ...result, failed: Date.now() } : result;
+    },
     {},
   );
+
+  useEffect(() => {
+    const query = window.matchMedia("(any-hover: hover) and (any-pointer: fine)");
+    const sync = () => setDesktop(query.matches);
+    sync();
+    query.addEventListener("change", sync);
+    return () => query.removeEventListener("change", sync);
+  }, []);
 
   useLayoutEffect(() => {
     const field = fieldRef.current;
     if (!field) return;
     if (state.sent) {
-      writeDraft(clinicId, chatId, "");
-      formRef.current?.reset();
-      focusDesktopField(field, true);
+      const snapshot = sentSnapshot.current;
+      sentSnapshot.current = null;
+      if (snapshot == null || field.value === snapshot) {
+        writeDraft(clinicId, chatId, "");
+        formRef.current?.reset();
+      }
     } else {
       const saved = readDraft(clinicId, chatId);
       if (saved) field.value = saved;
@@ -322,19 +424,30 @@ function MessageComposer({
   }, [state.sent, clinicId, chatId]);
 
   useEffect(() => {
-    if (!state.sent || state.sent === sentRef.current) return;
-    sentRef.current = state.sent;
-    onClearReply();
-  }, [state.sent, onClearReply]);
+    if (!state.sent) return;
+    if (sentRef.current !== state.sent) {
+      sentRef.current = state.sent;
+      onClearReplyRef.current();
+    }
+    return scheduleDesktopCaret(fieldRef);
+  }, [state.sent]);
+
+  useEffect(() => {
+    if (!caretEpoch) return;
+    return scheduleDesktopCaret(fieldRef);
+  }, [caretEpoch]);
+
+  useEffect(() => {
+    if (!state.failed || state.failed === reportedFail.current || !state.error) return;
+    reportedFail.current = state.failed;
+    const id = outgoingId.current;
+    if (!id) return;
+    onOutgoingErrorRef.current?.(id, state.error);
+  }, [state.failed, state.error]);
 
   useEffect(() => {
     if (replyTo) fieldRef.current?.focus();
   }, [replyTo]);
-
-  useLayoutEffect(() => {
-    if (!armCaret) return;
-    focusDesktopField(fieldRef.current);
-  }, [armCaret]);
 
   useEffect(() => {
     if (pending) onWaitingRef.current?.(true);
@@ -346,7 +459,25 @@ function MessageComposer({
       ref={formRef}
       action={action}
       onSubmit={() => {
-        if (fieldRef.current?.value.trim()) onWaitingRef.current?.(true);
+        const field = fieldRef.current;
+        const snapshot = field?.value ?? "";
+        const body = snapshot.trim();
+        if (!body) return;
+        sentSnapshot.current = snapshot;
+        onWaitingRef.current?.(true);
+        const id = `pending-${crypto.randomUUID()}`;
+        outgoingId.current = id;
+        flushSync(() => {
+          onOutgoingRef.current?.({ id, chatId, body, replyTo });
+        });
+        queueMicrotask(() => {
+          const current = fieldRef.current;
+          if (!current || current.value !== snapshot) return;
+          current.value = "";
+          writeDraft(clinicId, chatId, "");
+          setReady(false);
+          fitField(current);
+        });
       }}
       className="flex flex-col gap-2 px-4 pb-3"
     >
@@ -378,7 +509,7 @@ function MessageComposer({
           maxLength={4000}
           placeholder="Scrivi qui..."
           aria-label="Messaggio"
-          disabled={pending}
+          disabled={pending && !desktop}
           onInput={(event) => {
             const field = event.currentTarget;
             writeDraft(clinicId, chatId, field.value);
@@ -396,6 +527,10 @@ function MessageComposer({
           type="submit"
           disabled={pending || !ready}
           aria-label="Invia"
+          onMouseDown={(event) => {
+            if (event.button !== 0 || !desktop) return;
+            event.preventDefault();
+          }}
           className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-ink text-paper disabled:opacity-40"
         >
           <Send className="h-5 w-5" strokeWidth={2} />
@@ -582,6 +717,7 @@ function ChatTurn({
   message,
   bot,
   entered,
+  error,
   onReply,
 }: {
   clinicId: string;
@@ -589,6 +725,7 @@ function ChatTurn({
   message: ChatMessage;
   bot: BotMark | null;
   entered: boolean;
+  error?: string | null;
   onReply: (reply: ReplyDraft) => void;
 }) {
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -772,6 +909,7 @@ function ChatTurn({
         />
         <MessageVotes clinicId={clinicId} chatId={chatId} messageId={message.id} vote={message.reaction} />
       </div>
+      {error ? <p className="px-1 text-xs text-teal">{error}</p> : null}
       {picker}
     </div>
   );
@@ -917,11 +1055,13 @@ export function ClinicShell({
     ids: new Set(),
   });
   const waitBaseline = useRef<string | null>(null);
+  const replyCaret = useRef(0);
   const shownMessagesRef = useRef<ChatMessage[]>([]);
   const [draftChatId, setDraftChatId] = useState(activeChatId);
   const [waiting, setWaiting] = useState(false);
   const [live, setLive] = useState<LiveReply | null>(null);
   const [entered, setEntered] = useState<Set<string>>(new Set());
+  const [outgoing, setOutgoing] = useState<Outgoing[]>([]);
   const badgeRef = useRef<HTMLParagraphElement>(null);
   const [dayChat, setDayChat] = useState(activeChatId);
   const [dayLabel, setDayLabel] = useState(() =>
@@ -967,6 +1107,20 @@ export function ClinicShell({
   const shownHasEvents = openThread?.hasEvents ?? hasEvents;
   const lastBotMessage = [...shownMessages].reverse().find((message) => message.botId) ?? null;
   shownMessagesRef.current = shownMessages;
+  const nextOutgoing = reconcileOutgoing(
+    outgoing,
+    shownActiveId,
+    shownMessages,
+    knownMessages.current.ids,
+  );
+  if (nextOutgoing !== outgoing) setOutgoing(nextOutgoing);
+  const pendingOutgoing = nextOutgoing.filter((item) => item.chatId === shownActiveId);
+  const visibleMessages = pendingOutgoing.length
+    ? [...shownMessages, ...pendingOutgoing.map(outgoingMessage)]
+    : shownMessages;
+  const outgoingErrors = new Map(
+    pendingOutgoing.flatMap((item) => (item.error ? [[item.id, item.error] as const] : [])),
+  );
   const replyLanded =
     draftChatId === shownActiveId &&
     waitBaseline.current !== null &&
@@ -981,6 +1135,7 @@ export function ClinicShell({
     waitBaseline.current = null;
     stickToBottom.current = true;
   } else if (replyLanded || draftSaved) {
+    replyCaret.current += 1;
     waitBaseline.current = null;
     if (waiting) setWaiting(false);
     if (live) setLive(null);
@@ -992,10 +1147,16 @@ export function ClinicShell({
   const streamBody =
     visibleLive?.phase === "writing" && visibleLive.body.trim() ? visibleLive.body : "";
   const streamMarker = streamBody ? takeReplyMarker(streamBody) : null;
-  const streamTarget = streamMarker
+  const savedReplyTarget = streamMarker
     ? (shownMessages.find((message) => message.id === streamMarker.id) ?? null)
     : null;
-  const streamText = streamMarker && streamTarget ? streamMarker.body : streamBody;
+  const waitingReply = pendingOutgoing.filter((item) => !item.error);
+  const streamTarget =
+    savedReplyTarget ??
+    (streamMarker && !savedReplyTarget && waitingReply.length === 1
+      ? outgoingMessage(waitingReply[0])
+      : null);
+  const streamText = streamMarker ? streamMarker.body : streamBody;
   const showThinking =
     Boolean(active?.bot) && !streamBody && (visibleWaiting || visibleLive?.phase === "thinking");
   const rows = placeByRecency(visibleChats, [
@@ -1326,20 +1487,20 @@ export function ClinicShell({
       setEntered((current) => (current.size === 0 ? current : new Set()));
       return;
     }
-    const arrived = shownMessages.flatMap((message) => {
+    const arrived = visibleMessages.flatMap((message) => {
       if (known.ids.has(message.id)) return [];
       known.ids.add(message.id);
       return message.id;
     });
     if (arrived.length > 0) setEntered(new Set(arrived));
-  }, [shownActiveId, shownMessages]);
+  }, [shownActiveId, visibleMessages]);
 
   useLayoutEffect(() => {
     const thread = threadRef.current;
     if (!thread) return;
     if (stickToBottom.current) thread.scrollTop = thread.scrollHeight;
     syncDayBadge(thread, badgeRef.current, setDayLabel);
-  }, [shownActiveId, shownMessages, showThinking, streamBody]);
+  }, [shownActiveId, visibleMessages, showThinking, streamBody]);
 
   useEffect(() => {
     const thread = threadRef.current;
@@ -1402,6 +1563,35 @@ export function ClinicShell({
       const distance = nextScroller.scrollHeight - nextScroller.scrollTop - nextScroller.clientHeight;
       stickToBottom.current = distance < 120;
     }
+  }
+
+  function beginOutgoing(input: { id: string; chatId: string; body: string; replyTo: ReplyDraft | null }) {
+    const messages = shownMessagesRef.current;
+    const target = input.replyTo ? messages.find((message) => message.id === input.replyTo?.id) : null;
+    const item: Outgoing = {
+      id: input.id,
+      chatId: input.chatId,
+      body: input.body,
+      createdAt: new Date().toISOString(),
+      replyTo: input.replyTo
+        ? {
+            id: input.replyTo.id,
+            excerpt: input.replyTo.excerpt,
+            mine: target?.mine ?? false,
+            botId: target?.botId ?? null,
+          }
+        : null,
+      error: null,
+      seenIds: messages.map((message) => message.id),
+    };
+    setOutgoing((current) => [
+      ...current.filter((entry) => !(entry.chatId === input.chatId && entry.error && entry.body === input.body)),
+      item,
+    ]);
+  }
+
+  function failOutgoing(id: string, error: string) {
+    setOutgoing((current) => current.map((item) => (item.id === id ? { ...item, error } : item)));
   }
 
   function noteWaiting(next: boolean) {
@@ -1731,8 +1921,8 @@ export function ClinicShell({
               {shownOlderError ? <p className="text-center text-sm text-teal">{shownOlderError}</p> : null}
             </div>
           ) : null}
-          {shownMessages.length > 0 ? (
-            threadEntries(shownMessages).map((entry) =>
+          {visibleMessages.length > 0 ? (
+            threadEntries(visibleMessages).map((entry) =>
               entry.kind === "day" ? (
                 <div key={entry.key} data-day={entry.label} className="self-center">
                   <span className="text-sm text-date">{entry.label}</span>
@@ -1745,6 +1935,7 @@ export function ClinicShell({
                   message={entry.message}
                   bot={active.bot}
                   entered={entered.has(entry.message.id)}
+                  error={outgoingErrors.get(entry.message.id)}
                   onReply={setReplyTo}
                 />
               ),
@@ -1801,7 +1992,9 @@ export function ClinicShell({
           replyTo={replyTo?.id ? replyTo : null}
           onClearReply={() => setReplyTo(null)}
           onWaiting={active.bot ? noteWaiting : undefined}
-          armCaret={replySettled}
+          caretEpoch={replyCaret.current}
+          onOutgoing={beginOutgoing}
+          onOutgoingError={failOutgoing}
         />
         </div>
         </>
