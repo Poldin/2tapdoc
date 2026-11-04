@@ -9,6 +9,7 @@ import { withClinicUser } from "@/lib/postgres";
 import { botGreeting, mastroWGreeting } from "@/lib/bot-greeting";
 import { botFaceIds, channelSymbolIds, isListed, markColorIds } from "@/lib/marks";
 import { isChatEmoji } from "@/lib/chat-emoji";
+import { loadChatThread } from "@/lib/chat-thread";
 import { listedPermissions, roleSlug } from "@/lib/permissions";
 
 const uuidPattern =
@@ -22,8 +23,9 @@ export type CreatedChat = {
   preview: string | null;
   activityAt: string;
   bot: { id: string; name: string; color: string; emoji: string } | null;
-  messages: {
+    messages: {
     id: string;
+    seq: number;
     body: string;
     createdAt: string;
     mine: boolean;
@@ -217,6 +219,20 @@ async function chatInClinic(clinicId: string, chatId: string) {
   return Boolean(data);
 }
 
+export async function loadOlderChatMessages(clinicId: string, chatId: string, beforeSeq: number) {
+  const user = await requireUser();
+  if (!uuidPattern.test(clinicId) || !uuidPattern.test(chatId) || !Number.isSafeInteger(beforeSeq)) {
+    return { error: "Chat non valida." };
+  }
+  if (!(await clinicMember(clinicId, user.id))) return { error: "Non fai parte di questo studio." };
+  if (!(await chatInClinic(clinicId, chatId))) return { error: "Questa chat non è in questa clinica." };
+
+  const supabase = await createClient();
+  const page = await loadChatThread(supabase, user.id, chatId, beforeSeq);
+  if (page.error) return { error: "Non è stato possibile caricare i messaggi precedenti." };
+  return { messages: page.messages, hasOlder: page.hasOlder, nextCursor: page.nextCursor };
+}
+
 async function botInClinic(clinicId: string, botId: string) {
   const supabase = await createClient();
   const { data } = await supabase
@@ -293,7 +309,6 @@ export async function createBot(
   if (greetError) return { error: "Il bot è entrato, ma il saluto no." };
 
   const activityAt = new Date().toISOString();
-  revalidatePath(`/clinics/${clinicId}`);
   return {
     created: {
       id: chat.id,
@@ -306,6 +321,7 @@ export async function createBot(
       messages: [
         {
           id: `${chat.id}-greeting`,
+          seq: 0,
           body: botGreeting,
           createdAt: activityAt,
           mine: false,
@@ -1477,6 +1493,7 @@ export async function startMastroW(
       messages: [
         {
           id: `${chat.id}-greeting`,
+          seq: 0,
           body: mastroWGreeting,
           createdAt: activityAt,
           mine: false,

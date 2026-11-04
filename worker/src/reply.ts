@@ -10,6 +10,7 @@ import {
   scheduleServerAlerts,
 } from "./alerts.js";
 import { chatEmojis } from "./emoji.js";
+import { takeReplyMarker } from "./reply-marker.js";
 import {
   botConnectWhatsApp,
   botCreateAgendaBlocks,
@@ -440,6 +441,7 @@ export async function replyToTurn(
   const canManageIntegrations = perms.has("integrations.manage");
 
   let reacted = false;
+  let quoted = false;
 
   const tools = {
     setReplyTarget: tool({
@@ -450,6 +452,7 @@ export async function replyToTurn(
       }),
       execute: async ({ messageId }) => {
         await botSetReplyTarget(client, workerId, turn.id, messageId);
+        quoted = true;
         return { quoted: messageId };
       },
     }),
@@ -1260,9 +1263,22 @@ export async function replyToTurn(
     }
   }
 
-  const content = stepText.trim();
+  let content = stepText.trim();
+  const marker = content ? takeReplyMarker(content) : null;
+  if (marker) {
+    if (!quoted) {
+      try {
+        await botSetReplyTarget(client, workerId, turn.id, marker.id);
+        quoted = true;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "";
+        if (!message.includes("Reply target is not a message")) throw error;
+      }
+    }
+    if (quoted) content = marker.body;
+  }
   if (!content) {
-    if (reacted) return "";
+    if (reacted || quoted) return "";
     throw new Error("Mistral returned an empty reply");
   }
   await publish("writing", content, true);

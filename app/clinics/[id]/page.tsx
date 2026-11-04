@@ -2,7 +2,7 @@ import { cookies } from "next/headers";
 import { notFound, redirect } from "next/navigation";
 import { type AgendaEditPatient } from "@/components/agenda-edit-dialog";
 import { type AgendaAppointment, type AgendaBlock, type AgendaLane } from "@/components/agenda-view";
-import { ClinicShell, type BotMark, type ChatListItem, type ChatMessage } from "@/components/clinic-shell";
+import { ClinicShell, type BotMark, type ChatListItem } from "@/components/clinic-shell";
 import { type BotActionRequest } from "@/components/bot-action-dialog";
 import { asPatient, type PatientRecord } from "@/lib/patients";
 import {
@@ -15,8 +15,9 @@ import {
 import { type ClinicOption } from "@/components/clinic-switcher";
 import { getSessionUser } from "@/lib/auth/session";
 import { clinicRecencyFromCookie, leadingPlace } from "@/lib/clinic-recency";
+import { loadChatThread, messageBody } from "@/lib/chat-thread";
+import { takeReplyMarker } from "@/lib/reply-marker";
 import { createClient } from "@/lib/supabase/server";
-import { isChatEmoji } from "@/lib/chat-emoji";
 import { markdownToPlainText } from "@/lib/markdown";
 
 export const instant = false;
@@ -24,23 +25,12 @@ export const instant = false;
 const uuidPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-type EventRow = {
-  id: string;
-  seq: number;
+type PreviewEvent = {
+  seq: number | string;
   kind: string;
   payload: unknown;
   created_at: string;
-  user_id: string | null;
-  bot_id: string | null;
-  preferred_at: string | null;
-  reply_to_id: string | null;
 };
-
-function messageBody(payload: unknown) {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
-  const body = (payload as { body?: unknown }).body;
-  return typeof body === "string" && body.trim() !== "" ? body : null;
-}
 
 type SeatRow = {
   bots: BotMark | BotMark[] | null;
@@ -52,7 +42,7 @@ type ChatRow = {
   color: string;
   emoji: string;
   created_at: string;
-  chat_events: EventRow[] | null;
+  chat_events: PreviewEvent[] | null;
   chat_participants: SeatRow[] | null;
 };
 
@@ -112,29 +102,26 @@ export default async function ClinicPage({
   const { data: rows } = await supabase
     .from("chats")
     .select(
-      "id, title, color, emoji, created_at, chat_events(id, seq, kind, payload, created_at, user_id, bot_id, preferred_at, reply_to_id), chat_participants(bots(id, name, color, emoji)), chat_clinics!inner(clinic_id)",
+      "id, title, color, emoji, created_at, chat_events(seq, kind, payload, created_at), chat_participants(bots(id, name, color, emoji)), chat_clinics!inner(clinic_id)",
     )
-    .eq("chat_clinics.clinic_id", id);
+    .eq("chat_clinics.clinic_id", id)
+    .order("seq", { referencedTable: "chat_events", ascending: false })
+    .limit(1, { referencedTable: "chat_events" });
 
   const chats = ((rows ?? []) as ChatRow[])
     .map((row) => {
-      const events = [...(row.chat_events ?? [])].sort((a, b) => a.seq - b.seq);
-      const messages = events.flatMap((event) => {
-        if (event.kind !== "message") return [];
-        const body = messageBody(event.payload);
-        return body ? [{ ...event, body }] : [];
-      });
-      const last = events.at(-1);
+      const latest = [...(row.chat_events ?? [])].sort((a, b) => Number(b.seq) - Number(a.seq))[0];
+      const previewBody = latest?.kind === "message" ? messageBody(latest.payload) : null;
+      const previewSource = previewBody ? (takeReplyMarker(previewBody)?.body ?? previewBody) : null;
       return {
         id: row.id,
         title: row.title,
         color: row.color,
         emoji: row.emoji,
-        preview: messages.length > 0 ? markdownToPlainText(messages[messages.length - 1].body) : null,
-        activityAt: last?.created_at ?? row.created_at,
+        preview: previewSource ? markdownToPlainText(previewSource) : null,
+        activityAt: latest?.created_at ?? row.created_at,
         bot: soleBot(row.chat_participants),
-        hasEvents: events.length > 0,
-        messages,
+        hasEvents: Boolean(latest),
       };
     })
     .sort((a, b) => b.activityAt.localeCompare(a.activityAt));
@@ -152,6 +139,8 @@ export default async function ClinicPage({
     else if (lead === "settings") redirect(`/clinics/${clinic.id}?view=settings`);
     else if (chats[0]) redirect(`/clinics/${clinic.id}?chat=${chats[0].id}`);
   }
+
+  const threadPromise = active ? loadChatThread(supabase, user.id, active.id, null) : null;
 
   let patients: PatientRecord[] = [];
   let selectedPatient: PatientRecord | null = null;
@@ -515,56 +504,7 @@ export default async function ClinicPage({
     activityAt,
     bot,
   }));
-  const activeMessages = active?.messages ?? [];
-  const activeMessageIds = activeMessages.map((message) => message.id);
-  const reactionByEvent = new Map<string, "up" | "down">();
-  const emojiByEvent = new Map<string, ChatMessage["emojis"]>();
-  if (activeMessageIds.length > 0) {
-    const [{ data: reactionRows }, { data: emojiRows }] = await Promise.all([
-      supabase
-        .from("message_reaction_current")
-        .select("event_id, vote")
-        .eq("user_id", user.id)
-        .in("event_id", activeMessageIds),
-      supabase
-        .from("message_emojis")
-        .select("event_id, emoji, user_id, bot_id")
-        .eq("chat_id", active?.id ?? "")
-        .order("created_at"),
-    ]);
-    for (const row of reactionRows ?? []) {
-      if (row.vote === "up" || row.vote === "down") reactionByEvent.set(row.event_id, row.vote);
-    }
-    for (const row of emojiRows ?? []) {
-      if (!isChatEmoji(row.emoji)) continue;
-      const list = emojiByEvent.get(row.event_id) ?? [];
-      list.push({ emoji: row.emoji, mine: row.user_id === user.id, botId: row.bot_id });
-      emojiByEvent.set(row.event_id, list);
-    }
-  }
-
-  const messageById = new Map(activeMessages.map((message) => [message.id, message]));
-  const messages: ChatMessage[] = activeMessages.map((message) => {
-    const target = message.reply_to_id ? messageById.get(message.reply_to_id) : undefined;
-    return {
-      id: message.id,
-      body: message.body,
-      createdAt: message.created_at,
-      mine: message.user_id === user.id,
-      botId: message.bot_id,
-      preferredAt: message.preferred_at,
-      reaction: reactionByEvent.get(message.id) ?? null,
-      replyTo: target
-        ? {
-            id: target.id,
-            excerpt: markdownToPlainText(target.body).slice(0, 180),
-            mine: target.user_id === user.id,
-            botId: target.bot_id,
-          }
-        : null,
-      emojis: emojiByEvent.get(message.id) ?? [],
-    };
-  });
+  const thread = threadPromise ? await threadPromise : { messages: [], hasOlder: false, nextCursor: null };
 
   const { data: confirmationRows } = await supabase
     .from("bot_confirmations")
@@ -588,7 +528,9 @@ export default async function ClinicPage({
       email={user.email}
       chats={list}
       activeChatId={active?.id ?? null}
-      messages={messages}
+      messages={thread.messages}
+      hasOlder={thread.hasOlder}
+      olderCursor={thread.nextCursor}
       hasEvents={active?.hasEvents ?? false}
       agendaOpen={agendaOpen}
       lanes={lanes}
