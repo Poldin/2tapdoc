@@ -817,7 +817,7 @@ export async function replyToTurn(
 
     calcolaCodiceFiscale: tool({
       description:
-        "Calcola il codice fiscale italiano con l'algoritmo ufficiale. Obbligatorio quando serve un codice fiscale: non inventarlo. Se manca cognome, nome, sesso, data o luogo di nascita, chiedili prima di chiamare il tool.",
+        "Calcola il codice fiscale italiano con l'algoritmo ufficiale. Obbligatorio quando serve un codice fiscale: non inventarlo e non ricalcolarlo. Nella risposta copia solo il campo codice. Se manca cognome, nome, sesso, data o luogo di nascita, chiedili prima di chiamare il tool.",
       inputSchema: z.object({
         cognome: z.string().min(1).max(80).describe("Cognome"),
         nome: z.string().min(1).max(80).describe("Nome"),
@@ -831,7 +831,9 @@ export async function replyToTurn(
           .string()
           .min(1)
           .max(80)
-          .describe("Comune o stato di nascita (es. Roma, Francia) oppure codice catastale (es. H501)"),
+          .describe(
+            "Comune o stato di nascita, anche con la sigla della provincia (es. Roma, Feltre (BL), Francia), oppure codice catastale (es. H501)",
+          ),
       }),
       execute: async ({ cognome, nome, sesso, dataNascita, luogoNascita }) =>
         executeCalcolaCodiceFiscale({

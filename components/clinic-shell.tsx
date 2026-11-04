@@ -246,6 +246,22 @@ function draftKey(clinicId: string, chatId: string) {
   return `composer:${clinicId}:${chatId}`;
 }
 
+/** Desktop con puntatore fine: il cursore può tornare nel campo senza aprire una tastiera. */
+function desktopTyping() {
+  return window.matchMedia("(hover: hover) and (pointer: fine)").matches;
+}
+
+function focusDesktopField(field: HTMLTextAreaElement | null, force = false) {
+  if (!field || !desktopTyping()) return;
+  if (document.querySelector("[role='dialog']")) return;
+  if (!force) {
+    const active = document.activeElement;
+    if (active && active !== document.body && active !== field) return;
+    if (document.getSelection()?.toString()) return;
+  }
+  field.focus({ preventScroll: true });
+}
+
 function readDraft(clinicId: string, chatId: string) {
   try {
     return sessionStorage.getItem(draftKey(clinicId, chatId)) ?? "";
@@ -270,12 +286,14 @@ function MessageComposer({
   replyTo,
   onClearReply,
   onWaiting,
+  armCaret,
 }: {
   clinicId: string;
   chatId: string;
   replyTo: ReplyDraft | null;
   onClearReply: () => void;
   onWaiting?: (waiting: boolean) => void;
+  armCaret?: boolean;
 }) {
   const formRef = useRef<HTMLFormElement>(null);
   const fieldRef = useRef<HTMLTextAreaElement>(null);
@@ -294,6 +312,7 @@ function MessageComposer({
     if (state.sent) {
       writeDraft(clinicId, chatId, "");
       formRef.current?.reset();
+      focusDesktopField(field, true);
     } else {
       const saved = readDraft(clinicId, chatId);
       if (saved) field.value = saved;
@@ -311,6 +330,11 @@ function MessageComposer({
   useEffect(() => {
     if (replyTo) fieldRef.current?.focus();
   }, [replyTo]);
+
+  useLayoutEffect(() => {
+    if (!armCaret) return;
+    focusDesktopField(fieldRef.current);
+  }, [armCaret]);
 
   useEffect(() => {
     if (pending) onWaitingRef.current?.(true);
@@ -1777,6 +1801,7 @@ export function ClinicShell({
           replyTo={replyTo?.id ? replyTo : null}
           onClearReply={() => setReplyTo(null)}
           onWaiting={active.bot ? noteWaiting : undefined}
+          armCaret={replySettled}
         />
         </div>
         </>

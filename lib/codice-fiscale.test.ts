@@ -69,6 +69,29 @@ describe("codice fiscale encoding", () => {
     assert.equal(resolveCodiceCatastale("H501").code, "H501");
   });
 
+  it("keeps Feltre (BL) on D530 and does not use Firenze D612", () => {
+    assert.equal(resolveCodiceCatastale("feltre (BL)").code, "D530");
+    assert.equal(resolveCodiceCatastale("Comune di Feltre BL").code, "D530");
+    const feltre = computeCodiceFiscale({
+      cognome: "Rossi",
+      nome: "Mario",
+      sesso: "M",
+      dataNascita: "26/08/1996",
+      luogoNascita: "Feltre (BL)",
+    });
+    const firenze = computeCodiceFiscale({
+      cognome: "Rossi",
+      nome: "Mario",
+      sesso: "M",
+      dataNascita: "26/08/1996",
+      luogoNascita: "Firenze",
+    });
+    assert.equal(feltre.codiceCatastale, "D530");
+    assert.equal(firenze.codiceCatastale, "D612");
+    assert.equal(feltre.codice, "RSSMRA96M26D530K");
+    assert.notEqual(feltre.codice, firenze.codice);
+  });
+
   it("worker copy stays identical to the landing calculator", () => {
     const read = (rel: string) => fs.readFileSync(new URL(rel, import.meta.url), "utf8");
     assert.equal(read("./codice-fiscale.ts"), read("../worker/src/codice-fiscale.ts"));

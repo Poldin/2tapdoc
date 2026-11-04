@@ -40,6 +40,11 @@ export type CodiceFiscaleResult = {
 
 let catastaliCache: Map<string, string> | null = null;
 
+const PROVINCE_CODES = new Set(
+  "AG AL AN AO AP AQ AR AT AV BA BG BI BL BN BO BR BS BT BZ CA CB CE CH CI CL CN CO CR CS CT CZ EN FC FE FG FI FM FO FR GE GO GR IM IS KR LC LE LI LO LT LU MB MC ME MI MN MO MS MT NA NO NU OG OR OT PA PC PD PE PG PI PN PO PR PS PT PU PV PZ RA RC RE RG RI RM RN RO SA SI SO SP SR SS SU SV TA TE TN TO TP TR TS TV UD VA VB VC VE VI VR VS VT VV"
+    .split(" "),
+);
+
 function normalizePlaceKey(value: string) {
   return value
     .normalize("NFD")
@@ -114,6 +119,18 @@ export function parseDataNascita(value: string): { day: number; month: number; y
   throw new Error(`Data di nascita non valida: ${value}. Usa YYYY-MM-DD o DD/MM/YYYY.`);
 }
 
+function matchPlace(map: Map<string, string>, key: string) {
+  const direct = map.get(key);
+  if (direct) return { code: direct, matchedAs: key };
+
+  const split = key.match(/^(.*\S)\s([A-Z]{2})$/);
+  if (!split || !PROVINCE_CODES.has(split[2])) return null;
+  const name = split[1];
+  const hit = map.get(name);
+  if (!hit) return null;
+  return { code: hit, matchedAs: name };
+}
+
 export function resolveCodiceCatastale(luogoNascita: string): { code: string; matchedAs: string } {
   const raw = luogoNascita.trim();
   if (!raw) throw new Error("Luogo di nascita mancante.");
@@ -126,15 +143,14 @@ export function resolveCodiceCatastale(luogoNascita: string): { code: string; ma
 
   const key = normalizePlaceKey(raw);
   const map = getCodiciCatastali();
-  const direct = map.get(key);
-  if (direct) return { code: direct, matchedAs: key };
+  const direct = matchPlace(map, key);
+  if (direct) return direct;
 
   // Try without common prefixes
-  for (const prefix of ["COMUNE DI ", "CITTA DI ", "CITTA' DI "]) {
+  for (const prefix of ["COMUNE DI ", "CITTA DI "]) {
     if (key.startsWith(prefix)) {
-      const rest = key.slice(prefix.length).trim();
-      const hit = map.get(rest);
-      if (hit) return { code: hit, matchedAs: rest };
+      const hit = matchPlace(map, key.slice(prefix.length).trim());
+      if (hit) return hit;
     }
   }
 
@@ -196,7 +212,8 @@ export const calcolaCodiceFiscaleTool = {
         },
         luogo_nascita: {
           type: "string",
-          description: "Comune o stato di nascita (es. Roma) oppure codice catastale (es. H501)",
+          description:
+            "Comune o stato di nascita (es. Roma, Feltre (BL), Francia) oppure codice catastale (es. H501). Nella risposta copia il campo codice, senza ricalcolarlo.",
         },
       },
       required: ["cognome", "nome", "sesso", "data_nascita", "luogo_nascita"],
