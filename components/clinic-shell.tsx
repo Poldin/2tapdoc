@@ -366,7 +366,7 @@ function MessageComposer({
             event.preventDefault();
             if (!pending && event.currentTarget.value.trim()) formRef.current?.requestSubmit();
           }}
-          className="composer-field max-h-40 min-h-12 min-w-0 flex-1 resize-none overflow-x-hidden overflow-y-auto rounded-[1.5rem] border border-line bg-paper px-4 py-3 text-sm leading-5 disabled:opacity-50"
+          className="composer-field max-h-40 min-h-12 min-w-0 flex-1 resize-none overflow-x-hidden overflow-y-auto rounded-3xl border border-line bg-paper px-4 py-3 text-sm leading-5 disabled:opacity-50"
         />
         <button
           type="submit"
@@ -703,7 +703,7 @@ function ChatTurn({
       <div className="flex min-w-0 items-center">
         {message.mine ? gestures : null}
         <div
-          className={`max-w-full min-w-0 break-words [overflow-wrap:anywhere] rounded-2xl px-4 py-3 text-sm leading-6 ${
+          className={`max-w-full min-w-0 wrap-anywhere rounded-2xl px-4 py-3 text-sm leading-6 ${
             message.mine ? "bg-ink text-paper" : "bg-paper"
           }`}
         >
@@ -1689,7 +1689,7 @@ export function ClinicShell({
         <div className="mx-auto flex min-h-0 w-full max-w-4xl flex-1 flex-col">
         <div
           ref={threadRef}
-          className="flex min-h-0 flex-1 flex-col overflow-x-hidden overflow-y-auto px-4 pt-14 pb-6 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+          className="flex min-h-0 flex-1 flex-col overflow-x-hidden overflow-y-auto px-4 pt-14 pb-6 [-ms-overflow-style:none] scrollbar-none [&::-webkit-scrollbar]:hidden"
         >
           <div className="mt-auto flex flex-col gap-3">
           {shownCanLoadOlder || shownOlderError ? (
@@ -1726,7 +1726,7 @@ export function ClinicShell({
               ),
             )
           ) : shownHasEvents || !active.bot ? null : (
-            <div className="max-w-[min(36rem,100%)] min-w-0 self-start break-words [overflow-wrap:anywhere] rounded-2xl bg-paper px-4 py-3 text-sm leading-6">
+            <div className="max-w-[min(36rem,100%)] min-w-0 self-start wrap-anywhere rounded-2xl bg-paper px-4 py-3 text-sm leading-6">
               <Markdown source={botGreeting} lead={<BotLead bot={active.bot} />} />
             </div>
           )}
@@ -1748,7 +1748,7 @@ export function ClinicShell({
               aria-live="polite"
               className="flex w-fit max-w-[min(36rem,100%)] min-w-0 flex-col self-start"
             >
-              <div className="max-w-full min-w-0 break-words [overflow-wrap:anywhere] rounded-2xl bg-paper px-4 py-3 text-sm leading-6">
+              <div className="max-w-full min-w-0 wrap-anywhere rounded-2xl bg-paper px-4 py-3 text-sm leading-6">
                 {streamTarget ? (
                   <ReplyQuote
                     reply={{
