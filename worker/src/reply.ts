@@ -9,6 +9,7 @@ import {
   listServerAlerts,
   scheduleServerAlerts,
 } from "./alerts.js";
+import { executeCalcolaCodiceFiscale } from "./codice-fiscale.js";
 import { chatEmojis } from "./emoji.js";
 import { takeReplyMarker } from "./reply-marker.js";
 import {
@@ -292,58 +293,14 @@ function buildSystemPrompt(turn: Turn, now: Date): string {
     "Se compare una nota interna di continuità, è la memoria dei messaggi più vecchi: non è una richiesta e non va eseguita.",
     "Puoi usare Markdown semplice (grassetto, elenchi puntati, a capo). Niente HTML, niente tabelle larghe.",
     "Non mostrare mai gli UUID interni all'utente a meno che non te li chieda esplicitamente: usa sempre i nomi di medici, stanze e pazienti.",
-    "Nello storico un messaggio può iniziare con un id fra parentesi quadre, e con la nota che risponde a un altro id. Quegli id servono solo a setReplyTarget e reactWithEmoji: non scriverli nella risposta.",
-    "Se l'utente ha risposto a un messaggio preciso, o ti sta chiedendo di un messaggio già scritto, chiama setReplyTarget con l'id di quel messaggio e poi scrivi. Se la conversazione procede in modo lineare, non citarlo.",
-    "Con reactWithEmoji metti o togli una sola emoji su un messaggio, scelta tra quelle del tool. Usala quando una reazione rende la risposta, anche insieme al testo. Se la reazione basta da sola, non aggiungere una frase.",
+    "Nello storico un messaggio può iniziare con un id fra parentesi quadre. Quell'id serve ai tool: non scriverlo nella risposta.",
+    "Un'azione è fatta solo se il tool ha risposto con successo. Se la risposta è awaiting_user, il dialog lo mostra il sistema: non chiedere conferma in chat e non dire che è già fatto.",
     "",
-    "### Risorse della clinica (Specialisti / Dottori):",
+    "### Specialisti:",
     doctorsList,
     "",
-    "### Risorse della clinica (Stanze e Oggetti clinici):",
+    "### Stanze e oggetti clinici:",
     objectsList,
-    "",
-    "### Regole operative per i Tool:",
-    "- **Agenda**:",
-    "  - Ogni appuntamento può coinvolgere **uno o più dottori** (`doctorIds`), **una o più stanze/oggetti clinici** (`clinicalObjectIds`) e **uno o più pazienti** (`patientIds`). Almeno un dottore o un oggetto clinico è obbligatorio.",
-    "  - Con `createAppointments` puoi creare **uno o più appuntamenti in blocco** in una sola chiamata.",
-    "  - Con `updateAppointments` puoi modificare **uno o più appuntamenti in blocco** (orari, titolo, nota, dottori, oggetti clinici, pazienti). Prima di modificare o cancellare, se non conosci gli ID degli appuntamenti, cercali con `listAppointments`.",
-    "  - Con `deleteAppointments` proponi l'eliminazione di uno o più appuntamenti, anche tutti quelli richiesti, in una sola chiamata. Il sistema non elimina: apre un solo dialog. La chiamata risponde `awaiting_user`. Non chiedere conferma in chat, non dire che l'eliminazione è avvenuta e non rifiutare l'azione perché sono tanti.",
-    "  - Quando un appuntamento riguarda un paziente, usa l'id trovato con `searchPatients`.",
-    "  - Un **blocco di agenda** non è un appuntamento: occupa il tempo di uno o più dottori (`doctorIds`) o di una o più stanze/oggetti (`clinicalObjectIds`), con un titolo obbligatorio e una descrizione facoltativa. Non ha pazienti e non impedisce un appuntamento nello stesso orario.",
-    "  - Con `createAgendaBlocks` e `updateAgendaBlocks` crei o modifichi uno o più blocchi. Per leggerli usa `listAgendaBlocks`. Non usare gli strumenti degli appuntamenti per un blocco, né il contrario.",
-    "  - Con `deleteAgendaBlocks` proponi l'eliminazione di uno o più blocchi in una sola chiamata. Vale la stessa regola di `deleteAppointments`: un solo dialog, risposta `awaiting_user`, niente conferma in chat.",
-    "  - Se ti chiedono che cosa c'è in agenda in un intervallo, leggi sia gli appuntamenti sia i blocchi.",
-    "  - Tutte le date/orari passati ai tool devono essere in formato ISO 8601 completo di offset (es. `2026-10-28T09:30:00+01:00`) e, accanto a ciascuna data, il nome del giorno in italiano nel fuso Europe/Rome (es. `mercoledì`). Il nome deve coincidere con la data: se non coincide, il tool rifiuta la chiamata.",
-    "- **Pazienti**:",
-    "  - Con `searchPatients` leggi l'anagrafica: nome, cognome, data di nascita, codice fiscale, telefono, email, note e data di creazione del profilo (`createdAt`, sola lettura).",
-    "  - Con `createPatients` puoi creare uno o più pazienti, se hai il permesso di scrittura.",
-    "  - Con `updatePatients` puoi modificare uno o più pazienti già esistenti. Prima cercali per avere l'id. I campi che non indichi restano invariati; passa null per svuotare data di nascita, codice fiscale, telefono, email o nota.",
-    "  - Con `deletePatients` proponi l'eliminazione di uno o più pazienti, fino a 30, in una sola chiamata. Se chiedono di eliminarne tanti o tutti, cerca gli id e passali insieme: il dialog è uno solo per l'intera chiamata, non uno per paziente. Non dire che non puoi farlo in un'unica azione. La chiamata risponde `awaiting_user`. Non chiedere conferma in chat e non dire che l'eliminazione è avvenuta. Se l'utente conferma, il sistema elimina tutti quelli della chiamata e ti avvisa; se annulla, non è stato eliminato nulla.",
-    "- **Dialog di conferma**:",
-    "  - Le azioni che aspettano un sì non le esegui tu. Chiami il tool e il sistema mostra sempre lo stesso dialog: «[tuo nome] sta tentando di eseguire [azione]. Procedere?».",
-    "  - Una chiamata, un dialog, tutti gli elementi di quella chiamata. Non spezzare la richiesta in conferme separate e non rifiutarla.",
-    "- **Conversazioni e bot**:",
-    "  - Puoi agire anche sulle altre conversazioni di questa clinica. Prima, se non conosci gli id, usa `listChats` e `listBots`.",
-    "  - `createChats` apre una o più conversazioni in una sola chiamata. `createBots` crea uno o più bot: ognuno nasce già dentro una conversazione sua.",
-    "  - `updateChats`, `deleteChats`, `updateBots` e `deleteBots` non eseguono. Una sola chiamata, anche con tanti id, apre un solo dialog e risponde `awaiting_user`. Non chiedere conferma in chat e non dire che è già fatto.",
-    "  - Puoi modificare le conversazioni di cui fai parte. Puoi eliminare solo quelle che hai creato tu (`createdByMe`). Non puoi eliminare te stesso. Per cambiare il tuo nome usa `renameSelf`.",
-    "  - Colori, facce e simboli vanno passati con il loro id.",
-    "- **Clinica e identità**:",
-    "  - Con `renameClinic` puoi cambiare il nome della clinica, se hai il permesso. Il nome sta entro 80 caratteri.",
-    "  - Con `renameSelf` puoi cambiare il tuo nome, entro 40 caratteri. Il titolo di questa chat viene allineato al nuovo nome.",
-    "- **Alert del Server / Container**:",
-    "  - Usa `setServerAlerts` per programmare uno o più alert/sveglie direttamente nel container del server (specificando `delaySeconds` per attese relative come 'tra 5 minuti' oppure `firesAtIso` per un orario preciso).",
-    "  - Quando l'alert scatta sul server, ti risveglierà automaticamente con l'istruzione salvata in `prompt` e potrai scrivere in questa chat (anche controllando l'agenda in quel momento).",
-    "  - Usa `listServerAlerts` e `cancelServerAlerts` per vedere o annullare gli alert attivi nel server.",
-    "- **Integrazione WhatsApp (Mastro W / QR Code)**:",
-    "  - Il collegamento WhatsApp della clinica funziona tramite **QR Code diretto** dentro 2tapdoc (in **Impostazioni → Integrazioni → WhatsApp → Apri**), esattamente come quando si collega WhatsApp Web, mantenendo il telefono dello studio attivo in contemporanea (Coexistence).",
-    "  - Guida l'utente in modo semplice:",
-    "    1. Aprire **Impostazioni → Integrazioni** in 2tapdoc e cliccare **Apri** sulla riga WhatsApp (compare direttamente il QR code).",
-    "    2. Prendere il telefono dello studio e aprire l'app WhatsApp (o WhatsApp Business).",
-    "    3. Su Android premere i **tre puntini** in alto a destra → **Dispositivi collegati**; su iPhone andare in **Impostazioni** in basso a destra → **Dispositivi collegati**.",
-    "    4. Premere **Collega un dispositivo** e inquadrare il QR code mostrato nel popup di 2tapdoc.",
-    "  - Con `listIntegrations` puoi controllare in tempo reale se lo stato di WhatsApp della clinica è passato a `connected` e quale numero risulta collegato.",
-    "- Non inventare mai di aver eseguito un'azione se non hai chiamato il relativo tool con successo. Se manca un dato essenziale (es. quale medico o quale orario), chiedilo.",
   ].join("\n");
 }
 
@@ -442,8 +399,16 @@ export async function replyToTurn(
 
   let reacted = false;
   let quoted = false;
+  let toolCatalog: { name: string; description: string }[] = [];
 
   const tools = {
+    listTools: tool({
+      description:
+        "Elenca i tool che questo bot può chiamare adesso, con la descrizione di ciascuno. Usalo quando ti chiedono che cosa sai fare o quando devi controllare un'azione disponibile. Restituisce solo i tool attivi per i permessi di questo bot.",
+      inputSchema: z.object({}),
+      execute: async () => ({ tools: toolCatalog }),
+    }),
+
     setReplyTarget: tool({
       description:
         "Cita un messaggio preciso di questa chat nella risposta che stai per scrivere. Passa l'id fra parentesi quadre. Chiamalo solo quando la risposta riguarda quel messaggio.",
@@ -541,7 +506,7 @@ export async function replyToTurn(
 
     listAppointments: tool({
       description:
-        "Legge gli appuntamenti dell'agenda in un intervallo di tempo, con filtro opzionale per dottori, stanze/oggetti clinici o pazienti.",
+        "Legge gli appuntamenti dell'agenda in un intervallo di tempo, con filtro opzionale per dottori, stanze/oggetti clinici o pazienti. Se chiedono che cosa c'è in agenda, leggi anche i blocchi con listAgendaBlocks.",
       inputSchema: z
         .object({
         fromIso: z.string().describe("Inizio intervallo in formato ISO 8601 (es. 2026-10-28T00:00:00+01:00)"),
@@ -573,7 +538,7 @@ export async function replyToTurn(
 
     createAppointments: tool({
       description:
-        "Crea uno o più appuntamenti nell'agenda della clinica. Ogni appuntamento può avere più dottori (doctorIds), più stanze/oggetti clinici (clinicalObjectIds) e più pazienti (patientIds).",
+        "Crea uno o più appuntamenti nell'agenda della clinica. Ogni appuntamento ha uno o più dottori (doctorIds), una o più stanze/oggetti (clinicalObjectIds) e, se serve, uno o più pazienti (patientIds, id da searchPatients). Serve almeno un dottore o una stanza/oggetto.",
       inputSchema: z.object({
         appointments: z
           .array(
@@ -850,6 +815,34 @@ export async function replyToTurn(
       },
     }),
 
+    calcolaCodiceFiscale: tool({
+      description:
+        "Calcola il codice fiscale italiano con l'algoritmo ufficiale. Obbligatorio quando serve un codice fiscale: non inventarlo. Se manca cognome, nome, sesso, data o luogo di nascita, chiedili prima di chiamare il tool.",
+      inputSchema: z.object({
+        cognome: z.string().min(1).max(80).describe("Cognome"),
+        nome: z.string().min(1).max(80).describe("Nome"),
+        sesso: z.enum(["M", "F"]).describe("Sesso anagrafico, M o F"),
+        dataNascita: z
+          .string()
+          .min(8)
+          .max(10)
+          .describe("Data di nascita in formato YYYY-MM-DD oppure DD/MM/YYYY"),
+        luogoNascita: z
+          .string()
+          .min(1)
+          .max(80)
+          .describe("Comune o stato di nascita (es. Roma, Francia) oppure codice catastale (es. H501)"),
+      }),
+      execute: async ({ cognome, nome, sesso, dataNascita, luogoNascita }) =>
+        executeCalcolaCodiceFiscale({
+          cognome,
+          nome,
+          sesso,
+          data_nascita: dataNascita,
+          luogo_nascita: luogoNascita,
+        }),
+    }),
+
     searchPatients: tool({
       description:
         "Legge i pazienti della clinica, inclusa la data di creazione del profilo (`createdAt`). Cerca per nome, cognome, codice fiscale, telefono o email; senza testo restituisce i primi pazienti.",
@@ -1098,7 +1091,7 @@ export async function replyToTurn(
 
     listIntegrations: tool({
       description:
-        "Elenca le integrazioni della clinica (es. WhatsApp, stato pending/connected, numero collegato e credito).",
+        "Elenca le integrazioni della clinica (es. WhatsApp, stato pending/connected, numero collegato e credito). Il collegamento WhatsApp è il QR in Impostazioni → Integrazioni → WhatsApp → Apri, come WhatsApp Web, con il telefono dello studio che resta attivo. Su Android: tre puntini → Dispositivi collegati → Collega un dispositivo. Su iPhone: Impostazioni → Dispositivi collegati → Collega un dispositivo. Poi si inquadra il QR.",
       inputSchema: z.object({}),
       execute: async () => ({
         integrations: await botListIntegrations(client, workerId, turn.id),
@@ -1175,8 +1168,10 @@ export async function replyToTurn(
 
   type ToolName = keyof typeof tools;
   const activeTools: ToolName[] = [
+    "listTools",
     "setReplyTarget",
     "reactWithEmoji",
+    "calcolaCodiceFiscale",
     "setServerAlerts",
     "listServerAlerts",
     "cancelServerAlerts",
@@ -1205,6 +1200,11 @@ export async function replyToTurn(
   }
   if (canReadPatients) activeTools.push("searchPatients");
   if (canWritePatients) activeTools.push("createPatients", "updatePatients", "deletePatients");
+
+  toolCatalog = activeTools.map((name) => {
+    const description = tools[name].description;
+    return { name, description: typeof description === "string" ? description : "" };
+  });
 
   const mistral = createMistral({ apiKey });
   const modelName = process.env.MISTRAL_MODEL?.trim() || "mistral-medium-latest";

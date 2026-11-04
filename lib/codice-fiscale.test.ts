@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import { describe, it } from "node:test";
 import {
   checkChar,
@@ -66,6 +67,12 @@ describe("codice fiscale encoding", () => {
     assert.equal(resolveCodiceCatastale("Milano").code, "F205");
     assert.equal(resolveCodiceCatastale("Francia").code, "Z110");
     assert.equal(resolveCodiceCatastale("H501").code, "H501");
+  });
+
+  it("worker copy stays identical to the landing calculator", () => {
+    const read = (rel: string) => fs.readFileSync(new URL(rel, import.meta.url), "utf8");
+    assert.equal(read("./codice-fiscale.ts"), read("../worker/src/codice-fiscale.ts"));
+    assert.equal(read("./data/codici-catastali.json"), read("../worker/src/data/codici-catastali.json"));
   });
 
   it("tool executor returns ok for full args and error when missing", () => {
