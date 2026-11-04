@@ -1,11 +1,13 @@
 "use client";
 
 import { useActionState, useEffect, useLayoutEffect, useRef, useState, useTransition } from "react";
-import { flushSync } from "react-dom";
+import { createPortal, flushSync } from "react-dom";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, PanelLeftClose, PanelLeftOpen, Plus, Search, Send, Star } from "lucide-react";
-import { preferMessage, sendMessage, type CreatedChat, type FormState } from "@/app/clinics/actions";
+import { ArrowLeft, PanelLeftClose, PanelLeftOpen, Plus, Reply, Search, Send, SmilePlus, Star, ThumbsDown, ThumbsUp, X } from "lucide-react";
+import { preferMessage, reactToMessage, sendMessage, setMessageEmoji, type CreatedChat, type FormState } from "@/app/clinics/actions";
+import { chatEmojis } from "@/lib/chat-emoji";
+import { markdownToPlainText } from "@/lib/markdown";
 import { botGreeting } from "@/lib/bot-greeting";
 import { AgendaListItem, agendaListId } from "@/components/agenda-list-item";
 import { type AgendaEditPatient } from "@/components/agenda-edit-dialog";
@@ -31,9 +33,10 @@ import {
   placeByRecency,
   type ClinicRecency,
 } from "@/lib/clinic-recency";
+import { rememberLastClinic } from "@/lib/last-clinic";
 import { createClient } from "@/lib/supabase/client";
 import { BotDialog, type BotDraft } from "@/components/bot-dialog";
-import { BotGlyph, ChannelMark } from "@/components/mark";
+import { BotGlyph, ChannelMark, warmBotFaces } from "@/components/mark";
 import { ChatDialog, type ChatDraft } from "@/components/chat-dialog";
 import { ChatMenu } from "@/components/chat-menu";
 import { ChatTitle } from "@/components/chat-title";
@@ -52,6 +55,25 @@ export type ChatListItem = {
   bot: BotMark | null;
 };
 
+export type ChatReply = {
+  id: string;
+  excerpt: string;
+  mine: boolean;
+  botId: string | null;
+};
+
+export type ChatEmojiMark = {
+  emoji: string;
+  mine: boolean;
+  botId: string | null;
+};
+
+export type ReplyDraft = {
+  id: string;
+  label: string;
+  excerpt: string;
+};
+
 export type ChatMessage = {
   id: string;
   body: string;
@@ -59,6 +81,9 @@ export type ChatMessage = {
   mine: boolean;
   botId: string | null;
   preferredAt: string | null;
+  reaction: "up" | "down" | null;
+  replyTo: ChatReply | null;
+  emojis: ChatEmojiMark[];
 };
 
 export type BotMark = {
@@ -66,6 +91,13 @@ export type BotMark = {
   name: string;
   color: string;
   emoji: string;
+};
+
+type LiveReply = {
+  botId: string;
+  phase: "thinking" | "writing";
+  body: string;
+  updatedAt: string;
 };
 
 function threadEntries(messages: ChatMessage[]) {
@@ -186,9 +218,24 @@ function writeDraft(clinicId: string, chatId: string, value: string) {
   }
 }
 
-function MessageComposer({ clinicId, chatId }: { clinicId: string; chatId: string }) {
+function MessageComposer({
+  clinicId,
+  chatId,
+  replyTo,
+  onClearReply,
+  onWaiting,
+}: {
+  clinicId: string;
+  chatId: string;
+  replyTo: ReplyDraft | null;
+  onClearReply: () => void;
+  onWaiting?: (waiting: boolean) => void;
+}) {
   const formRef = useRef<HTMLFormElement>(null);
   const fieldRef = useRef<HTMLTextAreaElement>(null);
+  const onWaitingRef = useRef(onWaiting);
+  const sentRef = useRef<number | undefined>(undefined);
+  onWaitingRef.current = onWaiting;
   const [ready, setReady] = useState(false);
   const [state, action, pending] = useActionState<FormState, FormData>(
     sendMessage.bind(null, clinicId, chatId),
@@ -209,9 +256,49 @@ function MessageComposer({ clinicId, chatId }: { clinicId: string; chatId: strin
     fitField(field);
   }, [state.sent, clinicId, chatId]);
 
+  useEffect(() => {
+    if (!state.sent || state.sent === sentRef.current) return;
+    sentRef.current = state.sent;
+    onClearReply();
+  }, [state.sent, onClearReply]);
+
+  useEffect(() => {
+    if (replyTo) fieldRef.current?.focus();
+  }, [replyTo]);
+
+  useEffect(() => {
+    if (pending) onWaitingRef.current?.(true);
+    else if (state.error) onWaitingRef.current?.(false);
+  }, [pending, state.error]);
+
   return (
-    <form ref={formRef} action={action} className="flex flex-col gap-2 px-4 pb-3">
+    <form
+      ref={formRef}
+      action={action}
+      onSubmit={() => {
+        if (fieldRef.current?.value.trim()) onWaitingRef.current?.(true);
+      }}
+      className="flex flex-col gap-2 px-4 pb-3"
+    >
       {state.error ? <p className="px-4 text-sm text-teal">{state.error}</p> : null}
+      {replyTo ? (
+        <div className="flex items-stretch gap-2 rounded-2xl border border-line bg-paper px-3 py-2">
+          <span className="w-0.5 shrink-0 rounded-full bg-ink" />
+          <span className="min-w-0 flex-1">
+            {replyTo.label ? <span className="block text-xs">{replyTo.label}</span> : null}
+            <span className="block truncate text-xs text-muted">{replyTo.excerpt}</span>
+          </span>
+          <button
+            type="button"
+            aria-label="Annulla la risposta"
+            onClick={onClearReply}
+            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-muted"
+          >
+            <X className="h-3.5 w-3.5" strokeWidth={2} />
+          </button>
+          <input type="hidden" name="replyTo" value={replyTo.id} />
+        </div>
+      ) : null}
       <div className="flex items-end gap-2">
         <textarea
           ref={fieldRef}
@@ -248,8 +335,16 @@ function MessageComposer({ clinicId, chatId }: { clinicId: string; chatId: strin
   );
 }
 
-function BotLead({ bot }: { bot: BotMark }) {
-  return <BotGlyph color={bot.color} emoji={bot.emoji} plain className="mr-1.5 h-5 w-5 align-[-0.2em]" />;
+function BotLead({ bot, animate = false }: { bot: BotMark; animate?: boolean }) {
+  return (
+    <BotGlyph
+      color={bot.color}
+      emoji={bot.emoji}
+      animate={animate}
+      plain
+      className="mr-1.5 h-5 w-5 align-[-0.2em]"
+    />
+  );
 }
 
 const messageIdPattern =
@@ -291,11 +386,316 @@ function PreferStar({
         });
       }}
       className={`flex h-6 w-6 items-center justify-center rounded-full disabled:opacity-40 ${
-        on ? "text-ink" : "text-muted"
+        on ? "text-yellow-500" : "text-muted"
       }`}
     >
       <Star className={`h-3.5 w-3.5 ${on ? "fill-current" : "fill-none"}`} strokeWidth={2} />
     </button>
+  );
+}
+
+function MessageVotes({
+  clinicId,
+  chatId,
+  messageId,
+  vote,
+}: {
+  clinicId: string;
+  chatId: string;
+  messageId: string;
+  vote: "up" | "down" | null;
+}) {
+  const [override, setOverride] = useState<"up" | "down" | "none" | null>(null);
+  const [pending, startTransition] = useTransition();
+  const shown = override === null ? vote : override === "none" ? null : override;
+
+  useEffect(() => {
+    setOverride(null);
+  }, [vote]);
+
+  if (!messageIdPattern.test(messageId)) return null;
+
+  function choose(next: "up" | "down") {
+    const resolved = shown === next ? "none" : next;
+    setOverride(resolved);
+    startTransition(async () => {
+      const result = await reactToMessage(clinicId, chatId, messageId, resolved);
+      if (result.error) setOverride(null);
+    });
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        aria-pressed={shown === "up"}
+        aria-label={shown === "up" ? "Togli il pollice in su" : "Pollice in su"}
+        disabled={pending}
+        onClick={() => choose("up")}
+        className={`flex h-6 w-6 items-center justify-center rounded-full disabled:opacity-40 ${
+          shown === "up" ? "text-green-600" : "text-muted"
+        }`}
+      >
+        <ThumbsUp className={`h-3.5 w-3.5 ${shown === "up" ? "fill-current" : "fill-none"}`} strokeWidth={2} />
+      </button>
+      <button
+        type="button"
+        aria-pressed={shown === "down"}
+        aria-label={shown === "down" ? "Togli il pollice in giù" : "Pollice in giù"}
+        disabled={pending}
+        onClick={() => choose("down")}
+        className={`flex h-6 w-6 items-center justify-center rounded-full disabled:opacity-40 ${
+          shown === "down" ? "text-red-600" : "text-muted"
+        }`}
+      >
+        <ThumbsDown className={`h-3.5 w-3.5 ${shown === "down" ? "fill-current" : "fill-none"}`} strokeWidth={2} />
+      </button>
+    </>
+  );
+}
+
+function speakerName(message: { mine: boolean; botId: string | null }, bot: BotMark | null) {
+  if (message.mine) return "Tu";
+  if (bot && message.botId === bot.id) return bot.name;
+  return "Messaggio";
+}
+
+function focusMessage(id: string) {
+  const node = document.getElementById(`message-${id}`);
+  if (!node) return;
+  node.scrollIntoView({ behavior: "smooth", block: "center" });
+  node.classList.remove("message-flash");
+  void node.offsetWidth;
+  node.classList.add("message-flash");
+}
+
+function shownEmojiGroups(emojis: ChatEmojiMark[], mineEmoji: string | null) {
+  const shown = mineEmoji
+    ? [...emojis.filter((item) => !item.mine), { emoji: mineEmoji, mine: true, botId: null }]
+    : emojis.filter((item) => !item.mine);
+  const groups = new Map<string, { emoji: string; count: number; mine: boolean }>();
+  for (const item of shown) {
+    const group = groups.get(item.emoji) ?? { emoji: item.emoji, count: 0, mine: false };
+    group.count += 1;
+    if (item.mine) group.mine = true;
+    groups.set(item.emoji, group);
+  }
+  return [...groups.values()];
+}
+
+function ChatTurn({
+  clinicId,
+  chatId,
+  message,
+  bot,
+  entered,
+  onReply,
+}: {
+  clinicId: string;
+  chatId: string;
+  message: ChatMessage;
+  bot: BotMark | null;
+  entered: boolean;
+  onReply: (reply: ReplyDraft) => void;
+}) {
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const [open, setOpen] = useState(false);
+  const [box, setBox] = useState<{ top: number; left: number; down: boolean } | null>(null);
+  const [override, setOverride] = useState<string | "none" | null>(null);
+  const [pending, startTransition] = useTransition();
+  const savedMine = message.emojis.find((item) => item.mine)?.emoji ?? null;
+  const mineEmoji = override === null ? savedMine : override === "none" ? null : override;
+  const emojiKey = message.emojis.map((item) => `${item.emoji}:${item.mine ? 1 : 0}:${item.botId ?? ""}`).join("|");
+  const groups = shownEmojiGroups(message.emojis, mineEmoji);
+  const canGesture = messageIdPattern.test(message.id);
+
+  useEffect(() => {
+    setOverride(null);
+  }, [emojiKey]);
+
+  useEffect(() => {
+    if (!open) return;
+    function onPointerDown(event: PointerEvent) {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (buttonRef.current?.contains(target)) return;
+      if (target instanceof Element && target.closest("[data-emoji-picker]")) return;
+      setOpen(false);
+    }
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") setOpen(false);
+    }
+    function onScroll() {
+      setOpen(false);
+    }
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    window.addEventListener("scroll", onScroll, true);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("scroll", onScroll, true);
+    };
+  }, [open]);
+
+  function choose(next: string | null) {
+    if (!canGesture) return;
+    const resolved = mineEmoji === next ? null : next;
+    setOverride(resolved ?? "none");
+    setOpen(false);
+    startTransition(async () => {
+      const result = await setMessageEmoji(clinicId, chatId, message.id, resolved);
+      if (result.error) setOverride(null);
+    });
+  }
+
+  function openPicker() {
+    const rect = buttonRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const width = 288;
+    const left = Math.max(8, Math.min(rect.right - width, window.innerWidth - width - 8));
+    const down = rect.top < 240;
+    setBox({ top: down ? rect.bottom + 8 : rect.top - 8, left, down });
+    setOpen(true);
+  }
+
+  const picker =
+    open && box
+      ? createPortal(
+          <div
+            data-emoji-picker
+            className="fixed z-50 w-72 rounded-2xl border border-line bg-paper p-2 shadow-sm"
+            style={{
+              top: box.top,
+              left: box.left,
+              transform: box.down ? undefined : "translateY(-100%)",
+            }}
+          >
+            <div className="grid grid-cols-8 gap-0.5">
+              {chatEmojis.map((emoji) => (
+                <button
+                  key={emoji}
+                  type="button"
+                  disabled={pending}
+                  aria-pressed={mineEmoji === emoji}
+                  aria-label={`Reagisci con ${emoji}`}
+                  onClick={() => choose(emoji)}
+                  className={`flex aspect-square items-center justify-center rounded-lg text-xl disabled:opacity-40 ${
+                    mineEmoji === emoji ? "bg-background" : "hover:bg-background"
+                  }`}
+                >
+                  {emoji}
+                </button>
+              ))}
+            </div>
+          </div>,
+          document.body,
+        )
+      : null;
+
+  const gestures = canGesture ? (
+    <div className={`flex items-center ${message.mine ? "flex-row-reverse" : ""}`}>
+      <button
+        type="button"
+        aria-label="Rispondi a questo messaggio"
+        onClick={() =>
+          onReply({
+            id: message.id,
+            label: bot && !message.mine ? "" : speakerName(message, bot),
+            excerpt: markdownToPlainText(message.body).slice(0, 180),
+          })
+        }
+        className="flex h-7 w-7 items-center justify-center rounded-full text-muted"
+      >
+        <Reply className="h-3.5 w-3.5" strokeWidth={2} />
+      </button>
+      <button
+        ref={buttonRef}
+        type="button"
+        aria-label="Reagisci con un'emoji"
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        disabled={pending}
+        onClick={() => (open ? setOpen(false) : openPicker())}
+        className="flex h-7 w-7 items-center justify-center rounded-full text-muted disabled:opacity-40"
+      >
+        <SmilePlus className="h-3.5 w-3.5" strokeWidth={2} />
+      </button>
+    </div>
+  ) : null;
+
+  return (
+    <div
+      id={`message-${message.id}`}
+      className={`flex w-fit max-w-[min(36rem,100%)] min-w-0 flex-col gap-1 ${
+        message.mine ? "items-end self-end" : "items-start self-start"
+      } ${entered ? (message.mine ? "msg-enter-mine" : "msg-enter-theirs") : ""}`}
+    >
+      <div className="flex min-w-0 items-center">
+        {message.mine ? gestures : null}
+        <div
+          className={`max-w-full min-w-0 break-words [overflow-wrap:anywhere] rounded-2xl px-4 py-3 text-sm leading-6 ${
+            message.mine ? "bg-ink text-paper" : "bg-paper"
+          }`}
+        >
+          {message.replyTo ? (
+            <button
+              type="button"
+              onClick={() => focusMessage(message.replyTo!.id)}
+              className={`mb-2 block w-full rounded-xl px-2 py-1 text-left ${
+                message.mine ? "bg-white/10" : "bg-background"
+              }`}
+            >
+            {bot && !message.replyTo.mine ? null : (
+              <span className="block text-xs font-medium">{speakerName(message.replyTo, bot)}</span>
+            )}
+            <span className={`line-clamp-2 text-xs ${message.mine ? "text-paper/80" : "text-muted"}`}>
+                {message.replyTo.excerpt}
+              </span>
+            </button>
+          ) : null}
+          <Markdown
+            source={message.body}
+            lead={bot && message.botId === bot.id ? <BotLead bot={bot} /> : undefined}
+          />
+        </div>
+        {message.mine ? null : gestures}
+      </div>
+      {groups.length > 0 ? (
+        <div className={`-mt-1 flex flex-wrap gap-1 px-2 ${message.mine ? "justify-end" : "justify-start"}`}>
+          {groups.map((group) => (
+            <button
+              key={group.emoji}
+              type="button"
+              disabled={!canGesture || pending}
+              onClick={() => choose(group.emoji)}
+              aria-label={
+                group.mine ? `Togli la reazione ${group.emoji}` : `Reagisci con ${group.emoji}`
+              }
+              className={`rounded-full border bg-paper px-1.5 py-0.5 text-sm leading-none disabled:opacity-40 ${
+                group.mine ? "border-ink" : "border-line"
+              }`}
+            >
+              {group.emoji}
+              {group.count > 1 ? ` ${group.count}` : ""}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      <div className="flex items-center gap-0.5 px-1">
+        <time dateTime={message.createdAt} className="text-xs text-muted">
+          {formatClock(message.createdAt)}
+        </time>
+        <PreferStar
+          clinicId={clinicId}
+          chatId={chatId}
+          messageId={message.id}
+          preferredAt={message.preferredAt}
+        />
+        <MessageVotes clinicId={clinicId} chatId={chatId} messageId={message.id} vote={message.reaction} />
+      </div>
+      {picker}
+    </div>
   );
 }
 
@@ -387,20 +787,41 @@ export function ClinicShell({
   const shownRecency = recencyTokenSeen === recencyToken ? recency : initialRecency;
   const createButtonRef = useRef<HTMLButtonElement>(null);
 
+  useEffect(() => {
+    const start = () => warmBotFaces();
+    if (typeof window.requestIdleCallback === "function") {
+      const id = window.requestIdleCallback(start);
+      return () => window.cancelIdleCallback(id);
+    }
+    const id = window.setTimeout(start, 400);
+    return () => window.clearTimeout(id);
+  }, []);
+
   const router = useRouter();
   const initial = (email.trim()[0] || "?").toUpperCase();
   const listRef = useRef<HTMLUListElement>(null);
   const threadRef = useRef<HTMLDivElement>(null);
+  const stickToBottom = useRef(true);
   const knownMessages = useRef<{ chatId: string | null; ids: Set<string> }>({
     chatId: null,
     ids: new Set(),
   });
+  const waitBaseline = useRef<string | null>(null);
+  const [draftChatId, setDraftChatId] = useState(activeChatId);
+  const [waiting, setWaiting] = useState(false);
+  const [live, setLive] = useState<LiveReply | null>(null);
   const [entered, setEntered] = useState<Set<string>>(new Set());
   const badgeRef = useRef<HTMLParagraphElement>(null);
   const [dayChat, setDayChat] = useState(activeChatId);
   const [dayLabel, setDayLabel] = useState(() =>
     messages.at(-1) ? formatDay(messages.at(-1)!.createdAt) : "oggi",
   );
+  const [replyTo, setReplyTo] = useState<ReplyDraft | null>(null);
+  const [replyChatId, setReplyChatId] = useState(activeChatId);
+  if (replyChatId !== activeChatId) {
+    setReplyChatId(activeChatId);
+    setReplyTo(null);
+  }
   const [focusBox, setFocusBox] = useState<{ top: number; height: number } | null>(null);
   const [slide, setSlide] = useState(false);
   const [added, setAdded] = useState<ChatListItem[]>([]);
@@ -429,7 +850,39 @@ export function ClinicShell({
   const shownActiveId = openThread?.id ?? activeChatId;
   const shownMessages = openThread?.messages ?? messages;
   const shownHasEvents = openThread?.hasEvents ?? hasEvents;
+  const lastBotMessage = [...shownMessages].reverse().find((message) => message.botId) ?? null;
+  const replyLanded =
+    draftChatId === shownActiveId &&
+    waitBaseline.current !== null &&
+    lastBotMessage !== null &&
+    lastBotMessage.id !== waitBaseline.current;
+  const draftSaved =
+    draftChatId === shownActiveId &&
+    live !== null &&
+    live.body.trim() !== "" &&
+    lastBotMessage !== null &&
+    lastBotMessage.botId === live.botId &&
+    lastBotMessage.body.trim() === live.body.trim() &&
+    lastBotMessage.id !== waitBaseline.current;
+  if (draftChatId !== shownActiveId) {
+    setDraftChatId(shownActiveId);
+    setWaiting(false);
+    setLive(null);
+    waitBaseline.current = null;
+    stickToBottom.current = true;
+  } else if (replyLanded || draftSaved) {
+    waitBaseline.current = null;
+    if (waiting) setWaiting(false);
+    if (live) setLive(null);
+  }
+  const replySettled = replyLanded || draftSaved;
+  const visibleLive = draftChatId === shownActiveId && !replySettled ? live : null;
+  const visibleWaiting = draftChatId === shownActiveId && waiting && !replySettled;
   const active = visibleChats.find((chat) => chat.id === shownActiveId) ?? null;
+  const streamBody =
+    visibleLive?.phase === "writing" && visibleLive.body.trim() ? visibleLive.body : "";
+  const showThinking =
+    Boolean(active?.bot) && !streamBody && (visibleWaiting || visibleLive?.phase === "thinking");
   const rows = placeByRecency(visibleChats, [
     { id: agendaListId, at: shownRecency.agendaAt },
     { id: patientsListId, at: shownRecency.patientsAt },
@@ -501,6 +954,16 @@ export function ClinicShell({
     channel.on(
       "postgres_changes",
       {
+        event: "*",
+        schema: "public",
+        table: "message_emojis",
+        filter: `chat_id=eq.${activeId}`,
+      },
+      refresh,
+    );
+    channel.on(
+      "postgres_changes",
+      {
         event: "INSERT",
         schema: "public",
         table: "chat_clinics",
@@ -523,6 +986,72 @@ export function ClinicShell({
       void supabase.removeChannel(channel);
     };
   }, [opened, activeId, agendaOpen, patientsOpen, settingsOpen, clinicId]);
+
+  useEffect(() => {
+    const botId = active?.bot?.id;
+    if (opened || !activeId || !botId || agendaOpen || patientsOpen || settingsOpen) return;
+
+    const supabase = createClient();
+    let stopped = false;
+    const channel = supabase.channel(`draft:${clinicId}:${activeId}`);
+
+    const apply = (row: { bot_id?: string; phase?: string; body?: string; updated_at?: string } | null, removed: boolean) => {
+      if (removed) {
+        setLive((current) =>
+          current && current.phase === "writing" && current.body.trim() ? current : null,
+        );
+        return;
+      }
+      if (!row || row.bot_id !== botId) return;
+      const updatedAt = typeof row.updated_at === "string" ? row.updated_at : "";
+      setLive((current) => {
+        if (updatedAt && current?.updatedAt && updatedAt < current.updatedAt) return current;
+        const phase = row.phase === "writing" ? "writing" : "thinking";
+        const body = phase === "writing" && typeof row.body === "string" ? row.body : "";
+        return { botId, phase, body, updatedAt };
+      });
+    };
+
+    channel.on(
+      "postgres_changes",
+      {
+        event: "*",
+        schema: "public",
+        table: "chat_drafts",
+        filter: `chat_id=eq.${activeId}`,
+      },
+      (payload) => {
+        if (payload.eventType === "DELETE") apply(null, true);
+        else apply(payload.new, false);
+      },
+    );
+
+    void supabase.auth.getSession().then(({ data }) => {
+      if (stopped) return;
+      const token = data.session?.access_token;
+      const ready = token ? supabase.realtime.setAuth(token) : Promise.resolve();
+      void ready.then(() => {
+        if (stopped) return;
+        channel.subscribe((status) => {
+          if (status !== "SUBSCRIBED" || stopped) return;
+          void supabase
+            .from("chat_drafts")
+            .select("bot_id, phase, body, updated_at")
+            .eq("chat_id", activeId)
+            .eq("bot_id", botId)
+            .maybeSingle()
+            .then(({ data: existing }) => {
+              if (!stopped && existing) apply(existing, false);
+            });
+        });
+      });
+    });
+
+    return () => {
+      stopped = true;
+      void supabase.removeChannel(channel);
+    };
+  }, [opened, activeId, agendaOpen, patientsOpen, settingsOpen, clinicId, active?.bot?.id]);
 
   useEffect(() => {
     const supabase = createClient();
@@ -586,6 +1115,10 @@ export function ClinicShell({
   useLayoutEffect(() => {
     if (localStorage.getItem(navKey) === "collapsed") setNavCollapsed(true);
   }, []);
+
+  useEffect(() => {
+    rememberLastClinic(currentUserId, clinicId);
+  }, [currentUserId, clinicId]);
 
   function toggleNav() {
     setNavCollapsed((collapsed) => {
@@ -662,14 +1195,18 @@ export function ClinicShell({
   useLayoutEffect(() => {
     const thread = threadRef.current;
     if (!thread) return;
-    thread.scrollTop = thread.scrollHeight;
+    if (stickToBottom.current) thread.scrollTop = thread.scrollHeight;
     syncDayBadge(thread, badgeRef.current, setDayLabel);
-  }, [shownActiveId, shownMessages]);
+  }, [shownActiveId, shownMessages, showThinking, streamBody]);
 
   useEffect(() => {
     const thread = threadRef.current;
     if (!thread) return;
-    const sync = () => syncDayBadge(thread, badgeRef.current, setDayLabel);
+    const sync = () => {
+      syncDayBadge(thread, badgeRef.current, setDayLabel);
+      const distance = thread.scrollHeight - thread.scrollTop - thread.clientHeight;
+      stickToBottom.current = distance < 120;
+    };
     thread.addEventListener("scroll", sync, { passive: true });
     const observer = new ResizeObserver(sync);
     observer.observe(thread);
@@ -678,6 +1215,17 @@ export function ClinicShell({
       observer.disconnect();
     };
   }, [shownActiveId, shownMessages]);
+
+  function noteWaiting(next: boolean) {
+    if (!next) {
+      waitBaseline.current = null;
+      setWaiting(false);
+      setLive(null);
+      return;
+    }
+    waitBaseline.current = lastBotMessage?.id ?? "";
+    setWaiting(true);
+  }
 
   return (
     <div className="fixed inset-0 flex bg-background text-ink">
@@ -711,6 +1259,7 @@ export function ClinicShell({
               aria-haspopup="menu"
               aria-expanded={menuOpen}
               onClick={() => {
+                warmBotFaces();
                 setMenuOpen((open) => !open);
                 setSearchOpen(false);
                 setClinicsOpen(false);
@@ -983,44 +1532,15 @@ export function ClinicShell({
                   <span className="text-sm text-date">{entry.label}</span>
                 </div>
               ) : (
-                <div
+                <ChatTurn
                   key={entry.message.id}
-                  className={`flex w-fit max-w-[min(36rem,100%)] min-w-0 flex-col items-end gap-1 ${
-                    entry.message.mine ? "self-end" : "self-start"
-                  } ${
-                    entered.has(entry.message.id)
-                      ? entry.message.mine
-                        ? "msg-enter-mine"
-                        : "msg-enter-theirs"
-                      : ""
-                  }`}
-                >
-                  <div
-                    className={`max-w-full min-w-0 break-words [overflow-wrap:anywhere] rounded-2xl px-4 py-3 text-sm leading-6 ${
-                      entry.message.mine ? "bg-ink text-paper" : "bg-paper"
-                    }`}
-                  >
-                    <Markdown
-                      source={entry.message.body}
-                      lead={
-                        active.bot && entry.message.botId === active.bot.id ? (
-                          <BotLead bot={active.bot} />
-                        ) : undefined
-                      }
-                    />
-                  </div>
-                  <div className="flex items-center gap-0.5 px-1">
-                    <time dateTime={entry.message.createdAt} className="text-xs text-muted">
-                      {formatClock(entry.message.createdAt)}
-                    </time>
-                    <PreferStar
-                      clinicId={clinicId}
-                      chatId={active.id}
-                      messageId={entry.message.id}
-                      preferredAt={entry.message.preferredAt}
-                    />
-                  </div>
-                </div>
+                  clinicId={clinicId}
+                  chatId={active.id}
+                  message={entry.message}
+                  bot={active.bot}
+                  entered={entered.has(entry.message.id)}
+                  onReply={setReplyTo}
+                />
               ),
             )
           ) : shownHasEvents || !active.bot ? null : (
@@ -1028,10 +1548,40 @@ export function ClinicShell({
               <Markdown source={botGreeting} lead={<BotLead bot={active.bot} />} />
             </div>
           )}
+          {showThinking && active.bot ? (
+            <div role="status" aria-live="polite" className="self-start py-1">
+              <span className="sr-only">Sto elaborando</span>
+              <BotGlyph
+                color={active.bot.color}
+                emoji={active.bot.emoji}
+                animate
+                plain
+                className="h-10 w-10"
+              />
+            </div>
+          ) : null}
+          {streamBody && active.bot ? (
+            <div
+              role="status"
+              aria-live="polite"
+              className="flex w-fit max-w-[min(36rem,100%)] min-w-0 flex-col self-start"
+            >
+              <div className="max-w-full min-w-0 break-words [overflow-wrap:anywhere] rounded-2xl bg-paper px-4 py-3 text-sm leading-6">
+                <Markdown source={streamBody} lead={<BotLead bot={active.bot} animate />} />
+              </div>
+            </div>
+          ) : null}
           </div>
         </div>
 
-        <MessageComposer key={active.id} clinicId={clinicId} chatId={active.id} />
+        <MessageComposer
+          key={active.id}
+          clinicId={clinicId}
+          chatId={active.id}
+          replyTo={replyTo?.id ? replyTo : null}
+          onClearReply={() => setReplyTo(null)}
+          onWaiting={active.bot ? noteWaiting : undefined}
+        />
         </div>
         </>
         ) : null}

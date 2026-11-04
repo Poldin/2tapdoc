@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { CalendarClock, CalendarOff, Pencil, Stethoscope, Trash, Users, type LucideIcon } from "lucide-react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { Box, CalendarClock, CalendarOff, Pencil, Stethoscope, Trash, Users, type LucideIcon } from "lucide-react";
 import { createAgendaEntry, updateAgendaEntry } from "@/app/clinics/actions";
 import type { AgendaLane } from "@/components/agenda-view";
 
@@ -47,7 +48,6 @@ function sameIds(left: string[], right: string[]) {
 }
 
 function SearchPicker({
-  label,
   icon: Icon,
   placeholder,
   options,
@@ -55,7 +55,6 @@ function SearchPicker({
   locked,
   onChange,
 }: {
-  label?: string;
   icon?: LucideIcon;
   placeholder: string;
   options: { id: string; name: string }[];
@@ -64,6 +63,8 @@ function SearchPicker({
   onChange: (ids: string[]) => void;
 }) {
   const [query, setQuery] = useState("");
+  const anchorRef = useRef<HTMLDivElement>(null);
+  const [box, setBox] = useState<{ top: number; left: number; width: number; maxHeight: number; above: boolean } | null>(null);
   const needle = query.trim().toLowerCase();
   const matches = needle
     ? options.filter((option) => !selected.includes(option.id) && option.name.toLowerCase().includes(needle))
@@ -72,68 +73,134 @@ function SearchPicker({
     const option = options.find((item) => item.id === id);
     return option ? [option] : [];
   });
+  const showResults = !locked && needle.length > 0;
+
+  useEffect(() => {
+    if (locked) setQuery("");
+  }, [locked]);
+
+  useLayoutEffect(() => {
+    if (!showResults) return;
+    function place() {
+      const node = anchorRef.current;
+      if (!node) return;
+      const rect = node.getBoundingClientRect();
+      const gap = 4;
+      const roomBelow = window.innerHeight - rect.bottom - gap - 8;
+      const roomAbove = rect.top - gap - 8;
+      const above = roomBelow < 120 && roomAbove > roomBelow;
+      setBox({
+        top: above ? rect.top - gap : rect.bottom + gap,
+        left: rect.left,
+        width: rect.width,
+        maxHeight: Math.max(80, Math.min(144, above ? roomAbove : roomBelow)),
+        above,
+      });
+    }
+    place();
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    return () => {
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+    };
+  }, [showResults, query, selected]);
 
   if (locked && chosen.length === 0) return null;
 
+  const chips =
+    chosen.length > 0 ? (
+      <div className={`${locked ? "min-w-0 flex-1" : "mt-2"} flex flex-wrap gap-1.5`}>
+        {chosen.map((option) => (
+          <span key={option.id} className="flex max-w-full items-center gap-1 rounded-full bg-background py-1 pr-1 pl-2.5 text-sm">
+            <span className="truncate">{option.name}</span>
+            {locked ? null : (
+              <button
+                type="button"
+                aria-label={`Rimuovi ${option.name}`}
+                onClick={() => onChange(selected.filter((id) => id !== option.id))}
+                className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-muted hover:bg-line hover:text-ink"
+              >
+                ×
+              </button>
+            )}
+          </span>
+        ))}
+      </div>
+    ) : null;
+
+  const results =
+    showResults && box
+      ? createPortal(
+          <ul
+            style={{
+              top: box.top,
+              left: box.left,
+              width: box.width,
+              maxHeight: box.maxHeight,
+              transform: box.above ? "translateY(-100%)" : undefined,
+            }}
+            className="fixed z-[60] overflow-y-auto rounded-xl border border-line bg-paper shadow-sm"
+          >
+            {matches.length === 0 ? (
+              <li className="px-3 py-2 text-sm text-muted">Nessun risultato.</li>
+            ) : (
+              matches.map((option) => (
+                <li key={option.id}>
+                  <button
+                    type="button"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => {
+                      onChange([...selected, option.id]);
+                      setQuery("");
+                    }}
+                    className="w-full px-3 py-2 text-left text-sm hover:bg-background"
+                  >
+                    {option.name}
+                  </button>
+                </li>
+              ))
+            )}
+          </ul>,
+          document.body,
+        )
+      : null;
+
+  if (locked) {
+    return (
+      <div className="flex items-start gap-2">
+        {Icon ? <Icon className="mt-1.5 h-4 w-4 shrink-0 text-muted" strokeWidth={2} /> : null}
+        {chips}
+      </div>
+    );
+  }
+
   return (
     <div>
-      {label ? (
-        <p className="mb-2 flex items-center gap-2 text-sm text-ink">
-          {Icon ? <Icon className="h-4 w-4 text-muted" strokeWidth={2} /> : null}
-          {label}
-        </p>
-      ) : null}
-      {locked ? null : (
-        <input
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder={placeholder}
-          aria-label={placeholder}
-          className="w-full border-0 border-b border-line bg-transparent py-1.5 text-sm outline-none focus:border-ink"
-        />
-      )}
-      {!locked && needle ? (
-        <ul className="mt-1 max-h-36 overflow-y-auto rounded-xl border border-line bg-paper">
-          {matches.length === 0 ? (
-            <li className="px-3 py-2 text-sm text-muted">Nessun risultato.</li>
-          ) : (
-            matches.map((option) => (
-              <li key={option.id}>
-                <button
-                  type="button"
-                  onMouseDown={(event) => event.preventDefault()}
-                  onClick={() => {
-                    onChange([...selected, option.id]);
-                    setQuery("");
-                  }}
-                  className="w-full px-3 py-2 text-left text-sm hover:bg-background"
-                >
-                  {option.name}
-                </button>
-              </li>
-            ))
-          )}
-        </ul>
-      ) : null}
-      {chosen.length > 0 ? (
-        <div className="mt-2 flex flex-wrap gap-1.5">
-          {chosen.map((option) => (
-            <span key={option.id} className="flex max-w-full items-center gap-1 rounded-full bg-background py-1 pr-1 pl-2.5 text-sm">
-              <span className="truncate">{option.name}</span>
-              {locked ? null : (
-                <button
-                  type="button"
-                  aria-label={`Rimuovi ${option.name}`}
-                  onClick={() => onChange(selected.filter((id) => id !== option.id))}
-                  className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-muted hover:bg-line hover:text-ink"
-                >
-                  ×
-                </button>
-              )}
-            </span>
-          ))}
+      <div className="flex items-center gap-2">
+        {Icon ? <Icon className="h-4 w-4 shrink-0 text-muted" strokeWidth={2} /> : null}
+        <div ref={anchorRef} className="min-w-0 flex-1">
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (!needle) return;
+              if (event.key === "Escape") {
+                event.preventDefault();
+                event.stopPropagation();
+                setQuery("");
+              }
+              if (event.key === "Enter") event.preventDefault();
+            }}
+            placeholder={placeholder}
+            aria-label={placeholder}
+            aria-expanded={showResults}
+            className="w-full border-0 border-b border-line bg-transparent py-1.5 text-sm outline-none focus:border-ink"
+          />
         </div>
-      ) : null}
+      </div>
+      {results}
+      {chips}
     </div>
   );
 }
@@ -342,7 +409,26 @@ export function AgendaEditDialog({
               <button
                 type="button"
                 aria-pressed={editing}
-                onClick={() => setEditing(true)}
+                onClick={() => {
+                  if (pending) return;
+                  if (!editing) {
+                    setEditing(true);
+                    return;
+                  }
+                  setKind(target.kind);
+                  setTitle(target.title ?? "");
+                  setBody(target.body ?? "");
+                  setNotesOpen(Boolean(target.body));
+                  setStartDate(dateInput(target.startsAt));
+                  setStartTime(timeInput(target.startsAt));
+                  setEndDate(dateInput(target.endsAt));
+                  setEndTime(timeInput(target.endsAt));
+                  setDoctorIds(target.doctorIds);
+                  setObjectIds(target.objectIds);
+                  setPatientIds(target.patientIds);
+                  setError(null);
+                  setEditing(false);
+                }}
                 className={`flex h-7 items-center gap-1.5 rounded-full px-2.5 text-xs ${
                   editing ? "bg-ink text-paper" : "border border-line text-ink"
                 }`}
@@ -438,7 +524,6 @@ export function AgendaEditDialog({
 
         {kind === "appointment" ? (
           <SearchPicker
-            label="Pazienti"
             icon={Users}
             placeholder="Cerca paziente"
             options={patients}
@@ -448,7 +533,6 @@ export function AgendaEditDialog({
           />
         ) : null}
         <SearchPicker
-          label="Specialisti"
           icon={Stethoscope}
           placeholder="Cerca specialista"
           options={specialists}
@@ -457,6 +541,7 @@ export function AgendaEditDialog({
           onChange={setDoctorIds}
         />
         <SearchPicker
+          icon={Box}
           placeholder="Cerca oggetto"
           options={assets}
           selected={objectIds}
@@ -466,16 +551,22 @@ export function AgendaEditDialog({
 
         <div>
           {locked ? (
-            notes ? <p className="text-sm font-bold whitespace-pre-wrap">{notes}</p> : null
+            notes ? (
+              <div>
+                <p className="text-sm text-muted">Note:</p>
+                <p className="mt-1 text-sm whitespace-pre-wrap">{notes}</p>
+              </div>
+            ) : null
+          ) : notesOpen ? (
+            <p className="text-sm text-muted">Note:</p>
           ) : (
-          <button
-            type="button"
-            aria-expanded={notesOpen}
-            onClick={() => setNotesOpen((open) => !open)}
-            className="text-sm text-muted hover:text-ink"
-          >
-            {notesOpen ? "Note" : "Aggiungi note"}
-          </button>
+            <button
+              type="button"
+              onClick={() => setNotesOpen(true)}
+              className="text-sm text-muted hover:text-ink"
+            >
+              Aggiungi note
+            </button>
           )}
           {!locked && notesOpen ? (
             <textarea
@@ -483,9 +574,8 @@ export function AgendaEditDialog({
               onChange={(event) => setBody(event.target.value)}
               maxLength={1000}
               rows={3}
-              placeholder="Note"
               aria-label="Note"
-              className="mt-2 w-full resize-none border-0 border-b border-line bg-transparent py-1 text-sm outline-none focus:border-ink"
+              className="mt-1 w-full resize-none border-0 border-b border-line bg-transparent py-1 text-sm outline-none focus:border-ink"
             />
           ) : null}
         </div>

@@ -4,6 +4,7 @@ import { createClinic } from "@/app/clinics/actions";
 import { getSessionUser } from "@/lib/auth/session";
 import { createClient } from "@/lib/supabase/server";
 import { ClinicForm } from "@/components/clinic-form";
+import { ClinicLanding } from "@/components/clinic-landing";
 
 export default function ClinicsPage() {
   return (
@@ -27,11 +28,10 @@ async function ClinicsGate() {
     .from("memberships")
     .select("clinic_id")
     .eq("user_id", user.id)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+    .order("created_at", { ascending: false });
 
-  if (data?.clinic_id) redirect(`/clinics/${data.clinic_id}`);
+  const clinicIds = (data ?? []).flatMap((row) => (row.clinic_id ? [row.clinic_id] : []));
+  if (clinicIds.length > 0) return <ClinicLanding userId={user.id} clinicIds={clinicIds} />;
 
   return (
     <main className="mx-auto flex w-full max-w-md flex-1 flex-col justify-center px-6 py-16">

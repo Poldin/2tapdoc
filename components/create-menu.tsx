@@ -63,18 +63,25 @@ export function CreateMenu({
       aria-label="Crea"
       className="absolute top-full right-4 z-20 w-64 max-w-[calc(100%-2rem)] rounded-2xl border border-line bg-paper p-1 shadow-sm"
     >
-      {options.map((option) => (
-        <button
-          key={option.id}
-          type="button"
-          role="menuitem"
-          onClick={actions[option.id]}
-          className="flex w-full flex-col rounded-xl px-3 py-2 text-left hover:bg-background"
-        >
-          <span className="font-bold">{option.title}</span>
-          <span className="text-sm text-muted">{option.subtitle}</span>
-        </button>
-      ))}
+      {options.map((option) => {
+        const locked = option.id === "conversation";
+        return (
+          <button
+            key={option.id}
+            type="button"
+            role="menuitem"
+            disabled={locked}
+            aria-disabled={locked}
+            onClick={locked ? undefined : actions[option.id]}
+            className={`flex w-full flex-col rounded-xl px-3 py-2 text-left ${
+              locked ? "cursor-default text-muted" : "hover:bg-background"
+            }`}
+          >
+            <span className="font-bold">{option.title}</span>
+            <span className={`text-sm ${locked ? "" : "text-muted"}`}>{option.subtitle}</span>
+          </button>
+        );
+      })}
     </div>
   );
 }

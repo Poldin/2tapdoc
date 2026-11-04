@@ -16,6 +16,7 @@ import { type ClinicOption } from "@/components/clinic-switcher";
 import { getSessionUser } from "@/lib/auth/session";
 import { clinicRecencyFromCookie, leadingPlace } from "@/lib/clinic-recency";
 import { createClient } from "@/lib/supabase/server";
+import { isChatEmoji } from "@/lib/chat-emoji";
 import { markdownToPlainText } from "@/lib/markdown";
 
 export const instant = false;
@@ -32,6 +33,7 @@ type EventRow = {
   user_id: string | null;
   bot_id: string | null;
   preferred_at: string | null;
+  reply_to_id: string | null;
 };
 
 function messageBody(payload: unknown) {
@@ -110,7 +112,7 @@ export default async function ClinicPage({
   const { data: rows } = await supabase
     .from("chats")
     .select(
-      "id, title, color, emoji, created_at, chat_events(id, seq, kind, payload, created_at, user_id, bot_id, preferred_at), chat_participants(bots(id, name, color, emoji)), chat_clinics!inner(clinic_id)",
+      "id, title, color, emoji, created_at, chat_events(id, seq, kind, payload, created_at, user_id, bot_id, preferred_at, reply_to_id), chat_participants(bots(id, name, color, emoji)), chat_clinics!inner(clinic_id)",
     )
     .eq("chat_clinics.clinic_id", id);
 
@@ -513,14 +515,56 @@ export default async function ClinicPage({
     activityAt,
     bot,
   }));
-  const messages: ChatMessage[] = (active?.messages ?? []).map((message) => ({
-    id: message.id,
-    body: message.body,
-    createdAt: message.created_at,
-    mine: message.user_id === user.id,
-    botId: message.bot_id,
-    preferredAt: message.preferred_at,
-  }));
+  const activeMessages = active?.messages ?? [];
+  const activeMessageIds = activeMessages.map((message) => message.id);
+  const reactionByEvent = new Map<string, "up" | "down">();
+  const emojiByEvent = new Map<string, ChatMessage["emojis"]>();
+  if (activeMessageIds.length > 0) {
+    const [{ data: reactionRows }, { data: emojiRows }] = await Promise.all([
+      supabase
+        .from("message_reaction_current")
+        .select("event_id, vote")
+        .eq("user_id", user.id)
+        .in("event_id", activeMessageIds),
+      supabase
+        .from("message_emojis")
+        .select("event_id, emoji, user_id, bot_id")
+        .eq("chat_id", active?.id ?? "")
+        .order("created_at"),
+    ]);
+    for (const row of reactionRows ?? []) {
+      if (row.vote === "up" || row.vote === "down") reactionByEvent.set(row.event_id, row.vote);
+    }
+    for (const row of emojiRows ?? []) {
+      if (!isChatEmoji(row.emoji)) continue;
+      const list = emojiByEvent.get(row.event_id) ?? [];
+      list.push({ emoji: row.emoji, mine: row.user_id === user.id, botId: row.bot_id });
+      emojiByEvent.set(row.event_id, list);
+    }
+  }
+
+  const messageById = new Map(activeMessages.map((message) => [message.id, message]));
+  const messages: ChatMessage[] = activeMessages.map((message) => {
+    const target = message.reply_to_id ? messageById.get(message.reply_to_id) : undefined;
+    return {
+      id: message.id,
+      body: message.body,
+      createdAt: message.created_at,
+      mine: message.user_id === user.id,
+      botId: message.bot_id,
+      preferredAt: message.preferred_at,
+      reaction: reactionByEvent.get(message.id) ?? null,
+      replyTo: target
+        ? {
+            id: target.id,
+            excerpt: markdownToPlainText(target.body).slice(0, 180),
+            mine: target.user_id === user.id,
+            botId: target.bot_id,
+          }
+        : null,
+      emojis: emojiByEvent.get(message.id) ?? [],
+    };
+  });
 
   const { data: confirmationRows } = await supabase
     .from("bot_confirmations")

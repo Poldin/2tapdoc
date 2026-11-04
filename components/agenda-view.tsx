@@ -10,7 +10,7 @@ import {
   type RefObject,
 } from "react";
 import { useRouter } from "next/navigation";
-import { CalendarDays, ChevronLeft, ChevronRight, Stethoscope } from "lucide-react";
+import { Box, CalendarDays, ChevronLeft, ChevronRight, Stethoscope } from "lucide-react";
 import { deleteAgendaEntry, moveAgendaEntry } from "@/app/clinics/actions";
 import { AgendaEditDialog, type AgendaEditPatient, type AgendaEditTarget } from "@/components/agenda-edit-dialog";
 
@@ -781,9 +781,14 @@ export function AgendaView({
               columns.map((lane) => (
                 <div
                   key={lane.id}
-                  className="min-w-[11rem] flex-1 truncate px-3 py-2 text-sm font-medium"
+                  className="flex min-w-[11rem] flex-1 items-center gap-1.5 px-3 py-2 text-sm font-medium"
                 >
-                  {lane.name}
+                  {lane.kind === "specialist" ? (
+                    <Stethoscope className="h-4 w-4 shrink-0 text-muted" strokeWidth={2} />
+                  ) : (
+                    <Box className="h-4 w-4 shrink-0 text-muted" strokeWidth={2} />
+                  )}
+                  <span className="min-w-0 truncate">{lane.name}</span>
                 </div>
               ))
             ) : (

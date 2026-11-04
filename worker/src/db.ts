@@ -1,4 +1,5 @@
 import pg from "pg";
+import type { ContextMessage } from "./context-window.js";
 import type { ClinicDoctor, ClinicObject, Turn, TurnMessage } from "./reply.js";
 
 const { Client } = pg;
@@ -15,6 +16,36 @@ export function openDatabase(connectionString: string) {
     console.error("database socket error", error.message);
   });
   return client;
+}
+
+export async function listMessagesToFold(
+  client: pg.Client,
+  workerId: string,
+  jobId: string,
+  afterSeq: number,
+  beforeSeq: number,
+  limit: number,
+): Promise<ContextMessage[]> {
+  const result = await client.query<{ items: unknown }>(
+    "select private.bot_messages_to_fold($1, $2, $3, $4, $5) as items",
+    [workerId, jobId, afterSeq, beforeSeq, limit],
+  );
+  return parseFoldMessages(result.rows[0]?.items);
+}
+
+export async function saveChatTrace(
+  client: pg.Client,
+  workerId: string,
+  jobId: string,
+  trace: string,
+  untilSeq: number,
+): Promise<void> {
+  await client.query("select private.save_chat_trace($1, $2, $3, $4)", [
+    workerId,
+    jobId,
+    trace,
+    untilSeq,
+  ]);
 }
 
 export async function claimTurn(client: pg.Client, workerId: string): Promise<Turn | null> {
@@ -44,6 +75,40 @@ export async function failTurn(
     workerId,
     jobId,
     reason.slice(0, 200),
+  ]);
+}
+
+export async function botSetReplyTarget(
+  client: pg.Client,
+  workerId: string,
+  jobId: string,
+  eventId: string,
+) {
+  await client.query("select private.set_bot_reply_target($1, $2, $3)", [workerId, jobId, eventId]);
+}
+
+export async function botSetEmoji(
+  client: pg.Client,
+  workerId: string,
+  jobId: string,
+  eventId: string,
+  emoji: string | null,
+) {
+  await client.query("select private.set_bot_emoji($1, $2, $3, $4)", [workerId, jobId, eventId, emoji]);
+}
+
+export async function touchBotDraft(
+  client: pg.Client,
+  workerId: string,
+  jobId: string,
+  phase: "thinking" | "writing",
+  body: string,
+) {
+  await client.query("select private.touch_bot_draft($1, $2, $3, $4)", [
+    workerId,
+    jobId,
+    phase,
+    body,
   ]);
 }
 
@@ -513,8 +578,22 @@ function parseTurn(value: unknown): Turn | null {
     if ((item.role !== "user" && item.role !== "assistant") || typeof item.content !== "string") {
       throw new Error("Unexpected job payload");
     }
-    return { role: item.role, content: item.content };
+    const seq = messageSeq(item.seq);
+    const reactions = Array.isArray(item.reactions)
+      ? item.reactions.filter((entry): entry is string => typeof entry === "string" && entry.length > 0)
+      : [];
+    return {
+      role: item.role,
+      content: item.content,
+      ...(seq === undefined ? {} : { seq }),
+      id: typeof item.id === "string" ? item.id : undefined,
+      replyToId: typeof item.replyToId === "string" ? item.replyToId : null,
+      replyExcerpt: typeof item.replyExcerpt === "string" ? item.replyExcerpt : null,
+      reactions,
+    };
   });
+
+  const traceSeq = messageSeq(row.contextTraceSeq);
 
   return {
     id: row.id,
@@ -528,6 +607,28 @@ function parseTurn(value: unknown): Turn | null {
     doctors,
     clinicalObjects,
     alertPrompt: typeof row.alertPrompt === "string" ? row.alertPrompt : null,
+    contextTrace: typeof row.contextTrace === "string" ? row.contextTrace : null,
+    contextTraceSeq: traceSeq ?? 0,
     messages,
   };
+}
+
+function messageSeq(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isInteger(value) && value >= 0) return value;
+  if (typeof value === "string" && /^\d+$/.test(value)) return Number(value);
+  return undefined;
+}
+
+function parseFoldMessages(value: unknown): ContextMessage[] {
+  if (value == null) return [];
+  if (!Array.isArray(value)) throw new Error("Unexpected fold payload");
+  return value.map((message) => {
+    if (typeof message !== "object" || message == null) throw new Error("Unexpected fold payload");
+    const item = message as Record<string, unknown>;
+    const seq = messageSeq(item.seq);
+    if ((item.role !== "user" && item.role !== "assistant") || typeof item.content !== "string" || seq === undefined) {
+      throw new Error("Unexpected fold payload");
+    }
+    return { seq, role: item.role, content: item.content };
+  });
 }

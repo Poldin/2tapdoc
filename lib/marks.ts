@@ -25,7 +25,7 @@ export const markColors = [
   { id: "stone", label: "Pietra", value: "#3e4a52" },
 ] as const;
 
-export const botFaces = [
+const expressionFaces = [
   { id: "smile", label: "Sorriso" },
   { id: "wink", label: "Occhiolino" },
   { id: "1f600_grinningface", label: "Risata" },
@@ -63,6 +63,45 @@ export const botFaces = [
   { id: "cry", label: "Piange" },
   { id: "angryface", label: "Arrabbiato" },
 ] as const;
+
+const personFaces = [
+  { id: "smilebaby", label: "Bimbo" },
+  { id: "1f9d2_child", label: "Bambino" },
+  { id: "smileboy", label: "Ragazzo" },
+  { id: "smilegirl", label: "Ragazza" },
+  { id: "person", label: "Persona" },
+  { id: "1f471_blondehairedperson", label: "Biondo" },
+  { id: "smileman", label: "Uomo" },
+  { id: "manblondhair", label: "Uomo biondo" },
+  { id: "1f468_200d_1f9b0_maleredhaired", label: "Uomo rosso" },
+  { id: "1f468_200d_1f9b1_mancurlyhaired", label: "Uomo ricci" },
+  { id: "1f468_200d_1f9b3_malewhitehaired", label: "Uomo canuto" },
+  { id: "1f468_200d_1f9b2_manbald", label: "Uomo calvo" },
+  { id: "1f9d4_beardedperson", label: "Barba" },
+  { id: "manbeard", label: "Uomo con barba" },
+  { id: "womanbeard", label: "Donna con barba" },
+  { id: "smilewoman", label: "Donna" },
+  { id: "womanblondhair", label: "Donna bionda" },
+  { id: "1f469_200d_1f9b0_femaleredhaired", label: "Donna rossa" },
+  { id: "womancurlyhair", label: "Donna riccia" },
+  { id: "womanwhitehair", label: "Donna canuta" },
+  { id: "1f469_200d_1f9b2_femalebald", label: "Donna calva" },
+  { id: "1f9b0_redhaired", label: "Capelli rossi" },
+  { id: "1f9b1_curlyhaired", label: "Capelli ricci" },
+  { id: "personwhitehair", label: "Capelli bianchi" },
+  { id: "1f9b2_bald", label: "Calvo" },
+  { id: "1f9d3_olderadult", label: "Anziano" },
+  { id: "1f474_olderman", label: "Uomo anziano" },
+  { id: "oldwoman", label: "Donna anziana" },
+  { id: "happy_person_raising_one_hand", label: "Mano alzata" },
+  { id: "man_raising_hand", label: "Uomo saluta" },
+  { id: "womanraisinghand", label: "Donna saluta" },
+  { id: "personhealthworker", label: "Camice" },
+  { id: "manhealthworker", label: "Medico" },
+  { id: "womanhealthworker", label: "Medica" },
+] as const;
+
+export const botFaces = [...expressionFaces, ...personFaces];
 
 export const channelSymbols = [
   { id: "speechbubble", label: "Messaggio" },

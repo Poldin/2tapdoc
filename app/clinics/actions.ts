@@ -8,6 +8,7 @@ import { linkWhatsAppNumber, readClinicWhatsApp, subscribeWhatsApp, syncWhatsApp
 import { withClinicUser } from "@/lib/postgres";
 import { botGreeting, mastroWGreeting } from "@/lib/bot-greeting";
 import { botFaceIds, channelSymbolIds, isListed, markColorIds } from "@/lib/marks";
+import { isChatEmoji } from "@/lib/chat-emoji";
 import { listedPermissions, roleSlug } from "@/lib/permissions";
 
 const uuidPattern =
@@ -21,7 +22,17 @@ export type CreatedChat = {
   preview: string | null;
   activityAt: string;
   bot: { id: string; name: string; color: string; emoji: string } | null;
-  messages: { id: string; body: string; createdAt: string; mine: boolean; botId: string | null; preferredAt: string | null }[];
+  messages: {
+    id: string;
+    body: string;
+    createdAt: string;
+    mine: boolean;
+    botId: string | null;
+    preferredAt: string | null;
+    reaction: "up" | "down" | null;
+    replyTo: { id: string; excerpt: string; mine: boolean; botId: string | null } | null;
+    emojis: { emoji: string; mine: boolean; botId: string | null }[];
+  }[];
 };
 
 export type FormState = {
@@ -300,6 +311,9 @@ export async function createBot(
           mine: false,
           botId: bot.id,
           preferredAt: null,
+          reaction: null,
+          replyTo: null,
+          emojis: [],
         },
       ],
     },
@@ -440,7 +454,24 @@ export async function sendMessage(
   if (!body) return { error: "Scrivi un messaggio." };
   if (body.length > 4000) return { error: "Il messaggio sta entro 4000 caratteri." };
 
+  const replyRaw = String(formData.get("replyTo") ?? "").trim();
+  let replyToId: string | null = null;
+  if (replyRaw) {
+    if (!uuidPattern.test(replyRaw)) return { error: "Il messaggio a cui rispondi non è valido." };
+    replyToId = replyRaw;
+  }
+
   const supabase = await createClient();
+  if (replyToId) {
+    const { data: target } = await supabase
+      .from("chat_events")
+      .select("id")
+      .eq("id", replyToId)
+      .eq("chat_id", chatId)
+      .eq("kind", "message")
+      .maybeSingle();
+    if (!target) return { error: "Il messaggio a cui rispondi non c'è più." };
+  }
   const { count } = await supabase
     .from("chat_events")
     .select("id", { count: "exact", head: true })
@@ -468,6 +499,7 @@ export async function sendMessage(
     user_id: user.id,
     kind: "message",
     payload: { body },
+    reply_to_id: replyToId,
   });
 
   if (error) return { error: "Non è stato possibile inviare il messaggio." };
@@ -498,6 +530,102 @@ export async function preferMessage(
     .select("id");
 
   if (error || !data?.length) return { error: "Non è stato possibile aggiornare il preferito." };
+  revalidatePath(`/clinics/${clinicId}`);
+  return {};
+}
+
+export async function reactToMessage(
+  clinicId: string,
+  chatId: string,
+  messageId: string,
+  vote: "up" | "down" | "none",
+): Promise<FormState> {
+  const user = await requireUser();
+  if (
+    !uuidPattern.test(clinicId) ||
+    !uuidPattern.test(chatId) ||
+    !uuidPattern.test(messageId) ||
+    (vote !== "up" && vote !== "down" && vote !== "none")
+  ) {
+    return { error: "Messaggio non valido." };
+  }
+  if (!(await clinicMember(clinicId, user.id))) return { error: "Non fai parte di questo studio." };
+  if (!(await chatInClinic(clinicId, chatId))) return { error: "Questa chat non è in questa clinica." };
+
+  const supabase = await createClient();
+  const { data: message } = await supabase
+    .from("chat_events")
+    .select("id")
+    .eq("id", messageId)
+    .eq("chat_id", chatId)
+    .eq("kind", "message")
+    .maybeSingle();
+  if (!message) return { error: "Non è stato possibile registrare il voto." };
+
+  const { error } = await supabase.from("message_reactions").insert({
+    event_id: messageId,
+    user_id: user.id,
+    vote,
+  });
+
+  if (error) return { error: "Non è stato possibile registrare il voto." };
+  revalidatePath(`/clinics/${clinicId}`);
+  return {};
+}
+
+export async function setMessageEmoji(
+  clinicId: string,
+  chatId: string,
+  messageId: string,
+  emoji: string | null,
+): Promise<FormState> {
+  const user = await requireUser();
+  if (
+    !uuidPattern.test(clinicId) ||
+    !uuidPattern.test(chatId) ||
+    !uuidPattern.test(messageId) ||
+    (emoji !== null && !isChatEmoji(emoji))
+  ) {
+    return { error: "Messaggio non valido." };
+  }
+  if (!(await clinicMember(clinicId, user.id))) return { error: "Non fai parte di questo studio." };
+  if (!(await chatInClinic(clinicId, chatId))) return { error: "Questa chat non è in questa clinica." };
+
+  const supabase = await createClient();
+  const { data: message } = await supabase
+    .from("chat_events")
+    .select("id")
+    .eq("id", messageId)
+    .eq("chat_id", chatId)
+    .eq("kind", "message")
+    .maybeSingle();
+  if (!message) return { error: "Non è stato possibile reagire." };
+
+  if (emoji === null) {
+    const { error } = await supabase
+      .from("message_emojis")
+      .delete()
+      .eq("event_id", messageId)
+      .eq("user_id", user.id);
+    if (error) return { error: "Non è stato possibile togliere la reazione." };
+  } else {
+    const { data: existing } = await supabase
+      .from("message_emojis")
+      .select("id")
+      .eq("event_id", messageId)
+      .eq("user_id", user.id)
+      .maybeSingle();
+    const { error } = existing
+      ? await supabase.from("message_emojis").update({ emoji }).eq("id", existing.id).eq("user_id", user.id)
+      : await supabase.from("message_emojis").insert({
+          event_id: messageId,
+          chat_id: chatId,
+          user_id: user.id,
+          emoji,
+        });
+    if (error) return { error: "Non è stato possibile reagire." };
+  }
+
   revalidatePath(`/clinics/${clinicId}`);
   return {};
 }
@@ -1354,6 +1482,9 @@ export async function startMastroW(
           mine: false,
           botId: bot.id,
           preferredAt: null,
+          reaction: null,
+          replyTo: null,
+          emojis: [],
         },
       ],
     },

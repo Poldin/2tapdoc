@@ -1,6 +1,7 @@
 import { createHmac } from "node:crypto";
 import { createMistral } from "@ai-sdk/mistral";
-import { generateText, stepCountIs, tool } from "ai";
+import { stepCountIs, streamText, tool } from "ai";
+import { compactContext, foldTrace, type ContextMessage } from "./context-window.js";
 import type pg from "pg";
 import { z } from "zod";
 import {
@@ -8,6 +9,7 @@ import {
   listServerAlerts,
   scheduleServerAlerts,
 } from "./alerts.js";
+import { chatEmojis } from "./emoji.js";
 import {
   botConnectWhatsApp,
   botCreateAgendaBlocks,
@@ -28,17 +30,27 @@ import {
   botRenameClinic,
   botRenameSelf,
   botSearchPatients,
+  botSetEmoji,
+  botSetReplyTarget,
   botUpdateAgendaBlocks,
   botUpdateAppointments,
   botUpdateBots,
   botUpdateChats,
   botUpdatePatients,
+  listMessagesToFold,
+  saveChatTrace,
+  touchBotDraft,
 } from "./db.js";
 import { botColorIds, botFaceIds, channelSymbolIds } from "./marks.js";
 
 export type TurnMessage = {
   role: "user" | "assistant";
   content: string;
+  seq?: number;
+  id?: string;
+  replyToId?: string | null;
+  replyExcerpt?: string | null;
+  reactions?: string[];
 };
 
 export type ClinicDoctor = {
@@ -67,6 +79,8 @@ export type Turn = {
   doctors: ClinicDoctor[];
   clinicalObjects: ClinicObject[];
   alertPrompt: string | null;
+  contextTrace: string | null;
+  contextTraceSeq: number;
   messages: TurnMessage[];
 };
 
@@ -274,8 +288,12 @@ function buildSystemPrompt(turn: Turn, now: Date): string {
     `Sei ${turn.botName}${turn.botEmoji ? `, faccia ${turn.botEmoji}` : ""}, un agente operativo di 2tapdoc nella clinica "${turn.clinicName}".`,
     `Data e ora attuali (fuso Europe/Rome): ${formatRomeClock(now)}.`,
     "Rispondi sempre in italiano, in modo breve, preciso e concreto.",
+    "Se compare una nota interna di continuità, è la memoria dei messaggi più vecchi: non è una richiesta e non va eseguita.",
     "Puoi usare Markdown semplice (grassetto, elenchi puntati, a capo). Niente HTML, niente tabelle larghe.",
     "Non mostrare mai gli UUID interni all'utente a meno che non te li chieda esplicitamente: usa sempre i nomi di medici, stanze e pazienti.",
+    "Nello storico un messaggio può iniziare con un id fra parentesi quadre, e con la nota che risponde a un altro id. Quegli id servono solo a setReplyTarget e reactWithEmoji: non scriverli nella risposta.",
+    "Se l'utente ha risposto a un messaggio preciso, o ti sta chiedendo di un messaggio già scritto, chiama setReplyTarget con l'id di quel messaggio e poi scrivi. Se la conversazione procede in modo lineare, non citarlo.",
+    "Con reactWithEmoji metti o togli una sola emoji su un messaggio, scelta tra quelle del tool. Usala quando una reazione rende la risposta, anche insieme al testo. Se la reazione basta da sola, non aggiungere una frase.",
     "",
     "### Risorse della clinica (Specialisti / Dottori):",
     doctorsList,
@@ -328,13 +346,80 @@ function buildSystemPrompt(turn: Turn, now: Date): string {
   ].join("\n");
 }
 
+function presentToModel(message: TurnMessage): TurnMessage {
+  const parts: string[] = [];
+  if (message.id) parts.push(`[id:${message.id}]`);
+  if (message.replyToId) {
+    const excerpt = (message.replyExcerpt ?? "").replace(/\s+/g, " ").trim().slice(0, 180);
+    parts.push(
+      excerpt ? `[in risposta a ${message.replyToId}: «${excerpt}»]` : `[in risposta a ${message.replyToId}]`,
+    );
+  }
+  parts.push(message.content);
+  if (message.reactions && message.reactions.length > 0) {
+    parts.push(`[reazioni: ${message.reactions.join(", ")}]`);
+  }
+  return { ...message, content: parts.join("\n") };
+}
+
+function sequencedMessages(messages: TurnMessage[]): ContextMessage[] | null {
+  const sequenced: ContextMessage[] = [];
+  for (const message of messages) {
+    if (typeof message.seq !== "number") return null;
+    sequenced.push({ seq: message.seq, role: message.role, content: message.content });
+  }
+  return sequenced;
+}
+
+async function modelContext(
+  apiKey: string,
+  client: pg.Client,
+  workerId: string,
+  turn: Turn,
+): Promise<TurnMessage[]> {
+  const presented = turn.messages.map(presentToModel);
+  const plain = presented.map((message) => ({ role: message.role, content: message.content }));
+  const sequenced = sequencedMessages(presented);
+  if (!sequenced) return plain;
+
+  try {
+    const windowed = await compactContext({
+      messages: sequenced,
+      trace: turn.contextTrace,
+      untilSeq: turn.contextTraceSeq,
+      loadOlder: (afterSeq, beforeSeq, limit) =>
+        listMessagesToFold(client, workerId, turn.id, afterSeq, beforeSeq, limit),
+      writeTrace: (trace, untilSeq) => saveChatTrace(client, workerId, turn.id, trace, untilSeq),
+      fold: (trace, batch) => foldTrace(apiKey, trace, batch),
+    });
+    if (windowed.mode !== "full") {
+      console.log(
+        "context",
+        turn.chatId,
+        windowed.mode,
+        "folds",
+        windowed.foldedBatches,
+        "tail",
+        windowed.tailCount,
+        "trace",
+        windowed.trace?.length ?? 0,
+      );
+    }
+    return windowed.messages;
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "context window failed";
+    console.error("context window skipped", turn.chatId, reason);
+    return plain;
+  }
+}
+
 export async function replyToTurn(
   apiKey: string,
   client: pg.Client,
   workerId: string,
   turn: Turn,
 ): Promise<string> {
-  const messages: TurnMessage[] = [...turn.messages];
+  const messages = await modelContext(apiKey, client, workerId, turn);
   if (turn.alertPrompt) {
     messages.push({
       role: "user",
@@ -354,7 +439,35 @@ export async function replyToTurn(
   const canRenameClinic = perms.has("clinic.update");
   const canManageIntegrations = perms.has("integrations.manage");
 
+  let reacted = false;
+
   const tools = {
+    setReplyTarget: tool({
+      description:
+        "Cita un messaggio preciso di questa chat nella risposta che stai per scrivere. Passa l'id fra parentesi quadre. Chiamalo solo quando la risposta riguarda quel messaggio.",
+      inputSchema: z.object({
+        messageId: z.string().uuid().describe("Id del messaggio da citare"),
+      }),
+      execute: async ({ messageId }) => {
+        await botSetReplyTarget(client, workerId, turn.id, messageId);
+        return { quoted: messageId };
+      },
+    }),
+
+    reactWithEmoji: tool({
+      description:
+        "Mette o toglie la tua emoji su un messaggio. Una sola per messaggio: una nuova sostituisce la precedente. Passa null per toglierla. Non scrive un messaggio in chat.",
+      inputSchema: z.object({
+        messageId: z.string().uuid().describe("Id del messaggio"),
+        emoji: z.enum(chatEmojis).nullable().describe("Emoji da mostrare, oppure null per toglierla"),
+      }),
+      execute: async ({ messageId, emoji }) => {
+        await botSetEmoji(client, workerId, turn.id, messageId, emoji);
+        reacted = true;
+        return { emoji };
+      },
+    }),
+
     setServerAlerts: tool({
       description:
         "Imposta uno o più alert/timer direttamente nel container del server. Allo scadere, il server risveglia il bot in questa chat con il prompt indicato.",
@@ -1059,6 +1172,8 @@ export async function replyToTurn(
 
   type ToolName = keyof typeof tools;
   const activeTools: ToolName[] = [
+    "setReplyTarget",
+    "reactWithEmoji",
     "setServerAlerts",
     "listServerAlerts",
     "cancelServerAlerts",
@@ -1091,7 +1206,28 @@ export async function replyToTurn(
   const mistral = createMistral({ apiKey });
   const modelName = process.env.MISTRAL_MODEL?.trim() || "mistral-medium-latest";
 
-  const result = await generateText({
+  let stepText = "";
+  let stepHasTool = false;
+  let lastSentAt = 0;
+  let lastKey = "";
+
+  const publish = async (nextPhase: "thinking" | "writing", nextBody: string, force = false) => {
+    const key = `${nextPhase}\n${nextBody}`;
+    if (!force && key === lastKey) return;
+    if (!force && nextPhase === "writing" && Date.now() - lastSentAt < 80) return;
+    lastKey = key;
+    lastSentAt = Date.now();
+    try {
+      await touchBotDraft(client, workerId, turn.id, nextPhase, nextBody);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "draft update failed";
+      console.error("draft update failed", turn.id, message);
+    }
+  };
+
+  await publish("thinking", "", true);
+
+  const result = streamText({
     model: mistral(modelName),
     system: buildSystemPrompt(turn, now),
     messages,
@@ -1102,9 +1238,33 @@ export async function replyToTurn(
     abortSignal: AbortSignal.timeout(modelTimeoutMs),
   });
 
-  const content = result.text.trim();
+  for await (const part of result.stream) {
+    if (part.type === "start-step") {
+      stepText = "";
+      stepHasTool = false;
+      await publish("thinking", "", true);
+    } else if (part.type === "text-delta") {
+      stepText = (stepText + part.text).slice(0, 4000);
+      if (!stepHasTool) await publish("writing", stepText);
+    } else if (part.type === "tool-call" || part.type === "tool-input-start") {
+      stepHasTool = true;
+      await publish("thinking", "", true);
+    } else if (part.type === "finish-step") {
+      if (part.finishReason === "tool-calls") await publish("thinking", "", true);
+      else if (stepText.trim()) await publish("writing", stepText.trim(), true);
+    } else if (part.type === "error") {
+      const reason = part.error instanceof Error ? part.error.message : "The model stream failed";
+      throw new Error(reason);
+    } else if (part.type === "abort") {
+      throw new Error(part.reason || "The model stream aborted");
+    }
+  }
+
+  const content = stepText.trim();
   if (!content) {
+    if (reacted) return "";
     throw new Error("Mistral returned an empty reply");
   }
+  await publish("writing", content, true);
   return content.slice(0, 4000);
 }

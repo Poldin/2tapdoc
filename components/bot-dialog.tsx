@@ -3,7 +3,12 @@
 import { useActionState, useEffect, useRef, useState } from "react";
 import { createBot, updateBot, type CreatedChat, type FormState } from "@/app/clinics/actions";
 import { BotGlyph } from "@/components/mark";
+import { pickBotName } from "@/lib/bot-names";
 import { botFaces } from "@/lib/marks";
+
+function pickBotFace() {
+  return botFaces[Math.floor(Math.random() * botFaces.length)]?.id ?? "smile";
+}
 
 export type BotDraft = {
   botId: string;
@@ -27,7 +32,8 @@ export function BotDialog({
   onCreated?: (chat: CreatedChat) => void;
 }) {
   const color = draft?.color ?? "teal";
-  const [emoji, setEmoji] = useState(draft?.emoji ?? "smile");
+  const [emoji, setEmoji] = useState(draft?.emoji ?? pickBotFace);
+  const [suggestedName] = useState(draft?.name ?? pickBotName);
   const [state, action, pending] = useActionState<FormState, FormData>(
     draft ? updateBot.bind(null, clinicId, draft.chatId, draft.botId) : createBot.bind(null, clinicId),
     {},
@@ -89,7 +95,7 @@ export function BotDialog({
             required
             autoFocus
             maxLength={40}
-            defaultValue={draft?.name ?? ""}
+            defaultValue={suggestedName}
             placeholder="Nome del bot"
             aria-label="Nome del bot"
             className="h-10 min-w-0 flex-1 rounded-xl border border-line bg-background px-3 text-sm outline-none focus:border-teal"
@@ -106,7 +112,9 @@ export function BotDialog({
                 aria-label={item.label}
                 aria-pressed={emoji === item.id}
                 onClick={() => setEmoji(item.id)}
-                className={`rounded-[22%] ${emoji === item.id ? "ring-2 ring-ink ring-offset-1" : ""}`}
+                className={`rounded-[22%] [contain-intrinsic-size:1.75rem] [content-visibility:auto] ${
+                  emoji === item.id ? "ring-2 ring-ink ring-offset-1" : ""
+                }`}
               >
                 <BotGlyph color={color} emoji={item.id} plain className="h-7 w-7" />
               </button>

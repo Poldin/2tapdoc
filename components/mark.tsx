@@ -1,8 +1,13 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { preloadEmojis } from "animated-fluent-emojis";
 import { Emoji } from "animated-fluent-emojis/react";
-import { markPaint } from "@/lib/marks";
+import { botFaceIds, markPaint } from "@/lib/marks";
+
+export function warmBotFaces() {
+  void preloadEmojis(botFaceIds);
+}
 
 function useReducedMotion() {
   const [reduced, setReduced] = useState(false);
