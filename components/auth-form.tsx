@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { FingerprintPattern } from "lucide-react";
 import {
   requestPasswordReset,
   resendSignupCode,
@@ -9,13 +10,18 @@ import {
   signUpWithPassword,
   verifySignupCode,
 } from "@/lib/auth/actions";
+import { passkeyErrorMessage, webAuthnSupported } from "@/lib/auth/passkey";
 import { PasswordRules } from "@/components/password-rules";
+import { createClient } from "@/lib/supabase/client";
 
 const fieldClass =
   "h-12 rounded-full border border-line bg-sand px-4 text-[15px] text-ink outline-none transition-colors placeholder:text-muted/70 focus:border-violet focus:bg-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet";
 
 const primaryButton =
   "inline-flex h-12 w-full items-center justify-center rounded-full bg-violet px-6 text-[15px] font-medium text-white transition-colors hover:bg-violet-deep focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet disabled:opacity-50";
+
+const secondaryButton =
+  "inline-flex h-12 w-full items-center justify-center gap-2 rounded-full border border-line bg-white px-6 text-[15px] font-medium text-ink transition-colors hover:bg-sand focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet disabled:opacity-50";
 
 export function AuthForm({ mode }: { mode: "login" | "register" }) {
   const [email, setEmail] = useState("");
@@ -29,7 +35,14 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
   const [resetMessage, setResetMessage] = useState<string | null>(null);
   const [resetPending, setResetPending] = useState(false);
   const [resetSent, setResetSent] = useState(false);
+  const [passkeyReady, setPasskeyReady] = useState(false);
+  const [passkeyPending, setPasskeyPending] = useState(false);
   const login = mode === "login";
+
+  useEffect(() => {
+    if (!login) return;
+    setPasskeyReady(webAuthnSupported());
+  }, [login]);
 
   function openReset() {
     setResetEmail(email);
@@ -84,6 +97,19 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
     const result = await resendSignupCode(codeFor);
     setPending(false);
     setMessage(result.error ?? "Ti abbiamo inviato un nuovo codice.");
+  }
+
+  async function onPasskey() {
+    setPasskeyPending(true);
+    setMessage(null);
+    const supabase = createClient();
+    const { error } = await supabase.auth.signInWithPasskey();
+    if (error) {
+      setPasskeyPending(false);
+      setMessage(passkeyErrorMessage(error));
+      return;
+    }
+    window.location.assign("/clinics");
   }
 
   async function onReset(event: React.FormEvent<HTMLFormElement>) {
@@ -185,9 +211,26 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
         <PasswordRules password={password} />
       )}
       {message ? <p className="text-sm text-violet">{message}</p> : null}
-      <button type="submit" disabled={pending} className={`mt-2 ${primaryButton}`}>
+      <button type="submit" disabled={pending || passkeyPending} className={`mt-2 ${primaryButton}`}>
         {pending ? "Attendere…" : login ? "Entra" : "Crea l’account"}
       </button>
+      {login && passkeyReady ? (
+        <button
+          type="button"
+          disabled={pending || passkeyPending}
+          onClick={() => void onPasskey()}
+          className={secondaryButton}
+        >
+          {passkeyPending ? (
+            "Attendere…"
+          ) : (
+            <>
+              Entra con dispositivo
+              <FingerprintPattern aria-hidden className="size-[18px]" strokeWidth={1.75} />
+            </>
+          )}
+        </button>
+      ) : null}
       <p className="text-center text-sm leading-6 text-muted">
         {login ? (
           <>

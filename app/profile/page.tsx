@@ -1,6 +1,7 @@
 import { Suspense } from "react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { PasskeySettings } from "@/components/passkey-settings";
 import { PasswordForm } from "@/components/password-form";
 import { getSessionUser } from "@/lib/auth/session";
 import { createClient } from "@/lib/supabase/server";
@@ -71,6 +72,7 @@ async function ProfileScreen() {
       )}
 
       <PasswordForm />
+      <PasskeySettings />
 
       <form action="/auth/sign-out" method="post" className="mt-6">
         <button type="submit" className="h-12 rounded-full border border-line px-5">
