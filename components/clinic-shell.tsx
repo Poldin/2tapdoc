@@ -1112,9 +1112,10 @@ export function ClinicShell({
       const updatedAt = typeof row.updated_at === "string" ? row.updated_at : "";
       setLive((current) => {
         if (updatedAt && current?.updatedAt && updatedAt < current.updatedAt) return current;
-        const phase = row.phase === "writing" ? "writing" : "thinking";
+        const phase: LiveReply["phase"] =
+          row.phase === "writing" ? "writing" : "thinking";
         const body = phase === "writing" && typeof row.body === "string" ? row.body : "";
-        const next = { botId, phase, body, updatedAt };
+        const next: LiveReply = { botId, phase, body, updatedAt };
         if (liveDraftSettled(next, shownMessagesRef.current)) return null;
         return next;
       });
