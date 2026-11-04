@@ -13,6 +13,10 @@ function carrySession(from: NextResponse, to: NextResponse) {
 }
 
 export async function updateSession(request: NextRequest) {
+  const path = request.nextUrl.pathname;
+  // Signing out clears cookies on its own response. Refreshing the session here would write them back.
+  if (path === "/auth/sign-out") return NextResponse.next({ request });
+
   let supabaseResponse = NextResponse.next({ request });
 
   const supabase = createServerClient(
@@ -42,7 +46,6 @@ export async function updateSession(request: NextRequest) {
   // Must run right after createServerClient, or the session cookie goes stale.
   const { data } = await supabase.auth.getClaims();
   const signedIn = Boolean(data?.claims);
-  const path = request.nextUrl.pathname;
   const isPrivate = path.startsWith("/clinics") || path.startsWith("/profile");
   const isAuthScreen = path === "/login" || path === "/register";
 

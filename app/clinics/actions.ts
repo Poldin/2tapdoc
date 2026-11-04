@@ -83,6 +83,51 @@ export async function updateClinic(
   redirect(`/clinics/${clinicId}?view=settings`);
 }
 
+export async function deleteClinic(clinicId: string, confirmation: string): Promise<FormState> {
+  const user = await requireUser();
+  if (!uuidPattern.test(clinicId)) return { error: "Studio non valido." };
+
+  const typed = confirmation.trim();
+  const supabase = await createClient();
+  const { data: clinic } = await supabase
+    .from("clinics")
+    .select("id, name")
+    .eq("id", clinicId)
+    .maybeSingle();
+  if (!clinic) return { error: "Clinica non trovata." };
+  if (typed !== clinic.name.trim()) {
+    return { error: "Il nome non coincide con quello della clinica." };
+  }
+
+  const { data: mine } = await supabase
+    .from("memberships")
+    .select("clinic_role_id, clinic_roles(is_admin)")
+    .eq("clinic_id", clinicId)
+    .eq("user_id", user.id)
+    .maybeSingle();
+  if (!mine) return { error: "Non fai parte di questo studio." };
+
+  const mineRole = mine.clinic_roles as { is_admin: boolean } | { is_admin: boolean }[] | null;
+  const admin = Boolean((Array.isArray(mineRole) ? mineRole[0] : mineRole)?.is_admin);
+  if (!admin) {
+    const { data: perms } = await supabase
+      .from("clinic_role_permissions")
+      .select("permission_key")
+      .eq("clinic_role_id", mine.clinic_role_id)
+      .eq("permission_key", "clinic.delete");
+    if (!perms?.length) return { error: "Non hai il permesso di eliminare la clinica." };
+  }
+
+  const { error } = await supabase.from("clinics").delete().eq("id", clinicId);
+  if (error) return { error: "Non è stato possibile eliminare la clinica." };
+
+  const { data: still } = await supabase.from("clinics").select("id").eq("id", clinicId).maybeSingle();
+  if (still) return { error: "Non hai il permesso di eliminare la clinica." };
+
+  revalidatePath("/clinics");
+  return { removed: clinicId };
+}
+
 export async function createChat(
   clinicId: string,
   _state: FormState,

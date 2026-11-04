@@ -324,6 +324,7 @@ export function ClinicShell({
   assets,
   integrations,
   canRenameClinic,
+  canDeleteClinic,
   canManageMembers,
   canManageRoles,
   canManageAgenda,
@@ -357,6 +358,7 @@ export function ClinicShell({
   assets: ClinicAsset[];
   integrations: ClinicIntegration[];
   canRenameClinic: boolean;
+  canDeleteClinic: boolean;
   canManageMembers: boolean;
   canManageRoles: boolean;
   canManageAgenda: boolean;
@@ -934,6 +936,7 @@ export function ClinicShell({
             clinicId={clinicId}
             clinicName={clinicName}
             canRename={canRenameClinic}
+            canDelete={canDeleteClinic}
             canManageMembers={canManageMembers}
             canManageRoles={canManageRoles}
             canManageAgenda={canManageAgenda}

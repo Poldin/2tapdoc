@@ -82,6 +82,20 @@ export async function resendSignupCode(email: string): Promise<AuthResult> {
   return { email: cleaned };
 }
 
+export async function requestPasswordReset(email: string): Promise<AuthResult> {
+  const cleaned = cleanEmail(email);
+  if (!emailPattern.test(cleaned)) return { error: "Inserisci un indirizzo email valido." };
+
+  const supabase = await createClient();
+  const { error } = await supabase.auth.resetPasswordForEmail(cleaned);
+  if (error) {
+    const limited = authError(error.message);
+    if (limited) return { error: limited };
+    return { error: "Non è stato possibile inviare l'email di recupero." };
+  }
+  return { email: cleaned };
+}
+
 export async function signInWithPassword(email: string, password: string): Promise<AuthResult> {
   const cleaned = cleanEmail(email);
   if (!emailPattern.test(cleaned) || !password) return { error: "Inserisci email e password." };
@@ -111,8 +125,3 @@ export async function setPassword(password: string, confirm: string): Promise<Au
   redirect("/clinics");
 }
 
-export async function signOut() {
-  const supabase = await createClient();
-  await supabase.auth.signOut();
-  redirect("/");
-}

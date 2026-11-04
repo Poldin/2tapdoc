@@ -1,8 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
-import { resendSignupCode, signInWithPassword, signUpWithPassword, verifySignupCode } from "@/lib/auth/actions";
+import {
+  requestPasswordReset,
+  resendSignupCode,
+  signInWithPassword,
+  signUpWithPassword,
+  verifySignupCode,
+} from "@/lib/auth/actions";
 import { PasswordRules } from "@/components/password-rules";
 
 const fieldClass =
@@ -18,7 +24,33 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
   const [pending, setPending] = useState(false);
   const [codeFor, setCodeFor] = useState<string | null>(null);
   const [code, setCode] = useState("");
+  const [resetOpen, setResetOpen] = useState(false);
+  const [resetEmail, setResetEmail] = useState("");
+  const [resetMessage, setResetMessage] = useState<string | null>(null);
+  const [resetPending, setResetPending] = useState(false);
+  const [resetSent, setResetSent] = useState(false);
   const login = mode === "login";
+
+  function openReset() {
+    setResetEmail(email);
+    setResetMessage(null);
+    setResetSent(false);
+    setResetOpen(true);
+  }
+
+  function closeReset() {
+    if (resetPending) return;
+    setResetOpen(false);
+  }
+
+  useEffect(() => {
+    if (!resetOpen) return;
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape" && !resetPending) setResetOpen(false);
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [resetOpen, resetPending]);
 
   async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -52,6 +84,19 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
     const result = await resendSignupCode(codeFor);
     setPending(false);
     setMessage(result.error ?? "Ti abbiamo inviato un nuovo codice.");
+  }
+
+  async function onReset(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setResetPending(true);
+    setResetMessage(null);
+    const result = await requestPasswordReset(resetEmail);
+    setResetPending(false);
+    if (result?.error) {
+      setResetMessage(result.error);
+      return;
+    }
+    setResetSent(true);
   }
 
   if (codeFor) {
@@ -101,6 +146,7 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
   }
 
   return (
+    <>
     <form onSubmit={onSubmit} className="flex flex-col gap-4">
       <label className="flex flex-col gap-2 text-sm font-medium text-ink">
         Email
@@ -127,7 +173,17 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
           className={fieldClass}
         />
       </label>
-      {login ? null : <PasswordRules password={password} />}
+      {login ? (
+        <button
+          type="button"
+          onClick={openReset}
+          className="-mt-1 self-end text-sm font-medium text-muted underline-offset-4 transition-colors hover:text-ink hover:underline"
+        >
+          Password dimenticata?
+        </button>
+      ) : (
+        <PasswordRules password={password} />
+      )}
       {message ? <p className="text-sm text-violet">{message}</p> : null}
       <button type="submit" disabled={pending} className={`mt-2 ${primaryButton}`}>
         {pending ? "Attendere…" : login ? "Entra" : "Crea l’account"}
@@ -150,5 +206,68 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
         )}
       </p>
     </form>
+      {resetOpen ? (
+        <div
+          className="fixed inset-0 z-40 flex items-center justify-center bg-ink/40 px-5 backdrop-blur-[2px]"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) closeReset();
+          }}
+        >
+          <form
+            onSubmit={onReset}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="reset-title"
+            className="w-full max-w-md rounded-[28px] border border-line bg-white p-6 shadow-[0_24px_60px_-28px_rgba(28,25,21,0.45)] sm:p-8"
+          >
+            <h2 id="reset-title" className="text-[clamp(1.5rem,3vw,1.85rem)] font-semibold tracking-[-0.03em]">
+              Recupera la password
+            </h2>
+            {resetSent ? (
+              <>
+                <p className="mt-3 text-sm leading-6 text-muted">
+                  Se <span className="font-medium text-ink">{resetEmail}</span> è registrata, ti abbiamo
+                  inviato un messaggio con le istruzioni per scegliere una nuova password.
+                </p>
+                <button type="button" onClick={closeReset} className={`mt-6 ${primaryButton}`}>
+                  Chiudi
+                </button>
+              </>
+            ) : (
+              <>
+                <p className="mt-3 text-sm leading-6 text-muted">
+                  Inserisci l’email dell’account. Ti inviamo un messaggio per impostare una nuova password.
+                </p>
+                <label className="mt-6 flex flex-col gap-2 text-sm font-medium text-ink">
+                  Email
+                  <input
+                    name="email"
+                    type="email"
+                    autoComplete="email"
+                    autoFocus
+                    required
+                    value={resetEmail}
+                    onChange={(event) => setResetEmail(event.target.value)}
+                    className={fieldClass}
+                  />
+                </label>
+                {resetMessage ? <p className="mt-3 text-sm text-violet">{resetMessage}</p> : null}
+                <button type="submit" disabled={resetPending} className={`mt-6 ${primaryButton}`}>
+                  {resetPending ? "Invio…" : "Invia l’email"}
+                </button>
+                <button
+                  type="button"
+                  disabled={resetPending}
+                  onClick={closeReset}
+                  className="mt-3 w-full text-sm font-medium text-muted underline-offset-4 transition-colors hover:text-ink hover:underline disabled:opacity-50"
+                >
+                  Annulla
+                </button>
+              </>
+            )}
+          </form>
+        </div>
+      ) : null}
+    </>
   );
 }

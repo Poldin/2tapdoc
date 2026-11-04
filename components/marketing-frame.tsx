@@ -21,7 +21,7 @@ function Mark({ className = "h-8 w-8" }: { className?: string }) {
   );
 }
 
-function Logo() {
+export function Logo() {
   return (
     <Link href="/" className="inline-flex items-center gap-2.5 text-[1.05rem] font-semibold tracking-[-0.03em] text-ink">
       <Mark />
@@ -34,10 +34,12 @@ export function MarketingFrame({
   children,
   headerActions,
   menuActions,
+  showHeader = true,
 }: {
   children: ReactNode;
-  headerActions: ReactNode;
-  menuActions: ReactNode;
+  headerActions?: ReactNode;
+  menuActions?: ReactNode;
+  showHeader?: boolean;
 }) {
   return (
     <div className="marketing flex flex-1 flex-col bg-sand text-ink">
@@ -47,6 +49,7 @@ export function MarketingFrame({
       >
         Vai al contenuto
       </a>
+      {showHeader ? (
       <header className="sticky top-0 z-30 border-b border-line/80 bg-sand/85 backdrop-blur-md">
         <div className="mx-auto flex h-[4.25rem] max-w-[1120px] items-center justify-between gap-4 px-5 sm:px-8">
           <Logo />
@@ -72,6 +75,7 @@ export function MarketingFrame({
           </div>
         </div>
       </header>
+      ) : null}
       <main id="contenuto" className="flex-1">
         {children}
       </main>

@@ -216,6 +216,7 @@ export default async function ClinicPage({
   let assets: ClinicAsset[] = [];
   let integrations: ClinicIntegration[] = [];
   let canRenameClinic = false;
+  let canDeleteClinic = false;
   let canManageMembers = false;
   let canManageRoles = false;
   let canManageAgenda = false;
@@ -349,6 +350,7 @@ export default async function ClinicPage({
     const admin = Boolean((Array.isArray(mineRole) ? mineRole[0] : mineRole)?.is_admin);
     if (admin) {
       canRenameClinic = true;
+      canDeleteClinic = true;
       canManageMembers = true;
       canManageRoles = true;
       canManageAgenda = true;
@@ -358,9 +360,10 @@ export default async function ClinicPage({
         .from("clinic_role_permissions")
         .select("permission_key")
         .eq("clinic_role_id", mine.clinic_role_id)
-        .in("permission_key", ["clinic.update", "members.manage", "roles.manage", "agenda.write", "integrations.manage"]);
+        .in("permission_key", ["clinic.update", "clinic.delete", "members.manage", "roles.manage", "agenda.write", "integrations.manage"]);
       const keys = new Set((perms ?? []).map((row) => row.permission_key));
       canRenameClinic = keys.has("clinic.update");
+      canDeleteClinic = keys.has("clinic.delete");
       canManageMembers = keys.has("members.manage");
       canManageRoles = keys.has("roles.manage");
       canManageAgenda = keys.has("agenda.write");
@@ -560,6 +563,7 @@ export default async function ClinicPage({
       integrations={integrations}
       webhookVerifyToken={process.env.META_WEBHOOK_VERIFY_TOKEN?.trim() ?? ""}
       canRenameClinic={canRenameClinic}
+      canDeleteClinic={canDeleteClinic}
       canManageMembers={canManageMembers}
       canManageRoles={canManageRoles}
       canManageAgenda={canManageAgenda}

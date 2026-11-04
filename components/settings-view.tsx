@@ -9,6 +9,7 @@ import {
   createDoctor,
   createIntegration,
   createRole,
+  deleteClinic,
   dropIntegration,
   updateClinic,
   updateClinicalObject,
@@ -56,6 +57,7 @@ const sections = [
   { id: "equipe", label: "equipe" },
   { id: "assets", label: "stanze e oggetti" },
   { id: "integrazioni", label: "integrazioni" },
+  { id: "elimina", label: "elimina" },
 ] as const;
 
 export type ClinicIntegration = {
@@ -632,6 +634,109 @@ function IntegrationDialog({
   );
 }
 
+function DeleteClinicDialog({
+  open,
+  clinicId,
+  clinicName,
+  onClose,
+}: {
+  open: boolean;
+  clinicId: string;
+  clinicName: string;
+  onClose: () => void;
+}) {
+  const [confirmation, setConfirmation] = useState("");
+  const [error, setError] = useState<string>();
+  const [pending, setPending] = useState(false);
+  const matches = confirmation.trim() === clinicName.trim() && clinicName.trim() !== "";
+
+  useEffect(() => {
+    if (!open) return;
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape" && !pending) onClose();
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [open, onClose, pending]);
+
+  if (!open) return null;
+
+  return (
+    <div
+      className="fixed inset-0 z-40 flex items-center justify-center bg-ink/40 p-4"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget && !pending) onClose();
+      }}
+    >
+      <form
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="delete-clinic-title"
+        className="flex w-full max-w-md flex-col gap-4 rounded-3xl border border-line bg-paper p-5"
+        onSubmit={async (event) => {
+          event.preventDefault();
+          if (!matches || pending) return;
+          setPending(true);
+          setError(undefined);
+          try {
+            const result = await deleteClinic(clinicId, confirmation);
+            if (result.removed) {
+              window.location.assign("/clinics");
+              return;
+            }
+            setError(result.error ?? "Non è stato possibile eliminare la clinica.");
+            setPending(false);
+          } catch {
+            setError("Non è stato possibile eliminare la clinica.");
+            setPending(false);
+          }
+        }}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <h2 id="delete-clinic-title" className="text-base font-medium">
+            Eliminare la clinica?
+          </h2>
+          <button
+            type="button"
+            aria-label="Chiudi"
+            onClick={onClose}
+            disabled={pending}
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-line text-lg leading-none disabled:opacity-50"
+          >
+            ×
+          </button>
+        </div>
+        <p className="text-sm text-muted">
+          L&apos;azione è irreversibile. Verranno persi tutti i dati di{" "}
+          <span className="font-medium text-ink">{clinicName}</span>: chat, pazienti, agenda, equipe e integrazioni.
+        </p>
+        <label className="flex flex-col gap-2 text-sm">
+          <span>
+            Scrivi <span className="font-medium">{clinicName}</span> per confermare
+          </span>
+          <input
+            name="confirmation"
+            required
+            autoFocus
+            autoComplete="off"
+            value={confirmation}
+            onChange={(event) => setConfirmation(event.target.value)}
+            className={fieldClassName()}
+          />
+        </label>
+        {error ? <p className="text-sm text-teal">{error}</p> : null}
+        <button
+          type="submit"
+          disabled={pending || !matches}
+          className="h-12 rounded-full bg-ink text-paper disabled:opacity-50"
+        >
+          {pending ? "Eliminazione…" : "Elimina"}
+        </button>
+      </form>
+    </div>
+  );
+}
+
 function IntegrationDetailDialog({
   open,
   clinicId,
@@ -729,6 +834,7 @@ export function SettingsView({
   clinicName,
   currentUserId,
   canRename,
+  canDelete,
   canManageMembers,
   canManageRoles,
   canManageAgenda,
@@ -745,6 +851,7 @@ export function SettingsView({
   clinicName: string;
   currentUserId: string;
   canRename: boolean;
+  canDelete: boolean;
   canManageMembers: boolean;
   canManageRoles: boolean;
   canManageAgenda: boolean;
@@ -769,6 +876,7 @@ export function SettingsView({
   const [assetDraft, setAssetDraft] = useState<ClinicAsset | null>(null);
   const [assetOpen, setAssetOpen] = useState(false);
   const [integrationOpen, setIntegrationOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const [detailIntegrationId, setDetailIntegrationId] = useState<string | null>(null);
   const [pendingIntegration, setPendingIntegration] = useState<ClinicIntegration | null>(null);
   const shownIntegrations =
@@ -994,6 +1102,26 @@ export function SettingsView({
             </DataTable>
           </div>
         </section>
+
+        {canDelete ? (
+          <section className="border-t border-line px-4 pt-6 md:px-8">
+            <div className="mx-auto flex w-full max-w-3xl flex-col gap-4">
+              <TableHeading title="elimina" pin="elimina" />
+              <div className="rounded-2xl bg-paper px-4 py-4">
+                <p className="text-sm text-muted">
+                  Eliminare la clinica è irreversibile. Chat, pazienti, agenda e ogni altro dato vengono persi.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setDeleteOpen(true)}
+                  className="mt-4 h-10 rounded-full border border-line px-4 text-sm"
+                >
+                  Elimina clinica
+                </button>
+              </div>
+            </div>
+          </section>
+        ) : null}
       </div>
 
       {roleOpen ? (
@@ -1053,6 +1181,14 @@ export function SettingsView({
             });
             setDetailIntegrationId(integrationId);
           }}
+        />
+      ) : null}
+      {deleteOpen ? (
+        <DeleteClinicDialog
+          open
+          clinicId={clinicId}
+          clinicName={clinicName}
+          onClose={() => setDeleteOpen(false)}
         />
       ) : null}
       {detailIntegration ? (

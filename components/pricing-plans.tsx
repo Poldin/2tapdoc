@@ -23,8 +23,7 @@ const plans = [
     cta: "Inizia con Studio",
     points: [
       "utenti illimitati",
-      "5 milioni di token AI inclusi",
-      "€5 al mese di messaggi WhatsApp inclusi",
+      "5 MLN di token AI inclusi",
       "ricarica l'AI senza passare al piano successivo",
     ],
   },
@@ -37,9 +36,8 @@ const plans = [
     cta: "Inizia con Clinica",
     points: [
       "utenti illimitati",
-      "20 milioni di token AI inclusi",
+      "20 MLN di token AI inclusi",
       "€10 al mese di messaggi WhatsApp inclusi",
-      "Assistenza prioritaria",
       "ricarica l'AI senza passare al piano successivo",
     ],
   },
@@ -52,7 +50,7 @@ const plans = [
     cta: "Inizia con Gruppo",
     points: [
       "utenti illimitati",
-      "50 milioni di token AI inclusi",
+      "50 MLN di token AI inclusi",
       "€20 al mese di messaggi WhatsApp inclusi",
       "Assistenza prioritaria",
       "ricarica AI scontata",
