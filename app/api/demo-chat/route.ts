@@ -66,7 +66,7 @@ async function mistralChat(body: Record<string, unknown>) {
   if (!apiKey) {
     throw new Error("MISSING_KEY");
   }
-  const model = process.env.MISTRAL_MODEL || "mistral-small-latest";
+  const model = process.env.MISTRAL_MODEL || "mistral-large-4";
   const res = await fetch("https://api.mistral.ai/v1/chat/completions", {
     method: "POST",
     headers: {

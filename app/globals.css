@@ -147,6 +147,42 @@ body {
   }
 }
 
+.elaborating-dots {
+  display: inline-block;
+  width: 3ch;
+  text-align: left;
+}
+
+.elaborating-dots::after {
+  content: "";
+  animation: elaborating-dots 1.6s steps(1, end) infinite;
+}
+
+@keyframes elaborating-dots {
+  0% {
+    content: "";
+  }
+  20% {
+    content: ".";
+  }
+  40% {
+    content: "..";
+  }
+  60% {
+    content: "...";
+  }
+  80% {
+    content: "";
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .elaborating-dots::after {
+    content: "...";
+    animation: none;
+  }
+}
+
 .message-flash {
   animation: message-flash 1.1s ease;
 }

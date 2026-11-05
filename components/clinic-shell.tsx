@@ -164,12 +164,11 @@ function outgoingMessage(item: Outgoing): ChatMessage {
   };
 }
 
-function reconcileOutgoing(
-  items: Outgoing[],
-  chatId: string | null,
-  server: ChatMessage[],
-  known: Set<string>,
-) {
+function sameBody(a: string, b: string) {
+  return a.replace(/\r\n?/g, "\n").trim() === b.replace(/\r\n?/g, "\n").trim();
+}
+
+function reconcileOutgoing(items: Outgoing[], chatId: string | null, server: ChatMessage[]) {
   if (!chatId) return items;
   const mine = server.filter((message) => message.mine);
   const used = new Set<string>();
@@ -178,13 +177,10 @@ function reconcileOutgoing(
     if (item.chatId !== chatId || item.error) return true;
     const match = mine.find(
       (message) =>
-        !used.has(message.id) &&
-        !item.seenIds.includes(message.id) &&
-        message.body.trim() === item.body,
+        !used.has(message.id) && !item.seenIds.includes(message.id) && sameBody(message.body, item.body),
     );
     if (!match) return true;
     used.add(match.id);
-    known.add(match.id);
     changed = true;
     return false;
   });
@@ -362,7 +358,7 @@ function MessageComposer({
   onWaiting,
   caretEpoch,
   onOutgoing,
-  onOutgoingError,
+  onOutgoingSettled,
 }: {
   clinicId: string;
   chatId: string;
@@ -371,7 +367,7 @@ function MessageComposer({
   onWaiting?: (waiting: boolean) => void;
   caretEpoch: number;
   onOutgoing?: (input: { id: string; chatId: string; body: string; replyTo: ReplyDraft | null }) => void;
-  onOutgoingError?: (id: string, error: string) => void;
+  onOutgoingSettled?: (id: string) => void;
 }) {
   const formRef = useRef<HTMLFormElement>(null);
   const fieldRef = useRef<HTMLTextAreaElement>(null);
@@ -382,11 +378,11 @@ function MessageComposer({
   const outgoingId = useRef<string | null>(null);
   const reportedFail = useRef<number | undefined>(undefined);
   const onOutgoingRef = useRef(onOutgoing);
-  const onOutgoingErrorRef = useRef(onOutgoingError);
+  const onOutgoingSettledRef = useRef(onOutgoingSettled);
   onWaitingRef.current = onWaiting;
   onClearReplyRef.current = onClearReply;
   onOutgoingRef.current = onOutgoing;
-  onOutgoingErrorRef.current = onOutgoingError;
+  onOutgoingSettledRef.current = onOutgoingSettled;
   const [ready, setReady] = useState(false);
   const [desktop, setDesktop] = useState(false);
   const [state, action, pending] = useActionState<FormState & { failed?: number }, FormData>(
@@ -415,19 +411,33 @@ function MessageComposer({
         writeDraft(clinicId, chatId, "");
         formRef.current?.reset();
       }
-    } else {
+    } else if (state.failed && state.error && state.failed !== reportedFail.current) {
+      reportedFail.current = state.failed;
+      const snapshot = sentSnapshot.current;
+      sentSnapshot.current = null;
+      const id = outgoingId.current;
+      outgoingId.current = null;
+      if (id) onOutgoingSettledRef.current?.(id);
+      if (snapshot) {
+        field.value = snapshot;
+        writeDraft(clinicId, chatId, snapshot);
+      }
+    } else if (!state.failed) {
       const saved = readDraft(clinicId, chatId);
       if (saved) field.value = saved;
     }
     setReady(field.value.trim().length > 0);
     fitField(field);
-  }, [state.sent, clinicId, chatId]);
+  }, [state.sent, state.failed, state.error, clinicId, chatId]);
 
   useEffect(() => {
     if (!state.sent) return;
     if (sentRef.current !== state.sent) {
       sentRef.current = state.sent;
       onClearReplyRef.current();
+      const id = outgoingId.current;
+      outgoingId.current = null;
+      if (id) onOutgoingSettledRef.current?.(id);
     }
     return scheduleDesktopCaret(fieldRef);
   }, [state.sent]);
@@ -436,14 +446,6 @@ function MessageComposer({
     if (!caretEpoch) return;
     return scheduleDesktopCaret(fieldRef);
   }, [caretEpoch]);
-
-  useEffect(() => {
-    if (!state.failed || state.failed === reportedFail.current || !state.error) return;
-    reportedFail.current = state.failed;
-    const id = outgoingId.current;
-    if (!id) return;
-    onOutgoingErrorRef.current?.(id, state.error);
-  }, [state.failed, state.error]);
 
   useEffect(() => {
     if (replyTo) fieldRef.current?.focus();
@@ -1134,21 +1136,12 @@ export function ClinicShell({
   const shownHasEvents = openThread?.hasEvents ?? hasEvents;
   const lastBotMessage = [...shownMessages].reverse().find((message) => message.botId) ?? null;
   shownMessagesRef.current = shownMessages;
-  const nextOutgoing = reconcileOutgoing(
-    outgoing,
-    shownActiveId,
-    shownMessages,
-    knownMessages.current.ids,
-  );
+  const nextOutgoing = reconcileOutgoing(outgoing, shownActiveId, shownMessages);
   if (nextOutgoing !== outgoing) setOutgoing(nextOutgoing);
   const pendingOutgoing = nextOutgoing.filter((item) => item.chatId === shownActiveId);
-  const visibleMessages = pendingOutgoing.length
-    ? [...shownMessages, ...pendingOutgoing.map(outgoingMessage)]
-    : shownMessages;
+  const visibleMessages = shownMessages;
   const threadMessages = foldEmojiReplies(visibleMessages);
-  const outgoingErrors = new Map(
-    pendingOutgoing.flatMap((item) => (item.error ? [[item.id, item.error] as const] : [])),
-  );
+  const sending = pendingOutgoing.some((item) => !item.error);
   const replyLanded =
     draftChatId === shownActiveId &&
     waitBaseline.current !== null &&
@@ -1535,7 +1528,7 @@ export function ClinicShell({
     if (!thread) return;
     if (stickToBottom.current) thread.scrollTop = thread.scrollHeight;
     syncDayBadge(thread, badgeRef.current, setDayLabel);
-  }, [shownActiveId, visibleMessages, showThinking, streamBody]);
+  }, [shownActiveId, visibleMessages, showThinking, streamBody, sending]);
 
   useEffect(() => {
     const thread = threadRef.current;
@@ -1625,8 +1618,8 @@ export function ClinicShell({
     ]);
   }
 
-  function failOutgoing(id: string, error: string) {
-    setOutgoing((current) => current.map((item) => (item.id === id ? { ...item, error } : item)));
+  function settleOutgoing(id: string) {
+    setOutgoing((current) => (current.some((item) => item.id === id) ? current.filter((item) => item.id !== id) : current));
   }
 
   function noteWaiting(next: boolean) {
@@ -1970,7 +1963,6 @@ export function ClinicShell({
                   message={entry.message}
                   bot={active.bot}
                   entered={entered.has(entry.message.id)}
-                  error={outgoingErrors.get(entry.message.id)}
                   onReply={setReplyTo}
                 />
               ),
@@ -1980,17 +1972,20 @@ export function ClinicShell({
               <Markdown source={botGreeting} lead={<BotLead bot={active.bot} />} />
             </div>
           )}
-          {showThinking && active.bot ? (
-            <div role="status" aria-live="polite" className="self-start py-1">
-              <span className="sr-only">Sto elaborando</span>
-              <BotGlyph
-                color={active.bot.color}
-                emoji={active.bot.emoji}
-                animate
-                plain
-                className="h-10 w-10"
-              />
+          {sending ? (
+            <div role="status" className="flex justify-end self-end py-1">
+              <span className="sr-only">Invio in corso</span>
+              <span className="h-4 w-4 animate-spin rounded-full border-2 border-line border-t-ink motion-reduce:animate-none" />
             </div>
+          ) : null}
+          {showThinking && active.bot ? (
+            <p role="status" aria-live="polite" className="flex items-center gap-2 self-start py-1 text-sm text-muted">
+              <BotGlyph color={active.bot.color} emoji={active.bot.emoji} plain className="h-5 w-5" />
+              <span>
+                sto elaborando
+                <span className="elaborating-dots" aria-hidden="true" />
+              </span>
+            </p>
           ) : null}
           {(streamText.trim() || (streamTarget && !streamEmojiReply)) && active.bot ? (
             <div
@@ -2029,7 +2024,7 @@ export function ClinicShell({
           onWaiting={active.bot ? noteWaiting : undefined}
           caretEpoch={replyCaret.current}
           onOutgoing={beginOutgoing}
-          onOutgoingError={failOutgoing}
+          onOutgoingSettled={settleOutgoing}
         />
         </div>
         </>

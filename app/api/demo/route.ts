@@ -1,4 +1,4 @@
-const model = "mistral-large-latest";
+const model = "mistral-large-4";
 const maxChars = 500;
 const maxUserTurns = 8;
 const windowMs = 10 * 60 * 1000;

@@ -1153,7 +1153,7 @@ export async function replyToTurn(
   });
 
   const mistral = createMistral({ apiKey });
-  const modelName = process.env.MISTRAL_MODEL?.trim() || "mistral-medium-latest";
+  const modelName = process.env.MISTRAL_MODEL?.trim() || "mistral-large-4";
 
   let stepText = "";
   let stepHasTool = false;
