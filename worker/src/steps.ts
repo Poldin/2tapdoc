@@ -2,6 +2,9 @@ export type AgentStep = {
   name: string;
   input: string;
   outcome: string;
+  ms?: number;
+  inputTokens?: number;
+  outputTokens?: number;
 };
 
 const stepCap = 30;
@@ -73,8 +76,50 @@ export function formatStepError(error: unknown) {
   return clip(message, outcomeCap);
 }
 
+const msCap = 600_000;
+const tokenCap = 5_000_000;
+
+function metric(value: number | undefined, max: number) {
+  if (value == null || !Number.isFinite(value) || value < 0) return undefined;
+  return Math.min(max, Math.round(value));
+}
+
+type StoredStep = AgentStep & { id: string; pending?: boolean };
+
+function publishable(step: StoredStep, includePending: boolean): AgentStep | null {
+  if (step.pending && !includePending) return null;
+  const row: AgentStep = { name: step.name, input: step.input, outcome: step.outcome };
+  const ms = metric(step.ms, msCap);
+  const inputTokens = metric(step.inputTokens, tokenCap);
+  const outputTokens = metric(step.outputTokens, tokenCap);
+  if (ms !== undefined) row.ms = ms;
+  if (inputTokens !== undefined) row.inputTokens = inputTokens;
+  if (outputTokens !== undefined) row.outputTokens = outputTokens;
+  const hasMetric = ms !== undefined || inputTokens !== undefined || outputTokens !== undefined;
+  if (step.pending) return row;
+  if ((step.name === "modello" || step.name === "contesto") && !hasMetric) return null;
+  return row;
+}
+
 export class StepLog {
-  private steps: (AgentStep & { id: string })[] = [];
+  private steps: StoredStep[] = [];
+
+  constructor(initial: AgentStep[] = []) {
+    for (const step of initial) {
+      if (this.steps.length >= stepCap) break;
+      const name = clip(step.name, 80);
+      if (!name) continue;
+      this.steps.push({
+        id: `seed-${this.steps.length}`,
+        name,
+        input: step.input,
+        outcome: step.outcome,
+        ms: step.ms,
+        inputTokens: step.inputTokens,
+        outputTokens: step.outputTokens,
+      });
+    }
+  }
 
   noteCall(id: string, name: string, input: unknown) {
     this.upsert(id, name, { input: formatStepInput(name, input) });
@@ -88,20 +133,46 @@ export class StepLog {
     this.upsert(id, name, { outcome: formatStepError(error) });
   }
 
+  noteModelStart(id: string) {
+    this.upsert(id, "modello", { pending: true, input: "", outcome: "" });
+  }
+
+  noteModelFinish(
+    id: string,
+    metrics: { ms?: number; inputTokens?: number; outputTokens?: number },
+  ) {
+    this.upsert(id, "modello", { pending: false, ...metrics });
+  }
+
+  noteDuration(id: string, ms: number) {
+    const found = this.steps.find((step) => step.id === id);
+    if (found) found.ms = ms;
+  }
+
   list(): AgentStep[] {
-    return this.steps.map(({ name, input, outcome }) => ({ name, input, outcome }));
+    return this.steps.flatMap((step) => {
+      const row = publishable(step, false);
+      return row ? [row] : [];
+    });
   }
 
   draft() {
-    const list = this.list();
+    const list = this.steps.flatMap((step) => {
+      const row = publishable(step, true);
+      return row ? [row] : [];
+    });
     return list.length ? JSON.stringify(list) : "";
   }
 
-  private upsert(id: string, name: string, patch: Partial<AgentStep>) {
+  private upsert(id: string, name: string, patch: Partial<StoredStep>) {
     const found = this.steps.find((step) => step.id === id);
     if (found) {
       if (patch.input !== undefined) found.input = patch.input;
       if (patch.outcome !== undefined) found.outcome = patch.outcome;
+      if (patch.ms !== undefined) found.ms = patch.ms;
+      if (patch.inputTokens !== undefined) found.inputTokens = patch.inputTokens;
+      if (patch.outputTokens !== undefined) found.outputTokens = patch.outputTokens;
+      if (patch.pending !== undefined) found.pending = patch.pending;
       return;
     }
     if (this.steps.length >= stepCap) return;
@@ -110,6 +181,10 @@ export class StepLog {
       name: clip(name, 80),
       input: patch.input ?? "",
       outcome: patch.outcome ?? "",
+      ms: patch.ms,
+      inputTokens: patch.inputTokens,
+      outputTokens: patch.outputTokens,
+      pending: patch.pending,
     });
   }
 }

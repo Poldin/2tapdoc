@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "node --experimental-strip-types --test lib/codice-fiscale.test.ts"
+    "test": "node --experimental-strip-types --test lib/codice-fiscale.test.ts lib/agent-steps.test.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.7",

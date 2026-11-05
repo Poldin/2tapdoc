@@ -14,7 +14,14 @@ import {
   type CreatedChat,
   type FormState,
 } from "@/app/clinics/actions";
-import { parseAgentSteps, type AgentStep } from "@/lib/agent-steps";
+import {
+  formatDuration,
+  formatStepTokens,
+  formatTokenCount,
+  parseAgentSteps,
+  stepTotals,
+  type AgentStep,
+} from "@/lib/agent-steps";
 import { chatEmojis, isChatEmoji } from "@/lib/chat-emoji";
 import { markdownToPlainText } from "@/lib/markdown";
 import { takeReplyMarker } from "@/lib/reply-marker";
@@ -129,10 +136,26 @@ function copyableMessage(source: string) {
     .trim();
 }
 
+function stepsTitle(steps: AgentStep[], rawLog: boolean) {
+  const base = rawLog ? "Passaggi" : steps.length === 1 ? "1 passaggio" : `${steps.length} passaggi`;
+  const totals = stepTotals(steps);
+  const extra = [
+    totals.ms > 0 ? formatDuration(totals.ms) : "",
+    totals.tokens > 0 ? `${formatTokenCount(totals.tokens)} token` : "",
+  ].filter(Boolean);
+  return extra.length ? `${base} · ${extra.join(" · ")}` : base;
+}
+
 function stepsCopyText(steps: AgentStep[]) {
   if (steps.length === 1 && steps[0].name === "passaggi" && !steps[0].input) return steps[0].outcome.trim();
   return steps
-    .map((step) => [step.name, step.input.trim(), step.outcome.trim()].filter(Boolean).join("\n"))
+    .map((step) => {
+      const tokens = formatStepTokens(step);
+      const head = [step.name, typeof step.ms === "number" ? formatDuration(step.ms) : "", tokens]
+        .filter(Boolean)
+        .join(" · ");
+      return [head, step.input.trim(), step.outcome.trim()].filter(Boolean).join("\n");
+    })
     .filter(Boolean)
     .join("\n\n");
 }
@@ -185,7 +208,7 @@ function AgentSteps({ steps, startOpen = false, live = false }: { steps: AgentSt
   const [open, setOpen] = useState(startOpen);
   if (steps.length === 0) return null;
   const rawLog = steps.length === 1 && steps[0].name === "passaggi" && !steps[0].input;
-  const title = rawLog ? "Passaggi" : steps.length === 1 ? "1 passaggio" : `${steps.length} passaggi`;
+  const title = stepsTitle(steps, rawLog);
   const copyText = stepsCopyText(steps);
   return (
     <details
@@ -193,7 +216,7 @@ function AgentSteps({ steps, startOpen = false, live = false }: { steps: AgentSt
       onToggle={(event) => {
         if (event.currentTarget instanceof HTMLDetailsElement) setOpen(event.currentTarget.open);
       }}
-      className="w-full rounded-2xl bg-paper px-4 py-2"
+      className="w-fit max-w-full rounded-2xl bg-paper px-4 py-2"
     >
       <summary className="flex cursor-pointer list-none items-center gap-1.5 text-sm text-muted [&::-webkit-details-marker]:hidden">
         <ChevronRight className={`h-3.5 w-3.5 shrink-0 ${open ? "rotate-90" : ""}`} strokeWidth={2} />
@@ -206,23 +229,32 @@ function AgentSteps({ steps, startOpen = false, live = false }: { steps: AgentSt
         </pre>
       ) : (
         <ol className="mt-2 flex flex-col gap-3 border-t border-line pt-2">
-          {steps.map((step, index) => (
-            <li key={`${step.name}-${index}`}>
-              <p className="text-sm font-medium text-ink">{step.name}</p>
-              {step.input ? (
-                <pre className="mt-1 max-h-40 overflow-auto font-mono text-xs leading-5 whitespace-pre-wrap text-muted">
-                  {step.input}
-                </pre>
-              ) : null}
-              {step.outcome ? (
-                <pre className="mt-1 max-h-48 overflow-auto font-mono text-xs leading-5 whitespace-pre-wrap text-ink">
-                  {step.outcome}
-                </pre>
-              ) : live ? (
-                <p className="mt-1 text-xs text-muted">in corso</p>
-              ) : null}
-            </li>
-          ))}
+          {steps.map((step, index) => {
+            const tokens = formatStepTokens(step);
+            return (
+              <li key={`${step.name}-${index}`}>
+                <p className="flex flex-wrap items-baseline gap-x-2 text-sm">
+                  <span className="font-medium text-ink">{step.name}</span>
+                  {typeof step.ms === "number" ? (
+                    <span className="text-xs text-muted">{formatDuration(step.ms)}</span>
+                  ) : null}
+                  {tokens ? <span className="text-xs text-muted">{tokens}</span> : null}
+                </p>
+                {step.input ? (
+                  <pre className="mt-1 max-h-40 overflow-auto font-mono text-xs leading-5 whitespace-pre-wrap text-muted">
+                    {step.input}
+                  </pre>
+                ) : null}
+                {step.outcome ? (
+                  <pre className="mt-1 max-h-48 overflow-auto font-mono text-xs leading-5 whitespace-pre-wrap text-ink">
+                    {step.outcome}
+                  </pre>
+                ) : live && typeof step.ms !== "number" ? (
+                  <p className="mt-1 text-xs text-muted">in corso</p>
+                ) : null}
+              </li>
+            );
+          })}
         </ol>
       )}
     </details>
@@ -259,7 +291,12 @@ function messageStamp(messages: ChatMessage[]) {
         message.reaction ?? "",
         message.replyTo?.excerpt ?? "",
         message.emojis.map((emoji) => `${emoji.emoji}:${emoji.mine ? 1 : 0}:${emoji.botId ?? ""}`).join("."),
-        message.steps.map((step) => `${step.name}\u001f${step.input.length}\u001f${step.outcome.length}`).join("."),
+        message.steps
+          .map(
+            (step) =>
+              `${step.name}\u001f${step.input.length}\u001f${step.outcome.length}\u001f${step.ms ?? ""}\u001f${step.inputTokens ?? ""}\u001f${step.outputTokens ?? ""}`,
+          )
+          .join("."),
       ].join("\u001f"),
     )
     .join("\u001e");

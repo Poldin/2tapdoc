@@ -189,9 +189,22 @@ export function formatFoldBatch(trace: string, batch: ContextMessage[]): string 
   );
 }
 
-export async function foldTrace(apiKey: string, trace: string, batch: ContextMessage[]): Promise<string> {
+export type FoldMeasure = {
+  text: string;
+  ms: number;
+  inputTokens?: number;
+  outputTokens?: number;
+};
+
+function takenCount(value: number | undefined) {
+  if (value == null || !Number.isFinite(value) || value < 0) return undefined;
+  return Math.min(5_000_000, Math.round(value));
+}
+
+export async function foldTrace(apiKey: string, trace: string, batch: ContextMessage[]): Promise<FoldMeasure> {
   const mistral = createMistral({ apiKey });
   const modelName = process.env.MISTRAL_SUMMARY_MODEL?.trim() || "mistral-small-latest";
+  const started = Date.now();
   const result = await generateText({
     model: mistral(modelName),
     system: foldSystem,
@@ -202,5 +215,10 @@ export async function foldTrace(apiKey: string, trace: string, batch: ContextMes
   });
   const text = cleanTrace(result.text);
   if (text.length < 10) throw new Error("The trace came back empty");
-  return text;
+  return {
+    text,
+    ms: Math.min(600_000, Math.max(0, Date.now() - started)),
+    inputTokens: takenCount(result.usage.inputTokens),
+    outputTokens: takenCount(result.usage.outputTokens),
+  };
 }

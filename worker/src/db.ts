@@ -174,7 +174,14 @@ export async function completeTurn(
   workerId: string,
   jobId: string,
   body: string,
-  steps: { name: string; input: string; outcome: string }[] = [],
+  steps: {
+    name: string;
+    input: string;
+    outcome: string;
+    ms?: number;
+    inputTokens?: number;
+    outputTokens?: number;
+  }[] = [],
 ): Promise<boolean> {
   const result = await client.query<{ posted: boolean }>(
     "select private.complete_bot_job($1, $2, $3, $4::jsonb) as posted",

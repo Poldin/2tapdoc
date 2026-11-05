@@ -366,11 +366,12 @@ async function modelContext(
   client: pg.Client,
   workerId: string,
   turn: Turn,
-): Promise<TurnMessage[]> {
+): Promise<{ messages: TurnMessage[]; steps: AgentStep[] }> {
   const presented = turn.messages.map(presentToModel);
   const plain = presented.map((message) => ({ role: message.role, content: message.content }));
   const sequenced = sequencedMessages(presented);
-  if (!sequenced) return plain;
+  const prep: AgentStep[] = [];
+  if (!sequenced) return { messages: plain, steps: prep };
 
   try {
     const windowed = await compactContext({
@@ -380,7 +381,18 @@ async function modelContext(
       loadOlder: (afterSeq, beforeSeq, limit) =>
         listMessagesToFold(client, workerId, turn.id, afterSeq, beforeSeq, limit),
       writeTrace: (trace, untilSeq) => saveChatTrace(client, workerId, turn.id, trace, untilSeq),
-      fold: (trace, batch) => foldTrace(apiKey, trace, batch),
+      fold: async (trace, batch) => {
+        const folded = await foldTrace(apiKey, trace, batch);
+        prep.push({
+          name: "contesto",
+          input: "",
+          outcome: "",
+          ms: folded.ms,
+          inputTokens: folded.inputTokens,
+          outputTokens: folded.outputTokens,
+        });
+        return folded.text;
+      },
     });
     if (windowed.mode !== "full") {
       console.log(
@@ -395,11 +407,11 @@ async function modelContext(
         windowed.trace?.length ?? 0,
       );
     }
-    return windowed.messages;
+    return { messages: windowed.messages, steps: prep };
   } catch (error) {
     const reason = error instanceof Error ? error.message : "context window failed";
     console.error("context window skipped", turn.chatId, reason);
-    return plain;
+    return { messages: plain, steps: prep };
   }
 }
 
@@ -409,7 +421,8 @@ export async function replyToTurn(
   workerId: string,
   turn: Turn,
 ): Promise<{ body: string; steps: AgentStep[] }> {
-  const messages = await modelContext(apiKey, client, workerId, turn);
+  const prepared = await modelContext(apiKey, client, workerId, turn);
+  const messages = prepared.messages;
   if (turn.alertPrompt) {
     const explaining = turn.alertPrompt.startsWith("FALLIMENTO DEL TURNO PRECEDENTE");
     messages.push({
@@ -1181,7 +1194,8 @@ export async function replyToTurn(
 
   let stepText = "";
   let stepHasTool = false;
-  const steps = new StepLog();
+  const steps = new StepLog(prepared.steps);
+  let modelRound = 0;
   let lastSentAt = 0;
   let lastKey = "";
   const finish = (body: string) => ({ body, steps: steps.list() });
@@ -1226,7 +1240,7 @@ export async function replyToTurn(
   };
 
   try {
-    await publish("thinking", "", true);
+    await publish("thinking", steps.draft(), true);
 
     const result = streamText({
       model: mistral(modelName),
@@ -1245,6 +1259,8 @@ export async function replyToTurn(
         if (part.type === "start-step") {
           stepText = "";
           stepHasTool = false;
+          modelRound += 1;
+          steps.noteModelStart(`modello-${modelRound}`);
           await publish("thinking", steps.draft(), true);
         } else if (part.type === "text-delta") {
           stepText = (stepText + part.text).slice(0, 4000);
@@ -1262,8 +1278,21 @@ export async function replyToTurn(
           steps.noteError(part.toolCallId, part.toolName, part.error);
           await publish("thinking", steps.draft(), true);
         } else if (part.type === "finish-step") {
-          if (part.finishReason === "tool-calls") await publish("thinking", steps.draft(), true);
-          else if (stepText.trim() && !emojiOnlyReply(stepText)) await publish("writing", stepText.trim(), true);
+          if (modelRound > 0) {
+            const usage = part.usage;
+            steps.noteModelFinish(`modello-${modelRound}`, {
+              ms: part.performance.responseTimeMs,
+              inputTokens: usage?.inputTokens,
+              outputTokens: usage?.outputTokens,
+            });
+            for (const [id, ms] of Object.entries(part.performance.toolExecutionMs ?? {})) {
+              if (typeof ms === "number") steps.noteDuration(id, ms);
+            }
+          }
+          await publish("thinking", steps.draft(), true);
+          if (part.finishReason !== "tool-calls" && stepText.trim() && !emojiOnlyReply(stepText)) {
+            await publish("writing", stepText.trim(), true);
+          }
         } else if (part.type === "error") {
           const reason = part.error instanceof Error ? part.error.message : "The model stream failed";
           throw new Error(reason);
