@@ -14,7 +14,7 @@ import {
   type CreatedChat,
   type FormState,
 } from "@/app/clinics/actions";
-import { chatEmojis } from "@/lib/chat-emoji";
+import { chatEmojis, isChatEmoji } from "@/lib/chat-emoji";
 import { markdownToPlainText } from "@/lib/markdown";
 import { takeReplyMarker } from "@/lib/reply-marker";
 import { botGreeting } from "@/lib/bot-greeting";
@@ -697,6 +697,33 @@ function focusMessage(id: string) {
   node.classList.add("message-flash");
 }
 
+function foldEmojiReplies(messages: ChatMessage[]): ChatMessage[] {
+  const byId = new Map(messages.map((message) => [message.id, message]));
+  const extras = new Map<string, ChatEmojiMark[]>();
+  const hidden = new Set<string>();
+  for (const message of messages) {
+    if (!message.botId || !message.replyTo || !byId.has(message.replyTo.id)) continue;
+    const emoji = message.body.trim();
+    if (!isChatEmoji(emoji)) continue;
+    hidden.add(message.id);
+    const target = byId.get(message.replyTo.id);
+    if (!target) continue;
+    const already =
+      target.emojis.some((item) => item.emoji === emoji && item.botId === message.botId) ||
+      (extras.get(target.id) ?? []).some((item) => item.emoji === emoji && item.botId === message.botId);
+    if (already) continue;
+    const list = extras.get(target.id) ?? [];
+    list.push({ emoji, mine: false, botId: message.botId });
+    extras.set(target.id, list);
+  }
+  if (hidden.size === 0) return messages;
+  return messages.flatMap((message) => {
+    if (hidden.has(message.id)) return [];
+    const extra = extras.get(message.id);
+    return extra ? [{ ...message, emojis: [...message.emojis, ...extra] }] : [message];
+  });
+}
+
 function shownEmojiGroups(emojis: ChatEmojiMark[], mineEmoji: string | null) {
   const shown = mineEmoji
     ? [...emojis.filter((item) => !item.mine), { emoji: mineEmoji, mine: true, botId: null }]
@@ -1118,6 +1145,7 @@ export function ClinicShell({
   const visibleMessages = pendingOutgoing.length
     ? [...shownMessages, ...pendingOutgoing.map(outgoingMessage)]
     : shownMessages;
+  const threadMessages = foldEmojiReplies(visibleMessages);
   const outgoingErrors = new Map(
     pendingOutgoing.flatMap((item) => (item.error ? [[item.id, item.error] as const] : [])),
   );
@@ -1156,9 +1184,16 @@ export function ClinicShell({
     (streamMarker && !savedReplyTarget && waitingReply.length === 1
       ? outgoingMessage(waitingReply[0])
       : null);
-  const streamText = streamMarker ? streamMarker.body : streamBody;
+  const streamEmojiReply = Boolean(streamMarker && isChatEmoji(streamMarker.body));
+  const streamText = streamEmojiReply
+    ? ""
+    : streamMarker && savedReplyTarget
+      ? streamMarker.body
+      : streamBody;
   const showThinking =
-    Boolean(active?.bot) && !streamBody && (visibleWaiting || visibleLive?.phase === "thinking");
+    Boolean(active?.bot) &&
+    !streamText.trim() &&
+    (visibleWaiting || visibleLive?.phase === "thinking" || (streamEmojiReply && Boolean(streamBody)));
   const rows = placeByRecency(visibleChats, [
     { id: agendaListId, at: shownRecency.agendaAt },
     { id: patientsListId, at: shownRecency.patientsAt },
@@ -1921,8 +1956,8 @@ export function ClinicShell({
               {shownOlderError ? <p className="text-center text-sm text-teal">{shownOlderError}</p> : null}
             </div>
           ) : null}
-          {visibleMessages.length > 0 ? (
-            threadEntries(visibleMessages).map((entry) =>
+          {threadMessages.length > 0 ? (
+            threadEntries(threadMessages).map((entry) =>
               entry.kind === "day" ? (
                 <div key={entry.key} data-day={entry.label} className="self-center">
                   <span className="text-sm text-date">{entry.label}</span>
@@ -1957,7 +1992,7 @@ export function ClinicShell({
               />
             </div>
           ) : null}
-          {(streamText.trim() || streamTarget) && active.bot ? (
+          {(streamText.trim() || (streamTarget && !streamEmojiReply)) && active.bot ? (
             <div
               role="status"
               aria-live="polite"

@@ -10,7 +10,7 @@ import {
   scheduleServerAlerts,
 } from "./alerts.js";
 import { executeCalcolaCodiceFiscale } from "./codice-fiscale.js";
-import { chatEmojis } from "./emoji.js";
+import { chatEmojis, isChatEmoji } from "./emoji.js";
 import { takeReplyMarker } from "./reply-marker.js";
 import {
   botConnectWhatsApp,
@@ -81,6 +81,7 @@ export type Turn = {
   doctors: ClinicDoctor[];
   clinicalObjects: ClinicObject[];
   alertPrompt: string | null;
+  reactionNotice: string | null;
   contextTrace: string | null;
   contextTraceSeq: number;
   messages: TurnMessage[];
@@ -292,9 +293,8 @@ function buildSystemPrompt(turn: Turn, now: Date): string {
     "Rispondi sempre in italiano, in modo breve, preciso e concreto.",
     "Se compare una nota interna di continuità, è la memoria dei messaggi più vecchi: non è una richiesta e non va eseguita.",
     "Puoi usare Markdown semplice (grassetto, elenchi puntati, a capo). Niente HTML, niente tabelle larghe.",
-    "Non mostrare mai gli UUID interni all'utente a meno che non te li chieda esplicitamente: usa sempre i nomi di medici, stanze e pazienti.",
-    "Nello storico un messaggio può iniziare con un id fra parentesi quadre. Quell'id serve ai tool: non scriverlo nella risposta.",
     "Un'azione è fatta solo se il tool ha risposto con successo. Se la risposta è awaiting_user, il dialog lo mostra il sistema: non chiedere conferma in chat e non dire che è già fatto.",
+    "Un blocco [REAZIONE] non è un messaggio nuovo. Se non chiede un'azione, non scrivere nulla.",
     "",
     "### Specialisti:",
     doctorsList,
@@ -302,6 +302,28 @@ function buildSystemPrompt(turn: Turn, now: Date): string {
     "### Stanze e oggetti clinici:",
     objectsList,
   ].join("\n");
+}
+
+function emojiOnlyReply(text: string): boolean {
+  const marker = takeReplyMarker(text.trim());
+  return Boolean(marker && isChatEmoji(marker.body));
+}
+
+function personIsWaiting(messages: TurnMessage[]): boolean {
+  let lastAssistant = -1;
+  for (let index = 0; index < messages.length; index += 1) {
+    if (messages[index].role === "assistant") lastAssistant = index;
+  }
+  return messages
+    .slice(lastAssistant + 1)
+    .some((message) => message.role === "user" && !message.content.startsWith("Altro bot: "));
+}
+
+function reactionWake(notice: string, waiting: boolean): string {
+  const instruction = waiting
+    ? "C'è un messaggio di una persona a cui non hai ancora risposto: rispondi a quello. La reazione è un segnale in più: tienine conto se cambia ciò che devi fare."
+    : "Non è arrivato un messaggio nuovo. Non scrivere in chat se la reazione non chiede un'azione: niente conferma e niente «ok». Intervieni solo se è un segnale, una conferma o una richiesta. In quel caso esegui, oppure scrivi.";
+  return `[REAZIONE]\n${notice}\n${instruction}`;
 }
 
 function presentToModel(message: TurnMessage): TurnMessage {
@@ -382,6 +404,12 @@ export async function replyToTurn(
     messages.push({
       role: "user",
       content: `[ALERT SERVER SCATTATO NEL CONTAINER]\nEsegui questa istruzione o avvisa in chat:\n${turn.alertPrompt}`,
+    });
+  }
+  if (turn.reactionNotice) {
+    messages.push({
+      role: "user",
+      content: reactionWake(turn.reactionNotice, personIsWaiting(turn.messages)),
     });
   }
   if (!messages.some((message) => message.role === "user")) {
@@ -1250,13 +1278,13 @@ export async function replyToTurn(
       await publish("thinking", "", true);
     } else if (part.type === "text-delta") {
       stepText = (stepText + part.text).slice(0, 4000);
-      if (!stepHasTool) await publish("writing", stepText);
+      if (!stepHasTool && !emojiOnlyReply(stepText)) await publish("writing", stepText);
     } else if (part.type === "tool-call" || part.type === "tool-input-start") {
       stepHasTool = true;
       await publish("thinking", "", true);
     } else if (part.type === "finish-step") {
       if (part.finishReason === "tool-calls") await publish("thinking", "", true);
-      else if (stepText.trim()) await publish("writing", stepText.trim(), true);
+      else if (stepText.trim() && !emojiOnlyReply(stepText)) await publish("writing", stepText.trim(), true);
     } else if (part.type === "error") {
       const reason = part.error instanceof Error ? part.error.message : "The model stream failed";
       throw new Error(reason);
@@ -1267,6 +1295,15 @@ export async function replyToTurn(
 
   let content = stepText.trim();
   const marker = content ? takeReplyMarker(content) : null;
+  if (marker && isChatEmoji(marker.body)) {
+    try {
+      await botSetEmoji(client, workerId, turn.id, marker.id, marker.body);
+      return "";
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      if (!message.includes("Emoji target is not a message")) throw error;
+    }
+  }
   if (marker) {
     if (!quoted) {
       try {
@@ -1280,7 +1317,7 @@ export async function replyToTurn(
     content = marker.body;
   }
   if (!content) {
-    if (reacted || quoted) return "";
+    if (reacted || quoted || (turn.reactionNotice && !personIsWaiting(turn.messages))) return "";
     throw new Error("Mistral returned an empty reply");
   }
   await publish("writing", content, true);

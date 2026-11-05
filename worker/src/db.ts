@@ -534,6 +534,9 @@ function parseTurn(value: unknown): Turn | null {
   if (row.alertPrompt != null && typeof row.alertPrompt !== "string") {
     throw new Error("Unexpected job payload");
   }
+  if (row.reactionNotice != null && typeof row.reactionNotice !== "string") {
+    throw new Error("Unexpected job payload");
+  }
   if (!Array.isArray(row.messages)) throw new Error("Unexpected job payload");
 
   const permissions = Array.isArray(row.permissions)
@@ -607,6 +610,7 @@ function parseTurn(value: unknown): Turn | null {
     doctors,
     clinicalObjects,
     alertPrompt: typeof row.alertPrompt === "string" ? row.alertPrompt : null,
+    reactionNotice: typeof row.reactionNotice === "string" ? row.reactionNotice : null,
     contextTrace: typeof row.contextTrace === "string" ? row.contextTrace : null,
     contextTraceSeq: traceSeq ?? 0,
     messages,

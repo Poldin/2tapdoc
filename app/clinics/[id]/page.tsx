@@ -16,7 +16,6 @@ import { type ClinicOption } from "@/components/clinic-switcher";
 import { getSessionUser } from "@/lib/auth/session";
 import { clinicRecencyFromCookie, leadingPlace } from "@/lib/clinic-recency";
 import { loadChatThread, messageBody } from "@/lib/chat-thread";
-import { takeReplyMarker } from "@/lib/reply-marker";
 import { createClient } from "@/lib/supabase/server";
 import { markdownToPlainText } from "@/lib/markdown";
 
@@ -112,7 +111,7 @@ export default async function ClinicPage({
     .map((row) => {
       const latest = [...(row.chat_events ?? [])].sort((a, b) => Number(b.seq) - Number(a.seq))[0];
       const previewBody = latest?.kind === "message" ? messageBody(latest.payload) : null;
-      const previewSource = previewBody ? (takeReplyMarker(previewBody)?.body ?? previewBody) : null;
+      const previewSource = previewBody;
       return {
         id: row.id,
         title: row.title,
