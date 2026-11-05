@@ -1,10 +1,10 @@
 "use client";
 
-import { useActionState, useEffect, useLayoutEffect, useRef, useState, useTransition } from "react";
+import { useActionState, useEffect, useLayoutEffect, useRef, useState, useTransition, type MouseEvent } from "react";
 import { createPortal, flushSync } from "react-dom";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, ChevronRight, PanelLeftClose, PanelLeftOpen, Plus, Reply, Search, Send, SmilePlus, Star, ThumbsDown, ThumbsUp, X } from "lucide-react";
+import { ArrowLeft, Check, ChevronRight, Copy, PanelLeftClose, PanelLeftOpen, Plus, Reply, Search, Send, SmilePlus, Star, ThumbsDown, ThumbsUp, X } from "lucide-react";
 import {
   loadOlderChatMessages,
   preferMessage,
@@ -112,11 +112,81 @@ type LiveReply = {
   updatedAt: string;
 };
 
+function copyableMessage(source: string) {
+  return source
+    .replace(/\r\n?/g, "\n")
+    .replace(/```[^\n]*\n?([\s\S]*?)```/g, "$1")
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label: string, href: string) =>
+      label.trim() === href.trim() ? href.trim() : `${label.trim()} (${href.trim()})`,
+    )
+    .replace(/(\*\*\*|___)([\s\S]*?)\1/g, "$2")
+    .replace(/(\*\*|__)([\s\S]*?)\1/g, "$2")
+    .replace(/~~([\s\S]*?)~~/g, "$1")
+    .replace(/`([^`]*)`/g, "$1")
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/^>\s?/gm, "")
+    .trim();
+}
+
+function stepsCopyText(steps: AgentStep[]) {
+  if (steps.length === 1 && steps[0].name === "passaggi" && !steps[0].input) return steps[0].outcome.trim();
+  return steps
+    .map((step) => [step.name, step.input.trim(), step.outcome.trim()].filter(Boolean).join("\n"))
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function CopyButton({ text, label }: { text: string; label: string }) {
+  const [copied, setCopied] = useState(false);
+  const resetRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (resetRef.current !== null) window.clearTimeout(resetRef.current);
+    };
+  }, []);
+
+  function onClick(event: MouseEvent<HTMLButtonElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    const value = text.trim();
+    if (!value) return;
+    void navigator.clipboard.writeText(value).then(
+      () => {
+        setCopied(true);
+        if (resetRef.current !== null) window.clearTimeout(resetRef.current);
+        resetRef.current = window.setTimeout(() => {
+          resetRef.current = null;
+          setCopied(false);
+        }, 1600);
+      },
+      () => setCopied(false),
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      aria-live="polite"
+      aria-label={copied ? "Copiato" : label}
+      onClick={onClick}
+      className={`flex h-6 shrink-0 items-center justify-center rounded-full ${
+        copied ? "gap-1 px-1.5 text-green-600" : "w-6 text-muted"
+      }`}
+    >
+      {copied ? <Check className="h-3.5 w-3.5" strokeWidth={2} /> : <Copy className="h-3.5 w-3.5" strokeWidth={2} />}
+      {copied ? <span className="text-xs leading-none">Copiato</span> : null}
+    </button>
+  );
+}
+
 function AgentSteps({ steps, startOpen = false, live = false }: { steps: AgentStep[]; startOpen?: boolean; live?: boolean }) {
   const [open, setOpen] = useState(startOpen);
   if (steps.length === 0) return null;
   const rawLog = steps.length === 1 && steps[0].name === "passaggi" && !steps[0].input;
   const title = rawLog ? "Passaggi" : steps.length === 1 ? "1 passaggio" : `${steps.length} passaggi`;
+  const copyText = stepsCopyText(steps);
   return (
     <details
       open={open}
@@ -127,7 +197,8 @@ function AgentSteps({ steps, startOpen = false, live = false }: { steps: AgentSt
     >
       <summary className="flex cursor-pointer list-none items-center gap-1.5 text-sm text-muted [&::-webkit-details-marker]:hidden">
         <ChevronRight className={`h-3.5 w-3.5 shrink-0 ${open ? "rotate-90" : ""}`} strokeWidth={2} />
-        {title}
+        <span className="min-w-0 flex-1">{title}</span>
+        {copyText ? <CopyButton text={copyText} label="Copia i passaggi" /> : null}
       </summary>
       {rawLog ? (
         <pre className="mt-2 max-h-64 overflow-auto border-t border-line pt-2 font-mono text-xs leading-5 whitespace-pre-wrap text-ink">
@@ -941,6 +1012,7 @@ function ChatTurn({
   ) : null;
 
   const showSteps = !message.mine && message.steps.length > 0;
+  const copyText = copyableMessage(message.body);
   return (
     <div
       id={`message-${message.id}`}
@@ -1000,6 +1072,7 @@ function ChatTurn({
           preferredAt={message.preferredAt}
         />
         <MessageVotes clinicId={clinicId} chatId={chatId} messageId={message.id} vote={message.reaction} />
+        {copyText ? <CopyButton text={copyText} label="Copia il messaggio" /> : null}
       </div>
       {error ? <p className="px-1 text-xs text-teal">{error}</p> : null}
       {picker}
