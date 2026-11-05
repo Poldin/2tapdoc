@@ -1,5 +1,6 @@
 import pg from "pg";
 import type { ContextMessage } from "./context-window.js";
+import { boundReadRows, prepareReadSql } from "./read-query.js";
 import type { ClinicDoctor, ClinicObject, Turn, TurnMessage } from "./reply.js";
 
 const { Client } = pg;
@@ -46,6 +47,39 @@ export async function saveChatTrace(
     trace,
     untilSeq,
   ]);
+}
+
+export async function botReadQuery(
+  client: pg.Client,
+  workerId: string,
+  jobId: string,
+  sql: string,
+): Promise<{ rows: unknown[]; truncated: boolean } | { error: string }> {
+  const prepared = prepareReadSql(sql);
+  if ("error" in prepared) return prepared;
+
+  let started = false;
+  try {
+    await client.query("begin read only");
+    started = true;
+    await client.query("select private.assert_bot_job_context($1, $2, null)", [workerId, jobId]);
+    await client.query("set local role authenticated");
+    await client.query("set local statement_timeout = '8s'");
+    await client.query("set local lock_timeout = '2s'");
+    await client.query("set local search_path to public, pg_catalog");
+    const result = await client.query<{ rows: unknown }>({
+      text: prepared.text,
+      values: prepared.values,
+    });
+    const raw = result.rows[0]?.rows;
+    const rows = Array.isArray(raw) ? raw : [];
+    return boundReadRows(rows);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Query non eseguita.";
+    return { error: message };
+  } finally {
+    if (started) await client.query("rollback").catch(() => undefined);
+  }
 }
 
 export async function claimTurn(client: pg.Client, workerId: string): Promise<Turn | null> {

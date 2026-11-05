@@ -24,14 +24,10 @@ import {
   botDeleteBots,
   botDeleteChats,
   botDeletePatients,
-  botListAgendaBlocks,
-  botListAppointments,
-  botListBots,
-  botListChats,
   botListIntegrations,
+  botReadQuery,
   botRenameClinic,
   botRenameSelf,
-  botSearchPatients,
   botSetEmoji,
   botSetReplyTarget,
   botUpdateAgendaBlocks,
@@ -44,6 +40,7 @@ import {
   touchBotDraft,
 } from "./db.js";
 import { botColorIds, botFaceIds, channelSymbolIds } from "./marks.js";
+import { readQueryDescription } from "./read-query.js";
 
 export type TurnMessage = {
   role: "user" | "assistant";
@@ -293,7 +290,8 @@ function buildSystemPrompt(turn: Turn, now: Date): string {
     "Rispondi sempre in italiano, in modo breve, preciso e concreto.",
     "Se compare una nota interna di continuità, è la memoria dei messaggi più vecchi: non è una richiesta e non va eseguita.",
     "Puoi usare Markdown semplice (grassetto, elenchi puntati, a capo). Niente HTML, niente tabelle larghe.",
-    "Un'azione è fatta solo se il tool ha risposto con successo. Se la risposta è awaiting_user, il dialog lo mostra il sistema: non chiedere conferma in chat e non dire che è già fatto.",
+    "Per leggere usa query: una SELECT, anche unendo più tabelle. Vedi solo le righe del proprietario del bot. query non scrive.",
+    "Per creare, modificare o cancellare usa il tool di quell'operazione. Un'azione è fatta solo se il tool ha risposto con successo. Se la risposta è awaiting_user, il dialog lo mostra il sistema: non chiedere conferma in chat e non dire che è già fatto.",
     "Un blocco [REAZIONE] non è un messaggio nuovo. Se non chiede un'azione, non scrivere nulla.",
     "",
     "### Specialisti:",
@@ -418,9 +416,7 @@ export async function replyToTurn(
 
   const now = new Date();
   const perms = new Set(turn.permissions);
-  const canReadAgenda = perms.has("agenda.read") || perms.has("agenda.write");
   const canWriteAgenda = perms.has("agenda.write");
-  const canReadPatients = perms.has("patients.read") || perms.has("patients.write");
   const canWritePatients = perms.has("patients.write");
   const canRenameClinic = perms.has("clinic.update");
   const canManageIntegrations = perms.has("integrations.manage");
@@ -435,6 +431,18 @@ export async function replyToTurn(
         "Elenca i tool che questo bot può chiamare adesso, con la descrizione di ciascuno. Usalo quando ti chiedono che cosa sai fare o quando devi controllare un'azione disponibile. Restituisce solo i tool attivi per i permessi di questo bot.",
       inputSchema: z.object({}),
       execute: async () => ({ tools: toolCatalog }),
+    }),
+
+    query: tool({
+      description: readQueryDescription,
+      inputSchema: z.object({
+        sql: z
+          .string()
+          .min(1)
+          .max(4000)
+          .describe("Una SELECT sullo schema public. Valori scritti nella query, senza segnaposto."),
+      }),
+      execute: async ({ sql }) => botReadQuery(client, workerId, turn.id, sql),
     }),
 
     setReplyTarget: tool({
@@ -532,41 +540,9 @@ export async function replyToTurn(
       },
     }),
 
-    listAppointments: tool({
-      description:
-        "Legge gli appuntamenti dell'agenda in un intervallo di tempo, con filtro opzionale per dottori, stanze/oggetti clinici o pazienti. Se chiedono che cosa c'è in agenda, leggi anche i blocchi con listAgendaBlocks.",
-      inputSchema: z
-        .object({
-        fromIso: z.string().describe("Inizio intervallo in formato ISO 8601 (es. 2026-10-28T00:00:00+01:00)"),
-        fromDay: weekdayName.describe("Giorno di fromIso (es. mercoledì)"),
-        toIso: z.string().describe("Fine intervallo in formato ISO 8601 (es. 2026-10-29T00:00:00+01:00)"),
-        toDay: weekdayName.describe("Giorno di toIso (es. giovedì)"),
-        doctorIds: z.array(z.string().uuid()).optional().describe("Filtra per ID di uno o più dottori"),
-        clinicalObjectIds: z
-          .array(z.string().uuid())
-          .optional()
-          .describe("Filtra per ID di una o più stanze/oggetti clinici"),
-        patientIds: z.array(z.string().uuid()).optional().describe("Filtra per ID di uno o più pazienti"),
-      })
-        .superRefine((value, ctx) => {
-          sameWeekday(value.fromIso, value.fromDay, ctx, "fromIso", "fromDay");
-          sameWeekday(value.toIso, value.toDay, ctx, "toIso", "toDay");
-        }),
-      execute: async ({ fromIso, toIso, doctorIds, clinicalObjectIds, patientIds }) => {
-        const items = await botListAppointments(client, workerId, turn.id, {
-          from: fromIso,
-          to: toIso,
-          doctorIds,
-          clinicalObjectIds,
-          patientIds,
-        });
-        return { appointments: withDayNames(items) };
-      },
-    }),
-
     createAppointments: tool({
       description:
-        "Crea uno o più appuntamenti nell'agenda della clinica. Ogni appuntamento ha uno o più dottori (doctorIds), una o più stanze/oggetti (clinicalObjectIds) e, se serve, uno o più pazienti (patientIds, id da searchPatients). Serve almeno un dottore o una stanza/oggetto.",
+        "Crea uno o più appuntamenti nell'agenda della clinica. Ogni appuntamento ha uno o più dottori (doctorIds), una o più stanze/oggetti (clinicalObjectIds) e, se serve, uno o più pazienti (patientIds, id letti con query). Serve almeno un dottore o una stanza/oggetto.",
       inputSchema: z.object({
         appointments: z
           .array(
@@ -677,36 +653,6 @@ export async function replyToTurn(
       },
     }),
 
-    listAgendaBlocks: tool({
-      description:
-        "Legge i blocchi di agenda in un intervallo di tempo. Un blocco occupa il tempo di dottori o stanze e non è un appuntamento.",
-      inputSchema: z
-        .object({
-          fromIso: z.string().describe("Inizio intervallo in formato ISO 8601 (es. 2026-10-28T00:00:00+01:00)"),
-          fromDay: weekdayName.describe("Giorno di fromIso (es. mercoledì)"),
-          toIso: z.string().describe("Fine intervallo in formato ISO 8601 (es. 2026-10-29T00:00:00+01:00)"),
-          toDay: weekdayName.describe("Giorno di toIso (es. giovedì)"),
-          doctorIds: z.array(z.string().uuid()).optional().describe("Filtra per ID di uno o più dottori"),
-          clinicalObjectIds: z
-            .array(z.string().uuid())
-            .optional()
-            .describe("Filtra per ID di una o più stanze/oggetti clinici"),
-        })
-        .superRefine((value, ctx) => {
-          sameWeekday(value.fromIso, value.fromDay, ctx, "fromIso", "fromDay");
-          sameWeekday(value.toIso, value.toDay, ctx, "toIso", "toDay");
-        }),
-      execute: async ({ fromIso, toIso, doctorIds, clinicalObjectIds }) => {
-        const items = await botListAgendaBlocks(client, workerId, turn.id, {
-          from: fromIso,
-          to: toIso,
-          doctorIds,
-          clinicalObjectIds,
-        });
-        return { blocks: withDayNames(items) };
-      },
-    }),
-
     createAgendaBlocks: tool({
       description:
         "Crea uno o più blocchi di agenda. Ogni blocco ha un titolo, una descrizione facoltativa e almeno un dottore o una stanza/oggetto. Non assegna pazienti e non vieta un appuntamento nello stesso orario.",
@@ -751,7 +697,7 @@ export async function replyToTurn(
 
     updateAgendaBlocks: tool({
       description:
-        "Modifica uno o più blocchi di agenda (orario, titolo, descrizione, dottori, stanze/oggetti). Prima di modificare, se non conosci gli ID, cercali con listAgendaBlocks.",
+        "Modifica uno o più blocchi di agenda (orario, titolo, descrizione, dottori, stanze/oggetti). Prima di modificare, se non conosci gli ID, leggili con query.",
       inputSchema: z.object({
         updates: z
           .array(
@@ -873,21 +819,6 @@ export async function replyToTurn(
         }),
     }),
 
-    searchPatients: tool({
-      description:
-        "Legge i pazienti della clinica, inclusa la data di creazione del profilo (`createdAt`). Cerca per nome, cognome, codice fiscale, telefono o email; senza testo restituisce i primi pazienti.",
-      inputSchema: z.object({
-        query: z
-          .string()
-          .optional()
-          .describe("Testo da cercare (nome, cognome, telefono, CF). Lascia vuoto per vedere i primi pazienti."),
-      }),
-      execute: async ({ query }) => {
-        const patients = await botSearchPatients(client, workerId, turn.id, query);
-        return { patients };
-      },
-    }),
-
     renameClinic: tool({
       description: "Rinomina la clinica di questa chat. Il nome sta entro 80 caratteri.",
       inputSchema: z.object({
@@ -1002,18 +933,6 @@ export async function replyToTurn(
       execute: async ({ patientIds }) => {
         return await botDeletePatients(client, workerId, turn.id, patientIds);
       },
-    }),
-
-    listChats: tool({
-      description: "Elenca le conversazioni di questa clinica a cui partecipi, anche quelle diverse da questa.",
-      inputSchema: z.object({}),
-      execute: async () => ({ chats: await botListChats(client, workerId, turn.id) }),
-    }),
-
-    listBots: tool({
-      description: "Elenca i bot tuoi in questa clinica, te compreso.",
-      inputSchema: z.object({}),
-      execute: async () => ({ bots: await botListBots(client, workerId, turn.id) }),
     }),
 
     createChats: tool({
@@ -1199,6 +1118,7 @@ export async function replyToTurn(
   type ToolName = keyof typeof tools;
   const activeTools: ToolName[] = [
     "listTools",
+    "query",
     "setReplyTarget",
     "reactWithEmoji",
     "calcolaCodiceFiscale",
@@ -1206,8 +1126,6 @@ export async function replyToTurn(
     "listServerAlerts",
     "cancelServerAlerts",
     "renameSelf",
-    "listChats",
-    "listBots",
     "createChats",
     "createBots",
     "updateChats",
@@ -1217,7 +1135,6 @@ export async function replyToTurn(
   ];
   if (canRenameClinic) activeTools.push("renameClinic");
   if (canManageIntegrations) activeTools.push("listIntegrations", "connectWhatsApp");
-  if (canReadAgenda) activeTools.push("listAppointments", "listAgendaBlocks");
   if (canWriteAgenda) {
     activeTools.push(
       "createAppointments",
@@ -1228,7 +1145,6 @@ export async function replyToTurn(
       "deleteAgendaBlocks",
     );
   }
-  if (canReadPatients) activeTools.push("searchPatients");
   if (canWritePatients) activeTools.push("createPatients", "updatePatients", "deletePatients");
 
   toolCatalog = activeTools.map((name) => {
