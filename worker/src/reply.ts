@@ -1247,7 +1247,7 @@ export async function replyToTurn(
       activity = pushActivity(activity, formatToolError(part.toolName, part.error));
       await publish("thinking", activity, true);
     } else if (part.type === "finish-step") {
-      if (part.finishReason === "tool-calls") await publish("thinking", "", true);
+      if (part.finishReason === "tool-calls") await publish("thinking", activity, true);
       else if (stepText.trim() && !emojiOnlyReply(stepText)) await publish("writing", stepText.trim(), true);
     } else if (part.type === "error") {
       const reason = part.error instanceof Error ? part.error.message : "The model stream failed";
