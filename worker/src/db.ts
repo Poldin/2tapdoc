@@ -1,6 +1,6 @@
 import pg from "pg";
 import type { ContextMessage } from "./context-window.js";
-import { boundReadRows, prepareReadSql } from "./read-query.js";
+import { boundReadRows, prepareReadSql, rowPhrase } from "./read-query.js";
 import type { ClinicDoctor, ClinicObject, Turn, TurnMessage } from "./reply.js";
 
 const { Client } = pg;
@@ -83,6 +83,46 @@ export async function botReadQuery(
   } catch (error) {
     const message = error instanceof Error ? error.message : "Query non eseguita.";
     console.error("read query failed", jobId, message);
+    return { error: message };
+  } finally {
+    if (connected) {
+      await reader.query("rollback").catch(() => undefined);
+      await reader.end().catch(() => undefined);
+    }
+  }
+}
+
+export async function previewBotWrite(
+  workerId: string,
+  jobId: string,
+  sql: string,
+): Promise<{ count: number; samples: string[] } | { error: string }> {
+  const connectionString = process.env.DATABASE_URL;
+  if (!connectionString) return { error: "Database non configurato." };
+
+  const reader = openDatabase(connectionString);
+  let connected = false;
+  try {
+    await reader.connect();
+    connected = true;
+    await reader.query("begin");
+    await reader.query("set local statement_timeout = '8s'");
+    const result = await reader.query<{ preview: { count?: number; samples?: unknown } }>(
+      "select private.preview_bot_sql($1, $2, $3) as preview",
+      [workerId, jobId, sql],
+    );
+    const preview = result.rows[0]?.preview;
+    const count = typeof preview?.count === "number" ? preview.count : 0;
+    const samples = Array.isArray(preview?.samples)
+      ? preview.samples.flatMap((row) => {
+          if (!row || typeof row !== "object") return [];
+          const phrase = rowPhrase(row as Record<string, unknown>);
+          return phrase ? [phrase] : [];
+        })
+      : [];
+    return { count, samples };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Anteprima non riuscita.";
     return { error: message };
   } finally {
     if (connected) {

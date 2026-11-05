@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { boundReadRows, classifyBotSql, prepareReadSql, readRowCap } from "./read-query.ts";
+import {
+  boundReadRows,
+  classifyBotSql,
+  confirmationPhrase,
+  prepareReadSql,
+  readRowCap,
+  rowPhrase,
+} from "./read-query.ts";
 
 function sqlOf(input: string) {
   const prepared = prepareReadSql(input);
@@ -56,6 +63,20 @@ test("a write is classified for confirmation and a select still reads", () => {
     "with gone as (delete from patients where family_name = 'Rossi' returning id) select * from gone",
   );
   assert.equal(modifying.mode, "write");
+});
+
+test("a bulk write is described with the count and a few names", () => {
+  const phrase = confirmationPhrase(
+    "l'eliminazione dei pazienti senza codice fiscale",
+    174,
+    "delete from patients where fiscal_code is null or fiscal_code = ''",
+    ["Mario Rossi", "Luca Bianchi"],
+  );
+  assert.match(phrase, /174 pazienti/);
+  assert.match(phrase, /Mario Rossi, Luca Bianchi/);
+  assert.match(phrase, /altri 172/);
+  assert.equal(rowPhrase({ given_name: "Ada", family_name: "Lovelace" }), "Ada Lovelace");
+  assert.equal(rowPhrase({ title: "Visita" }), "Visita");
 });
 
 test("an unclosed string is refused", () => {

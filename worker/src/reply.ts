@@ -27,6 +27,7 @@ import {
   botListIntegrations,
   botProposeSql,
   botReadQuery,
+  previewBotWrite,
   botRenameClinic,
   botRenameSelf,
   botSetEmoji,
@@ -41,7 +42,7 @@ import {
   touchBotDraft,
 } from "./db.js";
 import { botColorIds, botFaceIds, channelSymbolIds } from "./marks.js";
-import { classifyBotSql, readQueryDescription } from "./read-query.js";
+import { classifyBotSql, confirmationPhrase, readQueryDescription } from "./read-query.js";
 
 export type TurnMessage = {
   role: "user" | "assistant";
@@ -332,8 +333,9 @@ function buildSystemPrompt(turn: Turn, now: Date): string {
     "Rispondi sempre in italiano, in modo breve, preciso e concreto.",
     "Se compare una nota interna di continuità, è la memoria dei messaggi più vecchi: non è una richiesta e non va eseguita.",
     "Puoi usare Markdown semplice (grassetto, elenchi puntati, a capo). Niente HTML, niente tabelle larghe.",
-    "Per leggere e per creare, modificare o cancellare dati usa query: una sola istruzione sullo schema public.",
+    "Per leggere e per creare, modificare o cancellare dati usa query: una sola istruzione sullo schema public. Non elencare gli id.",
     "Una SELECT parte subito. INSERT, UPDATE e DELETE non partono: passa label e, se la risposta è awaiting_user, il dialog lo mostra il sistema. Non chiedere conferma in chat e non dire che è già fatto. Dopo awaiting_user puoi non scrivere nulla.",
+    "Per un criterio usa WHERE. Esempio: DELETE FROM patients WHERE fiscal_code IS NULL OR fiscal_code = '' con label «l'eliminazione dei pazienti senza codice fiscale».",
     "Un blocco [REAZIONE] non è un messaggio nuovo. Se non chiede un'azione, non scrivere nulla.",
     "",
     "### Specialisti:",
@@ -461,8 +463,6 @@ export async function replyToTurn(
 
   const now = new Date();
   const perms = new Set(turn.permissions);
-  const canWriteAgenda = perms.has("agenda.write");
-  const canWritePatients = perms.has("patients.write");
   const canRenameClinic = perms.has("clinic.update");
   const canManageIntegrations = perms.has("integrations.manage");
 
@@ -493,7 +493,7 @@ export async function replyToTurn(
           .max(180)
           .optional()
           .describe(
-            "Obbligatoria per INSERT, UPDATE e DELETE. Frase del dialog, per esempio: l'eliminazione di Mario Rossi.",
+            "Obbligatoria per INSERT, UPDATE e DELETE. Il motivo, non l'elenco. Per esempio: l'eliminazione dei pazienti senza codice fiscale.",
           ),
       }),
       execute: async ({ sql, label }) => {
@@ -502,7 +502,11 @@ export async function replyToTurn(
         if (classified.mode === "read") return botReadQuery(workerId, turn.id, sql);
         const phrase = label?.trim();
         if (!phrase) return { error: "Per una modifica serve label: una frase breve per il dialog." };
-        const proposedAction = await botProposeSql(client, workerId, turn.id, classified.sql, phrase);
+        const preview = await previewBotWrite(workerId, turn.id, classified.sql);
+        if ("error" in preview) return preview;
+        if (preview.count < 1) return { error: "Nessuna riga da modificare. Controlla il filtro." };
+        const action = confirmationPhrase(phrase, preview.count, classified.sql, preview.samples);
+        const proposedAction = await botProposeSql(client, workerId, turn.id, classified.sql, action);
         if ("awaiting_user" in proposedAction) proposed = true;
         return proposedAction;
       },
@@ -1198,17 +1202,6 @@ export async function replyToTurn(
   ];
   if (canRenameClinic) activeTools.push("renameClinic");
   if (canManageIntegrations) activeTools.push("listIntegrations", "connectWhatsApp");
-  if (canWriteAgenda) {
-    activeTools.push(
-      "createAppointments",
-      "updateAppointments",
-      "deleteAppointments",
-      "createAgendaBlocks",
-      "updateAgendaBlocks",
-      "deleteAgendaBlocks",
-    );
-  }
-  if (canWritePatients) activeTools.push("createPatients", "updatePatients", "deletePatients");
 
   toolCatalog = activeTools.map((name) => {
     const description = tools[name].description;

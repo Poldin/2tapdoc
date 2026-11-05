@@ -42,9 +42,9 @@ export function BotActionDialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby="bot-action-title"
-        className="w-full max-w-sm rounded-3xl border border-line bg-paper p-5"
+        className="w-full max-w-md rounded-3xl border border-line bg-paper p-5"
       >
-        <h2 id="bot-action-title" className="text-base font-medium">
+        <h2 id="bot-action-title" className="text-base font-medium leading-6">
           <span className="font-semibold">{request.botName}</span> sta tentando di eseguire {request.action}. Procedere?
         </h2>
         {state.error ? <p className="mt-3 text-sm text-teal">{state.error}</p> : null}

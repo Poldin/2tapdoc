@@ -63,6 +63,43 @@ function screenSql(input: string): { sql: string; masked: string } | { error: st
   return { sql, masked };
 }
 
+const writeNouns: Record<string, [string, string]> = {
+  patients: ["paziente", "pazienti"],
+  appointments: ["appuntamento", "appuntamenti"],
+  agenda_blocks: ["blocco di agenda", "blocchi di agenda"],
+  doctors: ["specialista", "specialisti"],
+  clinical_objects: ["stanza o oggetto", "stanze o oggetti"],
+  chats: ["conversazione", "conversazioni"],
+  bots: ["agente", "agenti"],
+};
+
+export function writeTarget(sql: string): string | null {
+  const bare = sql.replace(/'(?:[^']|'')*'/g, " ");
+  const match = bare.match(/\b(?:insert\s+into|update|delete\s+from)\s+(?:public\.)?([a-z_][a-z0-9_]*)/i);
+  return match?.[1]?.toLowerCase() ?? null;
+}
+
+export function rowPhrase(row: Record<string, unknown>): string {
+  const text = (value: unknown) => (typeof value === "string" ? value.trim() : "");
+  const person = `${text(row.given_name)} ${text(row.family_name)}`.replace(/\s+/g, " ").trim();
+  if (person) return person.slice(0, 80);
+  for (const key of ["title", "name", "fiscal_code", "email", "phone"]) {
+    const value = text(row[key]);
+    if (value) return value.slice(0, 80);
+  }
+  return "";
+}
+
+export function confirmationPhrase(label: string, count: number, sql: string, samples: string[]): string {
+  const pair = writeNouns[writeTarget(sql) ?? ""];
+  const noun = pair ? (count === 1 ? pair[0] : pair[1]) : count === 1 ? "elemento" : "elementi";
+  const shown = samples.map((item) => item.trim()).filter(Boolean).slice(0, 6);
+  const rest = Math.max(count - shown.length, 0);
+  const who = shown.length ? `, tra cui ${shown.join(", ")}` : "";
+  const more = rest > 0 ? ` e altri ${rest}` : "";
+  return `${label}: ${count} ${noun}${who}${more}`.slice(0, 1000);
+}
+
 export function classifyBotSql(input: string): ClassifiedSql {
   const screened = screenSql(input);
   if ("error" in screened) return screened;
@@ -179,7 +216,7 @@ function maskLiterals(sql: string): string {
 export const readQueryDescription = [
   "Una sola istruzione sullo schema public, con i valori scritti nella query.",
   "SELECT e WITH di sola lettura partono subito. Vedi solo le righe del proprietario del bot. Massimo 200 righe.",
-  "INSERT, UPDATE e DELETE non partono. Passa anche label, la frase del dialog, per esempio \"l'eliminazione di Mario Rossi\". La risposta è awaiting_user: il sistema apre il dialog. Non chiedere conferma in chat e non dire che è già fatto.",
+  "INSERT, UPDATE e DELETE non partono. Non elencare gli id: filtra con WHERE. Passa anche label, la frase del dialog. Esempio: DELETE FROM patients WHERE fiscal_code IS NULL OR fiscal_code = '' con label «l'eliminazione dei pazienti senza codice fiscale». La risposta è awaiting_user: il sistema apre il dialog. Non chiedere conferma in chat e non dire che è già fatto.",
   "Se la query sbaglia, leggi error e correggila.",
   "Massimo 200 righe. Gli orari sono timestamptz: confrontali con un offset, per esempio 2026-11-05T00:00:00+01:00.",
   "Tabelle:",
