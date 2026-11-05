@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { boundReadRows, prepareReadSql, readRowCap } from "./read-query.ts";
+import { boundReadRows, classifyBotSql, prepareReadSql, readRowCap } from "./read-query.ts";
 
 function sqlOf(input: string) {
   const prepared = prepareReadSql(input);
@@ -42,6 +42,20 @@ test("a forbidden call hidden in a string or comment still allows the select", (
   assert.match(text, /set_config/);
   const commented = sqlOf("select 1 /* ; select set_config('a','b', true) */");
   assert.match(commented, /select 1/);
+});
+
+test("a write is classified for confirmation and a select still reads", () => {
+  const write = classifyBotSql("delete from patients where id = '11111111-1111-1111-1111-111111111111'");
+  assert.equal(write.mode, "write");
+  if (write.mode === "write") assert.match(write.sql, /^delete from patients/i);
+
+  const hidden = classifyBotSql("select id from patients where note = 'delete me'");
+  assert.equal(hidden.mode, "read");
+
+  const modifying = classifyBotSql(
+    "with gone as (delete from patients where family_name = 'Rossi' returning id) select * from gone",
+  );
+  assert.equal(modifying.mode, "write");
 });
 
 test("an unclosed string is refused", () => {

@@ -674,7 +674,14 @@ export async function decideBotAction(
     .eq("status", "pending")
     .select("id");
 
-  if (error || !data?.length) return { error: "La richiesta non è più in attesa." };
+  if (error || !data?.length) {
+    const detail = error?.message ?? "";
+    if (detail.includes("Query non eseguita")) {
+      const start = detail.indexOf("Query non eseguita");
+      return { error: detail.slice(start, start + 300) };
+    }
+    return { error: "La richiesta non è più in attesa." };
+  }
   revalidatePath(`/clinics/${clinicId}`);
   return { decided: requestId };
 }

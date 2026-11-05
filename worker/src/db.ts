@@ -92,6 +92,27 @@ export async function botReadQuery(
   }
 }
 
+export async function botProposeSql(
+  client: pg.Client,
+  workerId: string,
+  jobId: string,
+  sql: string,
+  label: string,
+): Promise<{ awaiting_user: true; action: string } | { error: string }> {
+  try {
+    const result = await client.query<{ proposed: { awaiting_user?: boolean; action?: string } }>(
+      "select private.bot_propose_sql($1, $2, $3, $4) as proposed",
+      [workerId, jobId, sql, label],
+    );
+    const proposed = result.rows[0]?.proposed;
+    if (!proposed?.awaiting_user || !proposed.action) return { error: "Proposta non registrata." };
+    return { awaiting_user: true, action: proposed.action };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Proposta non registrata.";
+    return { error: message };
+  }
+}
+
 export async function claimTurn(client: pg.Client, workerId: string): Promise<Turn | null> {
   const result = await client.query<{ turn: unknown }>(
     "select private.claim_bot_job($1) as turn",

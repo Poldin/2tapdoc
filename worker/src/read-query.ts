@@ -24,8 +24,15 @@ const forbiddenCall = [
 ];
 
 export type PreparedReadSql = { text: string; values: [boolean] };
+export type ClassifiedSql =
+  | { mode: "read"; text: string; values: [boolean] }
+  | { mode: "write"; sql: string }
+  | { error: string };
 
-export function prepareReadSql(input: string): PreparedReadSql | { error: string } {
+const writeCommand = /^(insert|update|delete|with)\b/i;
+const writeVerb = /\b(insert|update|delete)\b/i;
+
+function screenSql(input: string): { sql: string; masked: string } | { error: string } {
   const sql = input.trim();
   if (!sql) return { error: "Manca la query." };
   if (sql.length > maxSqlChars) return { error: "La query è troppo lunga." };
@@ -42,11 +49,9 @@ export function prepareReadSql(input: string): PreparedReadSql | { error: string
   if (/\$\d+/.test(masked)) return { error: "Non usare segnaposto $1. Scrivi i valori nella query." };
 
   const body = masked.trim();
-  if (!/^(select|with)\b/i.test(body)) return { error: "È ammessa solo una SELECT." };
-  if (/\binto\b/i.test(body)) return { error: "SELECT INTO non è ammessa." };
   if (parenBalance(body) !== 0) return { error: "Le parentesi della query non tornano." };
   if (/\bprivate\s*\./i.test(body) || /\bauth\s*\./i.test(body)) {
-    return { error: "Si leggono solo le tabelle public." };
+    return { error: "Si usano solo le tabelle public." };
   }
 
   for (const name of forbiddenCall) {
@@ -55,7 +60,34 @@ export function prepareReadSql(input: string): PreparedReadSql | { error: string
     }
   }
 
-  const inner = sql.replace(/;\s*$/, "");
+  return { sql, masked };
+}
+
+export function classifyBotSql(input: string): ClassifiedSql {
+  const screened = screenSql(input);
+  if ("error" in screened) return screened;
+  const body = screened.masked.trim();
+  if (writeVerb.test(body)) {
+    if (!writeCommand.test(body)) {
+      return { error: "Una modifica inizia con INSERT, UPDATE, DELETE o WITH." };
+    }
+    return { mode: "write", sql: screened.sql.replace(/;\s*$/, "") };
+  }
+  const prepared = prepareReadSql(screened.sql);
+  if ("error" in prepared) return prepared;
+  return { mode: "read", text: prepared.text, values: prepared.values };
+}
+
+export function prepareReadSql(input: string): PreparedReadSql | { error: string } {
+  const screened = screenSql(input);
+  if ("error" in screened) return screened;
+
+  const body = screened.masked.trim();
+  if (!/^(select|with)\b/i.test(body)) return { error: "È ammessa solo una SELECT." };
+  if (writeVerb.test(body)) return { error: "Questa istruzione modifica i dati: va confermata, non letta." };
+  if (/\binto\b/i.test(body)) return { error: "SELECT INTO non è ammessa." };
+
+  const inner = screened.sql.replace(/;\s*$/, "");
   return {
     text: `select coalesce(jsonb_agg((to_jsonb(q) - '_ord') order by q._ord), '[]'::jsonb) as rows
 from (
@@ -142,8 +174,10 @@ function maskLiterals(sql: string): string {
 }
 
 export const readQueryDescription = [
-  "Legge i dati visibili al proprietario di questo bot. Una sola SELECT sullo schema public: puoi filtrare, unire e aggregare. Non scrive, non modifica, non cancella.",
-  "Per creare o modificare usa il tool dell'operazione. Se la query sbaglia, leggi error e correggila.",
+  "Una sola istruzione sullo schema public, con i valori scritti nella query.",
+  "SELECT e WITH di sola lettura partono subito. Vedi solo le righe del proprietario del bot. Massimo 200 righe.",
+  "INSERT, UPDATE e DELETE non partono. Passa anche label, la frase del dialog, per esempio \"l'eliminazione di Mario Rossi\". La risposta è awaiting_user: il sistema apre il dialog. Non chiedere conferma in chat e non dire che è già fatto.",
+  "Se la query sbaglia, leggi error e correggila.",
   "Massimo 200 righe. Gli orari sono timestamptz: confrontali con un offset, per esempio 2026-11-05T00:00:00+01:00.",
   "Tabelle:",
   "patients(id, clinic_id, given_name, family_name, date_of_birth, fiscal_code, phone, email, note, created_at)",

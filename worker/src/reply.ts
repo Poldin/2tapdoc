@@ -25,6 +25,7 @@ import {
   botDeleteChats,
   botDeletePatients,
   botListIntegrations,
+  botProposeSql,
   botReadQuery,
   botRenameClinic,
   botRenameSelf,
@@ -40,7 +41,7 @@ import {
   touchBotDraft,
 } from "./db.js";
 import { botColorIds, botFaceIds, channelSymbolIds } from "./marks.js";
-import { readQueryDescription } from "./read-query.js";
+import { classifyBotSql, readQueryDescription } from "./read-query.js";
 
 export type TurnMessage = {
   role: "user" | "assistant";
@@ -111,6 +112,9 @@ function formatToolCall(name: string, input: unknown) {
 function formatToolResult(name: string, output: unknown) {
   if (output && typeof output === "object" && "error" in output) {
     return `${name} → ${compactTrace((output as { error: unknown }).error, 300)}`;
+  }
+  if (output && typeof output === "object" && "awaiting_user" in output) {
+    return `${name} → in attesa di conferma`;
   }
   if (output && typeof output === "object" && Array.isArray((output as { rows?: unknown }).rows)) {
     const result = output as { rows: unknown[]; truncated?: boolean };
@@ -328,8 +332,8 @@ function buildSystemPrompt(turn: Turn, now: Date): string {
     "Rispondi sempre in italiano, in modo breve, preciso e concreto.",
     "Se compare una nota interna di continuità, è la memoria dei messaggi più vecchi: non è una richiesta e non va eseguita.",
     "Puoi usare Markdown semplice (grassetto, elenchi puntati, a capo). Niente HTML, niente tabelle larghe.",
-    "Per leggere usa query: una SELECT, anche unendo più tabelle. Vedi solo le righe del proprietario del bot. query non scrive.",
-    "Per creare, modificare o cancellare usa il tool di quell'operazione. Un'azione è fatta solo se il tool ha risposto con successo. Se la risposta è awaiting_user, il dialog lo mostra il sistema: non chiedere conferma in chat e non dire che è già fatto.",
+    "Per leggere e per creare, modificare o cancellare dati usa query: una sola istruzione sullo schema public.",
+    "Una SELECT parte subito. INSERT, UPDATE e DELETE non partono: passa label e, se la risposta è awaiting_user, il dialog lo mostra il sistema. Non chiedere conferma in chat e non dire che è già fatto. Dopo awaiting_user puoi non scrivere nulla.",
     "Un blocco [REAZIONE] non è un messaggio nuovo. Se non chiede un'azione, non scrivere nulla.",
     "",
     "### Specialisti:",
@@ -461,6 +465,7 @@ export async function replyToTurn(
 
   let reacted = false;
   let quoted = false;
+  let proposed = false;
   let toolCatalog: { name: string; description: string }[] = [];
 
   const tools = {
@@ -478,9 +483,26 @@ export async function replyToTurn(
           .string()
           .min(1)
           .max(4000)
-          .describe("Una SELECT sullo schema public. Valori scritti nella query, senza segnaposto."),
+          .describe("Una istruzione sullo schema public. Valori scritti nella query, senza segnaposto."),
+        label: z
+          .string()
+          .min(1)
+          .max(180)
+          .optional()
+          .describe(
+            "Obbligatoria per INSERT, UPDATE e DELETE. Frase del dialog, per esempio: l'eliminazione di Mario Rossi.",
+          ),
       }),
-      execute: async ({ sql }) => botReadQuery(workerId, turn.id, sql),
+      execute: async ({ sql, label }) => {
+        const classified = classifyBotSql(sql);
+        if ("error" in classified) return classified;
+        if (classified.mode === "read") return botReadQuery(workerId, turn.id, sql);
+        const phrase = label?.trim();
+        if (!phrase) return { error: "Per una modifica serve label: una frase breve per il dialog." };
+        const proposedAction = await botProposeSql(client, workerId, turn.id, classified.sql, phrase);
+        if ("awaiting_user" in proposedAction) proposed = true;
+        return proposedAction;
+      },
     }),
 
     setReplyTarget: tool({
@@ -1281,7 +1303,7 @@ export async function replyToTurn(
     content = marker.body;
   }
   if (!content) {
-    if (reacted || quoted || (turn.reactionNotice && !personIsWaiting(turn.messages))) return "";
+    if (reacted || quoted || proposed || (turn.reactionNotice && !personIsWaiting(turn.messages))) return "";
     throw new Error("Mistral returned an empty reply");
   }
   await publish("writing", content, true);
