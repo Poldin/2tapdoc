@@ -85,6 +85,44 @@ export type Turn = {
 };
 
 const modelTimeoutMs = 45_000;
+const activityCap = 1500;
+
+function compactTrace(value: unknown, max: number) {
+  const text = typeof value === "string" ? value : JSON.stringify(value) ?? "";
+  const flat = text.replace(/\s+/g, " ").trim();
+  return flat.length > max ? `${flat.slice(0, max)}…` : flat;
+}
+
+function pushActivity(current: string, line: string) {
+  const next = current ? `${current}\n\n${line}` : line;
+  return next.length > activityCap ? next.slice(next.length - activityCap) : next;
+}
+
+function formatToolCall(name: string, input: unknown) {
+  if (name === "query" && input && typeof input === "object" && "sql" in input) {
+    return `query\n${compactTrace((input as { sql?: unknown }).sql, 500)}`;
+  }
+  if (input && typeof input === "object" && Object.keys(input).length > 0) {
+    return `${name}\n${compactTrace(input, 240)}`;
+  }
+  return name;
+}
+
+function formatToolResult(name: string, output: unknown) {
+  if (output && typeof output === "object" && "error" in output) {
+    return `${name} → ${compactTrace((output as { error: unknown }).error, 300)}`;
+  }
+  if (output && typeof output === "object" && Array.isArray((output as { rows?: unknown }).rows)) {
+    const result = output as { rows: unknown[]; truncated?: boolean };
+    return `${name} → ${result.rows.length} righe${result.truncated ? ", troncate" : ""}`;
+  }
+  return `${name} → ok`;
+}
+
+function formatToolError(name: string, error: unknown) {
+  const message = error instanceof Error ? error.message : compactTrace(error, 300);
+  return `${name} → ${message}`;
+}
 
 const romeDateTime = new Intl.DateTimeFormat("it-IT", {
   timeZone: "Europe/Rome",
@@ -442,7 +480,7 @@ export async function replyToTurn(
           .max(4000)
           .describe("Una SELECT sullo schema public. Valori scritti nella query, senza segnaposto."),
       }),
-      execute: async ({ sql }) => botReadQuery(client, workerId, turn.id, sql),
+      execute: async ({ sql }) => botReadQuery(workerId, turn.id, sql),
     }),
 
     setReplyTarget: tool({
@@ -1157,6 +1195,7 @@ export async function replyToTurn(
 
   let stepText = "";
   let stepHasTool = false;
+  let activity = "";
   let lastSentAt = 0;
   let lastKey = "";
 
@@ -1191,13 +1230,22 @@ export async function replyToTurn(
     if (part.type === "start-step") {
       stepText = "";
       stepHasTool = false;
-      await publish("thinking", "", true);
+      await publish("thinking", activity, true);
     } else if (part.type === "text-delta") {
       stepText = (stepText + part.text).slice(0, 4000);
       if (!stepHasTool && !emojiOnlyReply(stepText)) await publish("writing", stepText);
-    } else if (part.type === "tool-call" || part.type === "tool-input-start") {
+    } else if (part.type === "tool-input-start") {
       stepHasTool = true;
-      await publish("thinking", "", true);
+    } else if (part.type === "tool-call") {
+      stepHasTool = true;
+      activity = pushActivity(activity, formatToolCall(part.toolName, part.input));
+      await publish("thinking", activity, true);
+    } else if (part.type === "tool-result") {
+      activity = pushActivity(activity, formatToolResult(part.toolName, part.output));
+      await publish("thinking", activity, true);
+    } else if (part.type === "tool-error") {
+      activity = pushActivity(activity, formatToolError(part.toolName, part.error));
+      await publish("thinking", activity, true);
     } else if (part.type === "finish-step") {
       if (part.finishReason === "tool-calls") await publish("thinking", "", true);
       else if (stepText.trim() && !emojiOnlyReply(stepText)) await publish("writing", stepText.trim(), true);

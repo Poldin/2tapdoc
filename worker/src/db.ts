@@ -50,7 +50,6 @@ export async function saveChatTrace(
 }
 
 export async function botReadQuery(
-  client: pg.Client,
   workerId: string,
   jobId: string,
   sql: string,
@@ -58,16 +57,23 @@ export async function botReadQuery(
   const prepared = prepareReadSql(sql);
   if ("error" in prepared) return prepared;
 
-  let started = false;
+  const connectionString = process.env.DATABASE_URL;
+  if (!connectionString) return { error: "Database non configurato." };
+
+  // The turn keeps one connection for drafts and writes. A read-only transaction
+  // on that same connection aborts those updates and then rejects the query.
+  const reader = openDatabase(connectionString);
+  let connected = false;
   try {
-    await client.query("begin read only");
-    started = true;
-    await client.query("select private.assert_bot_job_context($1, $2, null)", [workerId, jobId]);
-    await client.query("set local role authenticated");
-    await client.query("set local statement_timeout = '8s'");
-    await client.query("set local lock_timeout = '2s'");
-    await client.query("set local search_path to public, pg_catalog");
-    const result = await client.query<{ rows: unknown }>({
+    await reader.connect();
+    connected = true;
+    await reader.query("begin read only");
+    await reader.query("select private.assert_bot_job_context($1, $2, null)", [workerId, jobId]);
+    await reader.query("set local role authenticated");
+    await reader.query("set local statement_timeout = '8s'");
+    await reader.query("set local lock_timeout = '2s'");
+    await reader.query("set local search_path to public, pg_catalog");
+    const result = await reader.query<{ rows: unknown }>({
       text: prepared.text,
       values: prepared.values,
     });
@@ -76,9 +82,13 @@ export async function botReadQuery(
     return boundReadRows(rows);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Query non eseguita.";
+    console.error("read query failed", jobId, message);
     return { error: message };
   } finally {
-    if (started) await client.query("rollback").catch(() => undefined);
+    if (connected) {
+      await reader.query("rollback").catch(() => undefined);
+      await reader.end().catch(() => undefined);
+    }
   }
 }
 

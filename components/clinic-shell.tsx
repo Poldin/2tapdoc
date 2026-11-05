@@ -110,6 +110,14 @@ type LiveReply = {
   updatedAt: string;
 };
 
+function BotTrace({ text }: { text: string }) {
+  return (
+    <pre className="max-h-48 max-w-[min(36rem,100%)] overflow-auto rounded-2xl bg-paper px-4 py-3 font-mono text-xs leading-5 whitespace-pre-wrap text-muted">
+      {text}
+    </pre>
+  );
+}
+
 /** Il messaggio del bot è già in chat: la bozza (faccia che pensa o testo a metà) è un residuo del turno appena chiuso. */
 function liveDraftSettled(live: LiveReply, messages: ChatMessage[]) {
   const message = [...messages].reverse().find((item) => item.botId === live.botId);
@@ -1089,6 +1097,7 @@ export function ClinicShell({
   const [draftChatId, setDraftChatId] = useState(activeChatId);
   const [waiting, setWaiting] = useState(false);
   const [live, setLive] = useState<LiveReply | null>(null);
+  const [trace, setTrace] = useState("");
   const [entered, setEntered] = useState<Set<string>>(new Set());
   const [outgoing, setOutgoing] = useState<Outgoing[]>([]);
   const badgeRef = useRef<HTMLParagraphElement>(null);
@@ -1153,6 +1162,7 @@ export function ClinicShell({
     setDraftChatId(shownActiveId);
     setWaiting(false);
     setLive(null);
+    if (trace) setTrace("");
     waitBaseline.current = null;
     stickToBottom.current = true;
   } else if (replyLanded || draftSaved) {
@@ -1160,8 +1170,10 @@ export function ClinicShell({
     waitBaseline.current = null;
     if (waiting) setWaiting(false);
     if (live) setLive(null);
+    if (trace) setTrace("");
   }
   const replySettled = replyLanded || draftSaved;
+  const visibleTrace = draftChatId === shownActiveId && !replySettled ? trace : "";
   const visibleLive = draftChatId === shownActiveId && !replySettled ? live : null;
   const visibleWaiting = draftChatId === shownActiveId && waiting && !replySettled;
   const active = visibleChats.find((chat) => chat.id === shownActiveId) ?? null;
@@ -1312,6 +1324,7 @@ export function ClinicShell({
     let stopped = false;
     const channel = supabase.channel(`draft:${clinicId}:${activeId}`);
 
+    let seenAt = "";
     const apply = (row: { bot_id?: string; phase?: string; body?: string; updated_at?: string } | null, removed: boolean) => {
       if (removed) {
         setLive((current) => {
@@ -1323,11 +1336,14 @@ export function ClinicShell({
       }
       if (!row || row.bot_id !== botId) return;
       const updatedAt = typeof row.updated_at === "string" ? row.updated_at : "";
+      if (updatedAt && seenAt && updatedAt < seenAt) return;
+      if (updatedAt) seenAt = updatedAt;
+      const phase: LiveReply["phase"] = row.phase === "writing" ? "writing" : "thinking";
+      const rawBody = typeof row.body === "string" ? row.body : "";
+      if (phase === "thinking" && rawBody.trim()) setTrace(rawBody);
       setLive((current) => {
         if (updatedAt && current?.updatedAt && updatedAt < current.updatedAt) return current;
-        const phase: LiveReply["phase"] =
-          row.phase === "writing" ? "writing" : "thinking";
-        const body = phase === "writing" && typeof row.body === "string" ? row.body : "";
+        const body = phase === "writing" ? rawBody : "";
         const next: LiveReply = { botId, phase, body, updatedAt };
         if (liveDraftSettled(next, shownMessagesRef.current)) return null;
         return next;
@@ -1528,7 +1544,7 @@ export function ClinicShell({
     if (!thread) return;
     if (stickToBottom.current) thread.scrollTop = thread.scrollHeight;
     syncDayBadge(thread, badgeRef.current, setDayLabel);
-  }, [shownActiveId, visibleMessages, showThinking, streamBody, sending]);
+  }, [shownActiveId, visibleMessages, showThinking, streamBody, sending, visibleTrace]);
 
   useEffect(() => {
     const thread = threadRef.current;
@@ -1979,13 +1995,18 @@ export function ClinicShell({
             </div>
           ) : null}
           {showThinking && active.bot ? (
-            <p role="status" aria-live="polite" className="flex items-center gap-2 self-start py-1 text-sm text-muted">
-              <BotGlyph color={active.bot.color} emoji={active.bot.emoji} plain className="h-5 w-5" />
-              <span>
-                sto elaborando
-                <span className="elaborating-dots" aria-hidden="true" />
-              </span>
-            </p>
+            <div role="status" aria-live="polite" className="flex flex-col items-start gap-2 self-start">
+              <p className="flex items-center gap-2 py-1 text-sm text-muted">
+                <BotGlyph color={active.bot.color} emoji={active.bot.emoji} plain className="h-5 w-5" />
+                <span>
+                  sto elaborando
+                  <span className="elaborating-dots" aria-hidden="true" />
+                </span>
+              </p>
+              {visibleTrace ? <BotTrace text={visibleTrace} /> : null}
+            </div>
+          ) : visibleTrace ? (
+            <BotTrace text={visibleTrace} />
           ) : null}
           {(streamText.trim() || (streamTarget && !streamEmojiReply)) && active.bot ? (
             <div
