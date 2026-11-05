@@ -117,6 +117,9 @@ function formatToolResult(name: string, output: unknown) {
   if (output && typeof output === "object" && "awaiting_user" in output) {
     return `${name} → in attesa di conferma`;
   }
+  if (output && typeof output === "object" && typeof (output as { count?: unknown }).count === "number") {
+    return `${name} → ${(output as { count: number }).count} righe`;
+  }
   if (output && typeof output === "object" && Array.isArray((output as { rows?: unknown }).rows)) {
     const result = output as { rows: unknown[]; truncated?: boolean };
     return `${name} → ${result.rows.length} righe${result.truncated ? ", troncate" : ""}`;
@@ -504,7 +507,7 @@ export async function replyToTurn(
         if (!phrase) return { error: "Per una modifica serve label: una frase breve per il dialog." };
         const preview = await previewBotWrite(workerId, turn.id, classified.sql);
         if ("error" in preview) return preview;
-        if (preview.count < 1) return { error: "Nessuna riga da modificare. Controlla il filtro." };
+        if (preview.count < 1) return { count: 0 };
         const action = confirmationPhrase(phrase, preview.count, classified.sql, preview.samples);
         const proposedAction = await botProposeSql(client, workerId, turn.id, classified.sql, action);
         if ("awaiting_user" in proposedAction) proposed = true;
