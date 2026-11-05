@@ -166,8 +166,14 @@ export async function completeTurn(
   workerId: string,
   jobId: string,
   body: string,
+  steps: { name: string; input: string; outcome: string }[] = [],
 ) {
-  await client.query("select private.complete_bot_job($1, $2, $3)", [workerId, jobId, body]);
+  await client.query("select private.complete_bot_job($1, $2, $3, $4::jsonb)", [
+    workerId,
+    jobId,
+    body,
+    steps.length ? JSON.stringify(steps) : null,
+  ]);
 }
 
 export async function failTurn(

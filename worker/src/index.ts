@@ -100,8 +100,8 @@ async function runSession() {
 
       console.log("claimed", turn.id);
       try {
-        const body = await replyToTurn(apiKey as string, client, workerId, turn);
-        await completeTurn(client, workerId, turn.id, body);
+        const reply = await replyToTurn(apiKey as string, client, workerId, turn);
+        await completeTurn(client, workerId, turn.id, reply.body, reply.steps);
         console.log("finished", turn.id);
       } catch (error) {
         const reason = error instanceof Error ? error.message : "The turn failed";

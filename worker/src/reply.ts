@@ -43,6 +43,7 @@ import {
 } from "./db.js";
 import { botColorIds, botFaceIds, channelSymbolIds } from "./marks.js";
 import { classifyBotSql, confirmationPhrase, readQueryDescription } from "./read-query.js";
+import { StepLog, type AgentStep } from "./steps.js";
 
 export type TurnMessage = {
   role: "user" | "assistant";
@@ -87,50 +88,6 @@ export type Turn = {
 };
 
 const modelTimeoutMs = 45_000;
-const activityCap = 1500;
-
-function compactTrace(value: unknown, max: number) {
-  const text = typeof value === "string" ? value : JSON.stringify(value) ?? "";
-  const flat = text.replace(/\s+/g, " ").trim();
-  return flat.length > max ? `${flat.slice(0, max)}…` : flat;
-}
-
-function pushActivity(current: string, line: string) {
-  const next = current ? `${current}\n\n${line}` : line;
-  return next.length > activityCap ? next.slice(next.length - activityCap) : next;
-}
-
-function formatToolCall(name: string, input: unknown) {
-  if (name === "query" && input && typeof input === "object" && "sql" in input) {
-    return `query\n${compactTrace((input as { sql?: unknown }).sql, 500)}`;
-  }
-  if (input && typeof input === "object" && Object.keys(input).length > 0) {
-    return `${name}\n${compactTrace(input, 240)}`;
-  }
-  return name;
-}
-
-function formatToolResult(name: string, output: unknown) {
-  if (output && typeof output === "object" && "error" in output) {
-    return `${name} → ${compactTrace((output as { error: unknown }).error, 300)}`;
-  }
-  if (output && typeof output === "object" && "awaiting_user" in output) {
-    return `${name} → in attesa di conferma`;
-  }
-  if (output && typeof output === "object" && typeof (output as { count?: unknown }).count === "number") {
-    return `${name} → ${(output as { count: number }).count} righe`;
-  }
-  if (output && typeof output === "object" && Array.isArray((output as { rows?: unknown }).rows)) {
-    const result = output as { rows: unknown[]; truncated?: boolean };
-    return `${name} → ${result.rows.length} righe${result.truncated ? ", troncate" : ""}`;
-  }
-  return `${name} → ok`;
-}
-
-function formatToolError(name: string, error: unknown) {
-  const message = error instanceof Error ? error.message : compactTrace(error, 300);
-  return `${name} → ${message}`;
-}
 
 const romeDateTime = new Intl.DateTimeFormat("it-IT", {
   timeZone: "Europe/Rome",
@@ -443,7 +400,7 @@ export async function replyToTurn(
   client: pg.Client,
   workerId: string,
   turn: Turn,
-): Promise<string> {
+): Promise<{ body: string; steps: AgentStep[] }> {
   const messages = await modelContext(apiKey, client, workerId, turn);
   if (turn.alertPrompt) {
     const explaining = turn.alertPrompt.startsWith("FALLIMENTO DEL TURNO PRECEDENTE");
@@ -1216,9 +1173,10 @@ export async function replyToTurn(
 
   let stepText = "";
   let stepHasTool = false;
-  let activity = "";
+  const steps = new StepLog();
   let lastSentAt = 0;
   let lastKey = "";
+  const finish = (body: string) => ({ body, steps: steps.list() });
 
   const publish = async (nextPhase: "thinking" | "writing", nextBody: string, force = false) => {
     const key = `${nextPhase}\n${nextBody}`;
@@ -1251,7 +1209,7 @@ export async function replyToTurn(
     if (part.type === "start-step") {
       stepText = "";
       stepHasTool = false;
-      await publish("thinking", activity, true);
+      await publish("thinking", steps.draft(), true);
     } else if (part.type === "text-delta") {
       stepText = (stepText + part.text).slice(0, 4000);
       if (!stepHasTool && !emojiOnlyReply(stepText)) await publish("writing", stepText);
@@ -1259,16 +1217,16 @@ export async function replyToTurn(
       stepHasTool = true;
     } else if (part.type === "tool-call") {
       stepHasTool = true;
-      activity = pushActivity(activity, formatToolCall(part.toolName, part.input));
-      await publish("thinking", activity, true);
+      steps.noteCall(part.toolCallId, part.toolName, part.input);
+      await publish("thinking", steps.draft(), true);
     } else if (part.type === "tool-result") {
-      activity = pushActivity(activity, formatToolResult(part.toolName, part.output));
-      await publish("thinking", activity, true);
+      steps.noteResult(part.toolCallId, part.toolName, part.output);
+      await publish("thinking", steps.draft(), true);
     } else if (part.type === "tool-error") {
-      activity = pushActivity(activity, formatToolError(part.toolName, part.error));
-      await publish("thinking", activity, true);
+      steps.noteError(part.toolCallId, part.toolName, part.error);
+      await publish("thinking", steps.draft(), true);
     } else if (part.type === "finish-step") {
-      if (part.finishReason === "tool-calls") await publish("thinking", activity, true);
+      if (part.finishReason === "tool-calls") await publish("thinking", steps.draft(), true);
       else if (stepText.trim() && !emojiOnlyReply(stepText)) await publish("writing", stepText.trim(), true);
     } else if (part.type === "error") {
       const reason = part.error instanceof Error ? part.error.message : "The model stream failed";
@@ -1283,7 +1241,7 @@ export async function replyToTurn(
   if (marker && isChatEmoji(marker.body)) {
     try {
       await botSetEmoji(client, workerId, turn.id, marker.id, marker.body);
-      return "";
+      return finish("");
     } catch (error) {
       const message = error instanceof Error ? error.message : "";
       if (!message.includes("Emoji target is not a message")) throw error;
@@ -1302,9 +1260,9 @@ export async function replyToTurn(
     content = marker.body;
   }
   if (!content) {
-    if (reacted || quoted || proposed || (turn.reactionNotice && !personIsWaiting(turn.messages))) return "";
+    if (reacted || quoted || proposed || (turn.reactionNotice && !personIsWaiting(turn.messages))) return finish("");
     throw new Error("Mistral returned an empty reply");
   }
   await publish("writing", content, true);
-  return content.slice(0, 4000);
+  return finish(content.slice(0, 4000));
 }

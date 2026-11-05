@@ -1,3 +1,4 @@
+import { parseAgentSteps, type AgentStep } from "@/lib/agent-steps";
 import { isChatEmoji } from "@/lib/chat-emoji";
 import { markdownToPlainText } from "@/lib/markdown";
 import { takeReplyMarker } from "@/lib/reply-marker";
@@ -17,6 +18,7 @@ export type ThreadMessage = {
   reaction: "up" | "down" | null;
   replyTo: { id: string; excerpt: string; mine: boolean; botId: string | null } | null;
   emojis: { emoji: string; mine: boolean; botId: string | null }[];
+  steps: AgentStep[];
 };
 
 type EventRow = {
@@ -37,6 +39,11 @@ export function messageBody(payload: unknown) {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
   const body = (payload as { body?: unknown }).body;
   return typeof body === "string" && body.trim() !== "" ? body : null;
+}
+
+function messageSteps(payload: unknown) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return [];
+  return parseAgentSteps((payload as { steps?: unknown }).steps);
 }
 
 function asSeq(value: number | string) {
@@ -163,6 +170,7 @@ export async function loadChatThread(
             }
           : null,
         emojis: emojiByEvent.get(row.id) ?? [],
+        steps: row.bot_id ? messageSteps(row.payload) : [],
       },
     ];
   });

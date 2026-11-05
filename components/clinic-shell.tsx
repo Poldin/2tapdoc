@@ -4,7 +4,7 @@ import { useActionState, useEffect, useLayoutEffect, useRef, useState, useTransi
 import { createPortal, flushSync } from "react-dom";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, PanelLeftClose, PanelLeftOpen, Plus, Reply, Search, Send, SmilePlus, Star, ThumbsDown, ThumbsUp, X } from "lucide-react";
+import { ArrowLeft, ChevronRight, PanelLeftClose, PanelLeftOpen, Plus, Reply, Search, Send, SmilePlus, Star, ThumbsDown, ThumbsUp, X } from "lucide-react";
 import {
   loadOlderChatMessages,
   preferMessage,
@@ -14,6 +14,7 @@ import {
   type CreatedChat,
   type FormState,
 } from "@/app/clinics/actions";
+import { parseAgentSteps, type AgentStep } from "@/lib/agent-steps";
 import { chatEmojis, isChatEmoji } from "@/lib/chat-emoji";
 import { markdownToPlainText } from "@/lib/markdown";
 import { takeReplyMarker } from "@/lib/reply-marker";
@@ -94,6 +95,7 @@ export type ChatMessage = {
   reaction: "up" | "down" | null;
   replyTo: ChatReply | null;
   emojis: ChatEmojiMark[];
+  steps: AgentStep[];
 };
 
 export type BotMark = {
@@ -110,12 +112,56 @@ type LiveReply = {
   updatedAt: string;
 };
 
-function BotTrace({ text }: { text: string }) {
+function AgentSteps({ steps, startOpen = false, live = false }: { steps: AgentStep[]; startOpen?: boolean; live?: boolean }) {
+  const [open, setOpen] = useState(startOpen);
+  if (steps.length === 0) return null;
+  const rawLog = steps.length === 1 && steps[0].name === "passaggi" && !steps[0].input;
+  const title = rawLog ? "Passaggi" : steps.length === 1 ? "1 passaggio" : `${steps.length} passaggi`;
   return (
-    <pre className="max-h-48 max-w-[min(36rem,100%)] overflow-auto rounded-2xl bg-paper px-4 py-3 font-mono text-xs leading-5 whitespace-pre-wrap text-muted">
-      {text}
-    </pre>
+    <details
+      open={open}
+      onToggle={(event) => {
+        if (event.currentTarget instanceof HTMLDetailsElement) setOpen(event.currentTarget.open);
+      }}
+      className="w-full rounded-2xl bg-paper px-4 py-2"
+    >
+      <summary className="flex cursor-pointer list-none items-center gap-1.5 text-sm text-muted [&::-webkit-details-marker]:hidden">
+        <ChevronRight className={`h-3.5 w-3.5 shrink-0 ${open ? "rotate-90" : ""}`} strokeWidth={2} />
+        {title}
+      </summary>
+      {rawLog ? (
+        <pre className="mt-2 max-h-64 overflow-auto border-t border-line pt-2 font-mono text-xs leading-5 whitespace-pre-wrap text-ink">
+          {steps[0].outcome}
+        </pre>
+      ) : (
+        <ol className="mt-2 flex flex-col gap-3 border-t border-line pt-2">
+          {steps.map((step, index) => (
+            <li key={`${step.name}-${index}`}>
+              <p className="text-sm font-medium text-ink">{step.name}</p>
+              {step.input ? (
+                <pre className="mt-1 max-h-40 overflow-auto font-mono text-xs leading-5 whitespace-pre-wrap text-muted">
+                  {step.input}
+                </pre>
+              ) : null}
+              {step.outcome ? (
+                <pre className="mt-1 max-h-48 overflow-auto font-mono text-xs leading-5 whitespace-pre-wrap text-ink">
+                  {step.outcome}
+                </pre>
+              ) : live ? (
+                <p className="mt-1 text-xs text-muted">in corso</p>
+              ) : null}
+            </li>
+          ))}
+        </ol>
+      )}
+    </details>
   );
+}
+
+function LiveTrace({ text }: { text: string }) {
+  const steps = parseAgentSteps(text);
+  if (steps.length > 0) return <AgentSteps steps={steps} startOpen live />;
+  return <AgentSteps steps={[{ name: "passaggi", input: "", outcome: text }]} startOpen live />;
 }
 
 /** Il messaggio del bot è già in chat: la bozza (faccia che pensa o testo a metà) è un residuo del turno appena chiuso. */
@@ -142,6 +188,7 @@ function messageStamp(messages: ChatMessage[]) {
         message.reaction ?? "",
         message.replyTo?.excerpt ?? "",
         message.emojis.map((emoji) => `${emoji.emoji}:${emoji.mine ? 1 : 0}:${emoji.botId ?? ""}`).join("."),
+        message.steps.map((step) => `${step.name}\u001f${step.input.length}\u001f${step.outcome.length}`).join("."),
       ].join("\u001f"),
     )
     .join("\u001e");
@@ -169,6 +216,7 @@ function outgoingMessage(item: Outgoing): ChatMessage {
     reaction: null,
     replyTo: item.replyTo,
     emojis: [],
+    steps: [],
   };
 }
 
@@ -715,6 +763,7 @@ function foldEmojiReplies(messages: ChatMessage[]): ChatMessage[] {
     if (!message.botId || !message.replyTo || !byId.has(message.replyTo.id)) continue;
     const emoji = message.body.trim();
     if (!isChatEmoji(emoji)) continue;
+    if (message.steps.length > 0) continue;
     hidden.add(message.id);
     const target = byId.get(message.replyTo.id);
     if (!target) continue;
@@ -891,13 +940,19 @@ function ChatTurn({
     </div>
   ) : null;
 
+  const showSteps = !message.mine && message.steps.length > 0;
   return (
     <div
       id={`message-${message.id}`}
-      className={`flex w-fit max-w-[min(36rem,100%)] min-w-0 flex-col gap-1 ${
-        message.mine ? "items-end self-end" : "items-start self-start"
+      className={`flex min-w-0 flex-col gap-1 ${
+        message.mine
+          ? "w-fit max-w-[min(36rem,100%)] items-end self-end"
+          : showSteps
+            ? "w-full max-w-[min(36rem,100%)] items-start self-start"
+            : "w-fit max-w-[min(36rem,100%)] items-start self-start"
       } ${entered ? (message.mine ? "msg-enter-mine" : "msg-enter-theirs") : ""}`}
     >
+      {showSteps ? <AgentSteps steps={message.steps} /> : null}
       <div className="flex min-w-0 items-center">
         {message.mine ? gestures : null}
         <div
@@ -1995,7 +2050,7 @@ export function ClinicShell({
             </div>
           ) : null}
           {showThinking && active.bot ? (
-            <div role="status" aria-live="polite" className="flex flex-col items-start gap-2 self-start">
+            <div role="status" aria-live="polite" className="flex w-full max-w-[min(36rem,100%)] flex-col items-start gap-2 self-start">
               <p className="flex items-center gap-2 py-1 text-sm text-muted">
                 <BotGlyph color={active.bot.color} emoji={active.bot.emoji} plain className="h-5 w-5" />
                 <span>
@@ -2003,10 +2058,12 @@ export function ClinicShell({
                   <span className="elaborating-dots" aria-hidden="true" />
                 </span>
               </p>
-              {visibleTrace ? <BotTrace text={visibleTrace} /> : null}
+              {visibleTrace ? <LiveTrace text={visibleTrace} /> : null}
             </div>
           ) : visibleTrace ? (
-            <BotTrace text={visibleTrace} />
+            <div className="w-full max-w-[min(36rem,100%)] self-start">
+              <LiveTrace text={visibleTrace} />
+            </div>
           ) : null}
           {(streamText.trim() || (streamTarget && !streamEmojiReply)) && active.bot ? (
             <div

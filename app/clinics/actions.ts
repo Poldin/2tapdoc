@@ -34,6 +34,7 @@ export type CreatedChat = {
     reaction: "up" | "down" | null;
     replyTo: { id: string; excerpt: string; mine: boolean; botId: string | null } | null;
     emojis: { emoji: string; mine: boolean; botId: string | null }[];
+    steps: { name: string; input: string; outcome: string }[];
   }[];
 };
 
@@ -330,6 +331,7 @@ export async function createBot(
           reaction: null,
           replyTo: null,
           emojis: [],
+          steps: [],
         },
       ],
     },
@@ -1509,6 +1511,7 @@ export async function startMastroW(
           reaction: null,
           replyTo: null,
           emojis: [],
+          steps: [],
         },
       ],
     },
