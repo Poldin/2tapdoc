@@ -71,6 +71,9 @@ export function classifyBotSql(input: string): ClassifiedSql {
     if (!writeCommand.test(body)) {
       return { error: "Una modifica inizia con INSERT, UPDATE, DELETE o WITH." };
     }
+    if (/\bbot_confirmations\b/i.test(body)) {
+      return { error: "Le conferme non si modificano da SQL." };
+    }
     return { mode: "write", sql: screened.sql.replace(/;\s*$/, "") };
   }
   const prepared = prepareReadSql(screened.sql);

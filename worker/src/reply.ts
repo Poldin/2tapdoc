@@ -441,9 +441,12 @@ export async function replyToTurn(
 ): Promise<string> {
   const messages = await modelContext(apiKey, client, workerId, turn);
   if (turn.alertPrompt) {
+    const explaining = turn.alertPrompt.startsWith("FALLIMENTO DEL TURNO PRECEDENTE");
     messages.push({
       role: "user",
-      content: `[ALERT SERVER SCATTATO NEL CONTAINER]\nEsegui questa istruzione o avvisa in chat:\n${turn.alertPrompt}`,
+      content: explaining
+        ? turn.alertPrompt
+        : `[ALERT SERVER SCATTATO NEL CONTAINER]\nEsegui questa istruzione o avvisa in chat:\n${turn.alertPrompt}`,
     });
   }
   if (turn.reactionNotice) {
