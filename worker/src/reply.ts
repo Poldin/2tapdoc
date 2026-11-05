@@ -40,6 +40,7 @@ import {
   listMessagesToFold,
   saveChatTrace,
   touchBotDraft,
+  turnIsCurrent,
 } from "./db.js";
 import { botColorIds, botFaceIds, channelSymbolIds } from "./marks.js";
 import { classifyBotSql, confirmationPhrase, readQueryDescription } from "./read-query.js";
@@ -88,6 +89,13 @@ export type Turn = {
 };
 
 const modelTimeoutMs = 45_000;
+
+export class TurnInterrupted extends Error {
+  constructor() {
+    super("interrupted");
+    this.name = "TurnInterrupted";
+  }
+}
 
 const romeDateTime = new Intl.DateTimeFormat("it-IT", {
   timeZone: "Europe/Rome",
@@ -1177,8 +1185,33 @@ export async function replyToTurn(
   let lastSentAt = 0;
   let lastKey = "";
   const finish = (body: string) => ({ body, steps: steps.list() });
+  const abort = new AbortController();
+  const timeout = setTimeout(() => {
+    if (!abort.signal.aborted) abort.abort("timeout");
+  }, modelTimeoutMs);
+  const onNotify = (message: pg.Notification) => {
+    if (message.channel === "bot_jobs" && message.payload === turn.id && !abort.signal.aborted) {
+      abort.abort("interrupted");
+    }
+  };
+  client.on("notification", onNotify);
+  let checking = false;
+  const poll = setInterval(() => {
+    if (checking || abort.signal.aborted) return;
+    checking = true;
+    void turnIsCurrent(client, workerId, turn.id)
+      .then((current) => {
+        if (!current && !abort.signal.aborted) abort.abort("interrupted");
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        checking = false;
+      });
+  }, 400);
+  const interrupted = () => abort.signal.reason === "interrupted";
 
   const publish = async (nextPhase: "thinking" | "writing", nextBody: string, force = false) => {
+    if (interrupted()) return;
     const key = `${nextPhase}\n${nextBody}`;
     if (!force && key === lastKey) return;
     if (!force && nextPhase === "writing" && Date.now() - lastSentAt < 80) return;
@@ -1192,77 +1225,94 @@ export async function replyToTurn(
     }
   };
 
-  await publish("thinking", "", true);
+  try {
+    await publish("thinking", "", true);
 
-  const result = streamText({
-    model: mistral(modelName),
-    system: buildSystemPrompt(turn, now),
-    messages,
-    tools,
-    activeTools,
-    stopWhen: stepCountIs(6),
-    maxOutputTokens: 1000,
-    abortSignal: AbortSignal.timeout(modelTimeoutMs),
-  });
+    const result = streamText({
+      model: mistral(modelName),
+      system: buildSystemPrompt(turn, now),
+      messages,
+      tools,
+      activeTools,
+      stopWhen: stepCountIs(6),
+      maxOutputTokens: 1000,
+      abortSignal: abort.signal,
+    });
 
-  for await (const part of result.stream) {
-    if (part.type === "start-step") {
-      stepText = "";
-      stepHasTool = false;
-      await publish("thinking", steps.draft(), true);
-    } else if (part.type === "text-delta") {
-      stepText = (stepText + part.text).slice(0, 4000);
-      if (!stepHasTool && !emojiOnlyReply(stepText)) await publish("writing", stepText);
-    } else if (part.type === "tool-input-start") {
-      stepHasTool = true;
-    } else if (part.type === "tool-call") {
-      stepHasTool = true;
-      steps.noteCall(part.toolCallId, part.toolName, part.input);
-      await publish("thinking", steps.draft(), true);
-    } else if (part.type === "tool-result") {
-      steps.noteResult(part.toolCallId, part.toolName, part.output);
-      await publish("thinking", steps.draft(), true);
-    } else if (part.type === "tool-error") {
-      steps.noteError(part.toolCallId, part.toolName, part.error);
-      await publish("thinking", steps.draft(), true);
-    } else if (part.type === "finish-step") {
-      if (part.finishReason === "tool-calls") await publish("thinking", steps.draft(), true);
-      else if (stepText.trim() && !emojiOnlyReply(stepText)) await publish("writing", stepText.trim(), true);
-    } else if (part.type === "error") {
-      const reason = part.error instanceof Error ? part.error.message : "The model stream failed";
-      throw new Error(reason);
-    } else if (part.type === "abort") {
-      throw new Error(part.reason || "The model stream aborted");
-    }
-  }
-
-  let content = stepText.trim();
-  const marker = content ? takeReplyMarker(content) : null;
-  if (marker && isChatEmoji(marker.body)) {
     try {
-      await botSetEmoji(client, workerId, turn.id, marker.id, marker.body);
-      return finish("");
+      for await (const part of result.stream) {
+        if (interrupted()) throw new TurnInterrupted();
+        if (part.type === "start-step") {
+          stepText = "";
+          stepHasTool = false;
+          await publish("thinking", steps.draft(), true);
+        } else if (part.type === "text-delta") {
+          stepText = (stepText + part.text).slice(0, 4000);
+          if (!stepHasTool && !emojiOnlyReply(stepText)) await publish("writing", stepText);
+        } else if (part.type === "tool-input-start") {
+          stepHasTool = true;
+        } else if (part.type === "tool-call") {
+          stepHasTool = true;
+          steps.noteCall(part.toolCallId, part.toolName, part.input);
+          await publish("thinking", steps.draft(), true);
+        } else if (part.type === "tool-result") {
+          steps.noteResult(part.toolCallId, part.toolName, part.output);
+          await publish("thinking", steps.draft(), true);
+        } else if (part.type === "tool-error") {
+          steps.noteError(part.toolCallId, part.toolName, part.error);
+          await publish("thinking", steps.draft(), true);
+        } else if (part.type === "finish-step") {
+          if (part.finishReason === "tool-calls") await publish("thinking", steps.draft(), true);
+          else if (stepText.trim() && !emojiOnlyReply(stepText)) await publish("writing", stepText.trim(), true);
+        } else if (part.type === "error") {
+          const reason = part.error instanceof Error ? part.error.message : "The model stream failed";
+          throw new Error(reason);
+        } else if (part.type === "abort") {
+          if (interrupted()) throw new TurnInterrupted();
+          const reason = typeof part.reason === "string" && part.reason ? part.reason : "The model stream aborted";
+          throw new Error(reason);
+        }
+      }
     } catch (error) {
-      const message = error instanceof Error ? error.message : "";
-      if (!message.includes("Emoji target is not a message")) throw error;
+      if (interrupted() || error instanceof TurnInterrupted) throw new TurnInterrupted();
+      throw error;
     }
-  }
-  if (marker) {
-    if (!quoted) {
+
+    clearInterval(poll);
+    if (interrupted() || !(await turnIsCurrent(client, workerId, turn.id))) throw new TurnInterrupted();
+
+    let content = stepText.trim();
+    const marker = content ? takeReplyMarker(content) : null;
+    if (marker && isChatEmoji(marker.body)) {
       try {
-        await botSetReplyTarget(client, workerId, turn.id, marker.id);
-        quoted = true;
+        await botSetEmoji(client, workerId, turn.id, marker.id, marker.body);
+        return finish("");
       } catch (error) {
         const message = error instanceof Error ? error.message : "";
-        if (!message.includes("Reply target is not a message")) throw error;
+        if (!message.includes("Emoji target is not a message")) throw error;
       }
     }
-    content = marker.body;
+    if (marker) {
+      if (!quoted) {
+        try {
+          await botSetReplyTarget(client, workerId, turn.id, marker.id);
+          quoted = true;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "";
+          if (!message.includes("Reply target is not a message")) throw error;
+        }
+      }
+      content = marker.body;
+    }
+    if (!content) {
+      if (reacted || quoted || proposed || (turn.reactionNotice && !personIsWaiting(turn.messages))) return finish("");
+      throw new Error("Mistral returned an empty reply");
+    }
+    await publish("writing", content, true);
+    return finish(content.slice(0, 4000));
+  } finally {
+    clearTimeout(timeout);
+    clearInterval(poll);
+    client.off("notification", onNotify);
   }
-  if (!content) {
-    if (reacted || quoted || proposed || (turn.reactionNotice && !personIsWaiting(turn.messages))) return finish("");
-    throw new Error("Mistral returned an empty reply");
-  }
-  await publish("writing", content, true);
-  return finish(content.slice(0, 4000));
 }

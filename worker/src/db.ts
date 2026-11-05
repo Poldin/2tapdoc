@@ -161,19 +161,26 @@ export async function claimTurn(client: pg.Client, workerId: string): Promise<Tu
   return parseTurn(result.rows[0]?.turn);
 }
 
+export async function turnIsCurrent(client: pg.Client, workerId: string, jobId: string): Promise<boolean> {
+  const result = await client.query<{ current: boolean }>(
+    "select private.bot_job_is_current($1, $2) as current",
+    [workerId, jobId],
+  );
+  return result.rows[0]?.current === true;
+}
+
 export async function completeTurn(
   client: pg.Client,
   workerId: string,
   jobId: string,
   body: string,
   steps: { name: string; input: string; outcome: string }[] = [],
-) {
-  await client.query("select private.complete_bot_job($1, $2, $3, $4::jsonb)", [
-    workerId,
-    jobId,
-    body,
-    steps.length ? JSON.stringify(steps) : null,
-  ]);
+): Promise<boolean> {
+  const result = await client.query<{ posted: boolean }>(
+    "select private.complete_bot_job($1, $2, $3, $4::jsonb) as posted",
+    [workerId, jobId, body, steps.length ? JSON.stringify(steps) : null],
+  );
+  return result.rows[0]?.posted === true;
 }
 
 export async function failTurn(

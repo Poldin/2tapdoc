@@ -10,7 +10,7 @@ import {
   failTurn,
   openDatabase,
 } from "./db.js";
-import { replyToTurn } from "./reply.js";
+import { replyToTurn, TurnInterrupted } from "./reply.js";
 import { reconcileWhatsAppSessions, stopAllWhatsAppSessions } from "./whatsapp.js";
 
 const idleMs = 1500;
@@ -101,9 +101,13 @@ async function runSession() {
       console.log("claimed", turn.id);
       try {
         const reply = await replyToTurn(apiKey as string, client, workerId, turn);
-        await completeTurn(client, workerId, turn.id, reply.body, reply.steps);
-        console.log("finished", turn.id);
+        const posted = await completeTurn(client, workerId, turn.id, reply.body, reply.steps);
+        console.log(posted ? "finished" : "interrupted", turn.id);
       } catch (error) {
+        if (error instanceof TurnInterrupted) {
+          console.log("interrupted", turn.id);
+          continue;
+        }
         const reason = error instanceof Error ? error.message : "The turn failed";
         console.error("turn failed", turn.id, reason);
         try {

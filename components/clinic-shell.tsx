@@ -1380,13 +1380,34 @@ export function ClinicShell({
     const channel = supabase.channel(`draft:${clinicId}:${activeId}`);
 
     let seenAt = "";
+    const liveRef: { current: LiveReply | null } = { current: null };
+    let dropTimer = 0;
     const apply = (row: { bot_id?: string; phase?: string; body?: string; updated_at?: string } | null, removed: boolean) => {
+      window.clearTimeout(dropTimer);
       if (removed) {
-        setLive((current) => {
-          if (!current || current.phase !== "writing" || !current.body.trim()) return null;
-          if (liveDraftSettled(current, shownMessagesRef.current)) return null;
-          return current;
-        });
+        const previous = liveRef.current;
+        const hold =
+          previous !== null &&
+          previous.phase === "writing" &&
+          previous.body.trim().length > 0 &&
+          !liveDraftSettled(previous, shownMessagesRef.current);
+        if (!hold || !previous) {
+          liveRef.current = null;
+          setLive(null);
+          dropTimer = window.setTimeout(() => {
+            if (liveRef.current) return;
+            setTrace("");
+          }, 1600);
+          return;
+        }
+        const stamp = previous.updatedAt;
+        dropTimer = window.setTimeout(() => {
+          const current = liveRef.current;
+          if (!current || current.updatedAt !== stamp) return;
+          liveRef.current = null;
+          setLive(null);
+          setTrace("");
+        }, 1600);
         return;
       }
       if (!row || row.bot_id !== botId) return;
@@ -1396,11 +1417,16 @@ export function ClinicShell({
       const phase: LiveReply["phase"] = row.phase === "writing" ? "writing" : "thinking";
       const rawBody = typeof row.body === "string" ? row.body : "";
       if (phase === "thinking" && rawBody.trim()) setTrace(rawBody);
+      else if (phase === "thinking") setTrace("");
       setLive((current) => {
         if (updatedAt && current?.updatedAt && updatedAt < current.updatedAt) return current;
         const body = phase === "writing" ? rawBody : "";
         const next: LiveReply = { botId, phase, body, updatedAt };
-        if (liveDraftSettled(next, shownMessagesRef.current)) return null;
+        if (liveDraftSettled(next, shownMessagesRef.current)) {
+          liveRef.current = null;
+          return null;
+        }
+        liveRef.current = next;
         return next;
       });
     };
@@ -1442,6 +1468,7 @@ export function ClinicShell({
 
     return () => {
       stopped = true;
+      window.clearTimeout(dropTimer);
       void supabase.removeChannel(channel);
     };
   }, [opened, activeId, agendaOpen, patientsOpen, settingsOpen, clinicId, active?.bot?.id]);
