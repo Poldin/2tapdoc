@@ -75,8 +75,30 @@ export function formatDuration(ms: number): string {
   return `${Math.round(seconds)} s`;
 }
 
+const tokenUnits = [
+  { div: 1_000_000_000, suffix: "B" },
+  { div: 1_000_000, suffix: "M" },
+  { div: 1_000, suffix: "k" },
+] as const;
+
+function tokenLabel(shown: number, suffix: string) {
+  const text = Number.isInteger(shown) ? String(shown) : shown.toFixed(1).replace(".", ",");
+  return `${text}${suffix}`;
+}
+
 export function formatTokenCount(value: number): string {
-  return Math.round(value).toLocaleString("it-IT");
+  if (!Number.isFinite(value) || value < 0) return "";
+  const n = Math.round(value);
+  for (let index = 0; index < tokenUnits.length; index += 1) {
+    const { div, suffix } = tokenUnits[index];
+    if (n < div) continue;
+    const scaled = n / div;
+    const shown = scaled >= 100 ? Math.round(scaled) : Math.round(scaled * 10) / 10;
+    if (shown >= 1000 && index > 0) return tokenLabel(1, tokenUnits[index - 1].suffix);
+    if (shown >= 1000) return tokenLabel(Math.round(shown), suffix);
+    return tokenLabel(shown, suffix);
+  }
+  return String(n);
 }
 
 export function formatStepTokens(step: Pick<AgentStep, "inputTokens" | "outputTokens">): string {

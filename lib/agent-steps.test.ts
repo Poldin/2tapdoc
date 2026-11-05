@@ -29,7 +29,16 @@ describe("agent step metrics", () => {
     assert.equal(formatDuration(140), "140 ms");
     assert.equal(formatDuration(2100), "2,1 s");
     assert.equal(formatDuration(10400), "10 s");
-    assert.equal(formatStepTokens({ inputTokens: 6100, outputTokens: 180 }), `${formatTokenCount(6100)} in · ${formatTokenCount(180)} out`);
+    assert.equal(formatTokenCount(180), "180");
+    assert.equal(formatTokenCount(999), "999");
+    assert.equal(formatTokenCount(1000), "1k");
+    assert.equal(formatTokenCount(6100), "6,1k");
+    assert.equal(formatTokenCount(12_500), "12,5k");
+    assert.equal(formatTokenCount(125_000), "125k");
+    assert.equal(formatTokenCount(1_200_000), "1,2M");
+    assert.equal(formatTokenCount(999_950), "1M");
+    assert.equal(formatTokenCount(1_500_000_000), "1,5B");
+    assert.equal(formatStepTokens({ inputTokens: 6100, outputTokens: 180 }), "6,1k in · 180 out");
     const totals = stepTotals([
       { name: "modello", input: "", outcome: "", ms: 2100, inputTokens: 6100, outputTokens: 180 },
       { name: "query", input: "", outcome: "", ms: 140 },
