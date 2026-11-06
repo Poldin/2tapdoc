@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { FingerprintPattern } from "lucide-react";
+import { Eye, EyeOff, FingerprintPattern } from "lucide-react";
 import {
   requestPasswordReset,
   resendSignupCode,
@@ -37,6 +37,7 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
   const [resetSent, setResetSent] = useState(false);
   const [passkeyReady, setPasskeyReady] = useState(false);
   const [passkeyPending, setPasskeyPending] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
   const login = mode === "login";
 
   useEffect(() => {
@@ -188,16 +189,27 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
       </label>
       <label className="flex flex-col gap-2 text-sm font-medium text-ink">
         Password
-        <input
-          name="password"
-          type="password"
-          autoComplete={login ? "current-password" : "new-password"}
-          required
-          minLength={login ? undefined : 8}
-          value={password}
-          onChange={(event) => setPassword(event.target.value)}
-          className={fieldClass}
-        />
+        <div className="relative">
+          <input
+            name="password"
+            type={showPassword ? "text" : "password"}
+            autoComplete={login ? "current-password" : "new-password"}
+            required
+            minLength={login ? undefined : 8}
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            className={`${fieldClass} w-full pr-12`}
+          />
+          <button
+            type="button"
+            onClick={() => setShowPassword((v) => !v)}
+            className="absolute right-1 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full text-muted transition-colors hover:bg-sand-deep hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet"
+            aria-label={showPassword ? "Nascondi password" : "Mostra password"}
+            aria-pressed={showPassword}
+          >
+            {showPassword ? <EyeOff className="size-5" strokeWidth={1.75} aria-hidden /> : <Eye className="size-5" strokeWidth={1.75} aria-hidden />}
+          </button>
+        </div>
       </label>
       {login ? (
         <button

@@ -11,11 +11,13 @@ export const marketingNav = [
 
 function Mark({ className = "h-8 w-8" }: { className?: string }) {
   return (
-    <svg className={className} viewBox="0 0 32 32" fill="none" aria-hidden="true">
-      <rect width="32" height="32" rx="9" fill="#6D28D9" />
+    <svg className={className} viewBox="0 0 32 32" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+      <rect width="32" height="32" rx="8" fill="#6D28D9" />
       <path
-        fill="#fff"
-        d="M8.8 11.1c0-1.27 1.03-2.3 2.3-2.3h8.3c1.27 0 2.3 1.03 2.3 2.3v5.7c0 1.27-1.03 2.3-2.3 2.3h-3.7l-3.5 2.6v-2.6h-1.1c-1.27 0-2.3-1.03-2.3-2.3v-5.7z"
+        d="M22.4 11.2a8.1 8.1 0 1 0 0 9.6"
+        stroke="#fff"
+        strokeWidth="3.6"
+        strokeLinecap="round"
       />
     </svg>
   );
@@ -84,7 +86,7 @@ export function MarketingFrame({
           <div>
             <Logo />
             <p className="mt-3 max-w-xs text-sm leading-6 text-muted">
-              Ginevra e i colleghi, per lo studio. La segreteria detta le regole.
+              Intelligenza artificiale per per la gestione clinica.
             </p>
           </div>
           <div className="flex gap-16 text-sm">

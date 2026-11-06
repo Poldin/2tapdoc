@@ -118,12 +118,12 @@ export function PasskeySettings() {
               })}
             </ul>
           ) : null}
-          {message ? <p className="mt-3 text-sm text-teal">{message}</p> : null}
+          {message ? <p className="mt-3 text-sm text-violet">{message}</p> : null}
           <button
             type="button"
             disabled={pending}
             onClick={() => void onActivate()}
-            className="mt-4 h-12 rounded-full bg-teal px-5 text-teal-ink disabled:opacity-50"
+            className="mt-4 h-12 rounded-full bg-violet px-5 text-[15px] font-medium text-white transition-colors hover:bg-violet-deep focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet disabled:opacity-50"
           >
             {pending ? "Attendere…" : "Attiva su questo dispositivo"}
           </button>

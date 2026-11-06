@@ -122,6 +122,6 @@ export async function setPassword(password: string, confirm: string): Promise<Au
   const supabase = await createClient();
   const { error } = await supabase.auth.updateUser({ password });
   if (error) return { error: "Non è stato possibile salvare la password." };
-  redirect("/clinics");
+  return {};
 }
 

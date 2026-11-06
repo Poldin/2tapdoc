@@ -26,7 +26,7 @@ export function passkeyErrorMessage(error: PasskeyError): string | null {
       return "Questo dispositivo è già collegato al tuo account.";
     case "ERROR_INVALID_RP_ID":
     case "ERROR_INVALID_DOMAIN":
-      return "L’impronta si attiva sul sito dello studio. Da questo indirizzo il browser non la accetta.";
+      return "mmm... qualcosa è andato storto, abbiamo registrato l'anomalia. Riprova più tardi.";
     case "passkey_disabled":
       return "L’accesso con impronta non è ancora abilitato sul progetto.";
     case "too_many_passkeys":

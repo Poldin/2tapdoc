@@ -10,6 +10,7 @@ import { birthLabel, patientContacts, patientName, type PatientRecord } from "@/
 export type { PatientRecord };
 
 const suggestionLimit = 8;
+const pageSize = 20;
 
 function fold(value: string) {
   return value
@@ -178,6 +179,7 @@ export function PatientsView({
   const [open, setOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [active, setActive] = useState(0);
+  const [shown, setShown] = useState(pageSize);
   const rootRef = useRef<HTMLDivElement>(null);
   const searching = query.trim().length > 0;
   const results = useMemo(
@@ -185,10 +187,12 @@ export function PatientsView({
     [patients, query, searching],
   );
   const suggestions = results.slice(0, suggestionLimit);
+  const visible = results.slice(0, shown);
   const showMenu = open && searching;
 
   useEffect(() => {
     setActive(0);
+    setShown(pageSize);
   }, [query]);
 
   useEffect(() => {
@@ -306,11 +310,22 @@ export function PatientsView({
             {patients.length === 0 ? "Nessun paziente." : "Nessun risultato."}
           </p>
         ) : (
-          <ul className="flex w-full max-w-[36rem] flex-col gap-3">
-            {results.map((patient) => (
-              <PatientCard key={patient.id} clinicId={clinicId} patient={patient} />
-            ))}
-          </ul>
+          <>
+            <ul className="flex w-full max-w-[36rem] flex-col gap-3">
+              {visible.map((patient) => (
+                <PatientCard key={patient.id} clinicId={clinicId} patient={patient} />
+              ))}
+            </ul>
+            {shown < results.length ? (
+              <button
+                type="button"
+                onClick={() => setShown((count) => count + pageSize)}
+                className="mt-4 rounded-full px-3 py-1 text-sm text-muted hover:text-ink"
+              >
+                Carica altri
+              </button>
+            ) : null}
+          </>
         )}
       </div>
     </div>
