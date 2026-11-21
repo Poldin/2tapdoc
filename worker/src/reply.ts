@@ -54,7 +54,7 @@ export type TurnMessage = {
   replyToId?: string | null;
   replyExcerpt?: string | null;
   reactions?: string[];
-  /** A person is waiting on this bot: the chat has one bot, or the message names this bot. */
+  /** A person is waiting on this bot: the chat has one bot, or the message mentions or replies to this bot. */
   addressed?: boolean;
 };
 
@@ -1022,7 +1022,7 @@ export async function replyToTurn(
 
     updateChats: tool({
       description:
-        "Propone la modifica di una o più conversazioni in una sola chiamata. Non modifica: apre un solo dialog e risponde awaiting_user.",
+        "Propone la modifica di una o più conversazioni di gruppo in una sola chiamata. Non modifica: apre un solo dialog e risponde awaiting_user. Non usarla se chats.direct_bot_id è valorizzato: quella conversazione 1 a 1 si modifica con updateBots.",
       inputSchema: z.object({
         updates: z
           .array(
@@ -1056,7 +1056,7 @@ export async function replyToTurn(
 
     updateBots: tool({
       description:
-        "Propone la modifica di uno o più bot tuoi, in una sola chiamata. Non modifica: apre un solo dialog e risponde awaiting_user.",
+        "Propone la modifica di uno o più bot tuoi, in una sola chiamata. Nome e faccia sono anche quelli della conversazione 1 a 1. Non modifica: apre un solo dialog e risponde awaiting_user.",
       inputSchema: z.object({
         updates: z
           .array(
@@ -1291,9 +1291,10 @@ export async function replyToTurn(
               if (typeof ms === "number") steps.noteDuration(id, ms);
             }
           }
-          await publish("thinking", steps.draft(), true);
           if (part.finishReason !== "tool-calls" && stepText.trim() && !emojiOnlyReply(stepText)) {
             await publish("writing", stepText.trim(), true);
+          } else {
+            await publish("thinking", steps.draft(), true);
           }
         } else if (part.type === "error") {
           const reason = part.error instanceof Error ? part.error.message : "The model stream failed";

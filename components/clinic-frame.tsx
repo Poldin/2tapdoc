@@ -2,7 +2,7 @@ import { type ReactNode } from "react";
 import { notFound, redirect } from "next/navigation";
 import { ClinicShell } from "@/components/clinic-shell";
 import { getSessionUser } from "@/lib/auth/session";
-import { clinicIdPattern, loadClinicFrame } from "@/lib/clinic-frame";
+import { clinicIdPattern, loadClinicFrame, loadPendingConfirmations, loadUserChatStates } from "@/lib/clinic-frame";
 
 export async function ClinicFrame({
   params,
@@ -17,7 +17,11 @@ export async function ClinicFrame({
   const user = await getSessionUser();
   if (!user) redirect("/login");
 
-  const frame = await loadClinicFrame(user.id, id);
+  const [frame, chatStates, pendingConfirmations] = await Promise.all([
+    loadClinicFrame(user.id, id),
+    loadUserChatStates(user.id),
+    loadPendingConfirmations(id),
+  ]);
   if (!frame) redirect("/clinics");
 
   return (
@@ -27,6 +31,8 @@ export async function ClinicFrame({
       clinics={frame.clinics}
       email={user.email}
       chats={frame.chats}
+      initialChatStates={chatStates}
+      initialPendingConfirmations={pendingConfirmations}
       currentUserId={user.id}
       clinicPeople={frame.people}
       myBots={frame.myBots}

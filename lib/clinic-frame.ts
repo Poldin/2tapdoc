@@ -2,6 +2,7 @@ import { cacheLife, cacheTag } from "next/cache";
 import { cookies } from "next/headers";
 import { clinicRecencyFromCookie, type ClinicRecency } from "@/lib/clinic-recency";
 import { messageBody } from "@/lib/chat-thread";
+import { asChatUnreadState, type ChatUnreadState } from "@/lib/chat-unread";
 import { markdownToPlainText } from "@/lib/markdown";
 import { createClient } from "@/lib/supabase/server";
 
@@ -21,6 +22,7 @@ export type ClinicFrameChat = {
   activityAt: string;
   people: { id: string; name: string }[];
   bots: { id: string; name: string; color: string; emoji: string }[];
+  directBotId: string | null;
 };
 
 export type ClinicFrame = {
@@ -51,6 +53,7 @@ type ChatRow = {
   title: string | null;
   color: string;
   emoji: string;
+  direct_bot_id: string | null;
   created_at: string;
   chat_events: PreviewEvent[] | null;
   chat_participants: SeatRow[] | null;
@@ -82,6 +85,7 @@ function asChats(rows: ChatRow[], profileName: Map<string, string>): ClinicFrame
         activityAt: latest?.created_at ?? row.created_at,
         people,
         bots: seatBots(row.chat_participants),
+        directBotId: row.direct_bot_id,
       };
     })
     .sort((a, b) => b.activityAt.localeCompare(a.activityAt));
@@ -104,7 +108,7 @@ export async function loadClinicFrame(userId: string, clinicId: string): Promise
       supabase
         .from("chats")
         .select(
-          "id, title, color, emoji, created_at, chat_events(seq, kind, payload, created_at), chat_participants(user_id, bots(id, name, color, emoji)), chat_clinics!inner(clinic_id)",
+          "id, title, color, emoji, direct_bot_id, created_at, chat_events(seq, kind, payload, created_at), chat_participants(user_id, bots(id, name, color, emoji)), chat_clinics!inner(clinic_id)",
         )
         .eq("chat_clinics.clinic_id", clinicId)
         .order("seq", { referencedTable: "chat_events", ascending: false })
@@ -173,7 +177,7 @@ export async function loadClinicChatItem(clinicId: string, chatId: string): Prom
   const { data } = await supabase
     .from("chats")
     .select(
-      "id, title, color, emoji, created_at, chat_events(seq, kind, payload, created_at), chat_participants(user_id, bots(id, name, color, emoji)), chat_clinics!inner(clinic_id)",
+      "id, title, color, emoji, direct_bot_id, created_at, chat_events(seq, kind, payload, created_at), chat_participants(user_id, bots(id, name, color, emoji)), chat_clinics!inner(clinic_id)",
     )
     .eq("id", chatId)
     .eq("chat_clinics.clinic_id", clinicId)
@@ -198,6 +202,20 @@ export async function loadClinicChatItem(clinicId: string, chatId: string): Prom
 }
 
 export type PendingConfirmation = { id: string; botName: string; action: string };
+
+export async function loadUserChatStates(userId: string): Promise<ChatUnreadState[]> {
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("chat_user_state")
+    .select(
+      "chat_id, clinic_id, last_read_seq, unread_count, unread_mentions_count, marked_unread, last_message_seq, last_message_at, last_message_preview",
+    )
+    .eq("user_id", userId);
+  return (data ?? []).flatMap((row) => {
+    const parsed = asChatUnreadState(row);
+    return parsed ? [parsed] : [];
+  });
+}
 
 export async function loadPendingConfirmations(clinicId: string): Promise<PendingConfirmation[]> {
   const supabase = await createClient();

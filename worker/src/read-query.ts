@@ -226,7 +226,7 @@ export const readQueryDescription = [
   "agenda_blocks(id, clinic_id, title, description, starts_at, ends_at) agenda_block_doctors(block_id, doctor_id) agenda_block_objects(block_id, clinical_object_id)",
   "doctors(id, clinic_id, given_name, family_name, specialization, active, user_id)",
   "clinical_objects(id, clinic_id, name, kind, description, attributes)",
-  "chats(id, created_by, title, color, emoji, created_at) chat_participants(chat_id, user_id, bot_id) chat_clinics(chat_id, clinic_id)",
+  "chats(id, created_by, title, color, emoji, direct_bot_id, created_at) chat_participants(chat_id, user_id, bot_id) chat_clinics(chat_id, clinic_id). direct_bot_id valorizzato è la conversazione 1 a 1 di quel bot: non si aggiungono altre persone o altri bot, e nome e faccia si cambiano sul bot.",
   "chat_events(id, chat_id, seq, kind, payload, user_id, bot_id, created_at, reply_to_id, preferred_at). Un messaggio ha kind = 'message' e il testo in payload->>'body'.",
   "message_emojis(event_id, chat_id, user_id, bot_id, emoji) message_reactions(event_id, user_id, vote)",
   "bots(id, owner_user_id, name, color, emoji) bot_clinics(bot_id, clinic_id)",

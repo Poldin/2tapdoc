@@ -1,9 +1,11 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
+import { ArrowDown } from "lucide-react";
 import { loadLatestChatMessages, loadOlderChatMessages } from "@/app/clinics/actions";
 import { useClinicChrome } from "@/components/clinic-chrome";
+import { formatUnreadCount } from "@/lib/chat-unread";
 import {
   BotLead,
   ChatTurn,
@@ -16,6 +18,7 @@ import {
   liveDraftView,
   mergeThread,
   messageStamp,
+  outgoingMessage,
   reconcileOutgoing,
   syncDayBadge,
   threadEntries,
@@ -27,26 +30,28 @@ import {
   type ReplyDraft,
 } from "@/components/clinic-shell";
 import { ChatTitle } from "@/components/chat-title";
-import { BotGlyph } from "@/components/mark";
-import { Markdown } from "@/components/markdown";
+import { Markdown, type MentionBadge } from "@/components/markdown";
 import { botGreeting } from "@/lib/bot-greeting";
 import { markdownToPlainText } from "@/lib/markdown";
 import { createClient } from "@/lib/supabase/client";
 
 export function ChatThread({
   clinicId,
+  currentUserId,
   chat,
   messages,
   hasOlder,
   olderCursor: olderCursorProp,
 }: {
   clinicId: string;
+  currentUserId: string;
   chat: {
     id: string;
     color: string;
     emoji: string;
     people: ChatPerson[];
     bots: BotMark[];
+    directBot: BotMark | null;
     hasEvents: boolean;
   };
   messages: ChatMessage[];
@@ -55,6 +60,22 @@ export function ChatThread({
 }) {
   const chrome = useClinicChrome();
   const noteActivity = chrome?.noteActivity;
+  const markRead = chrome?.markRead;
+  const isManuallyUnread = chrome?.isManuallyUnread;
+  const clearManualUnread = chrome?.clearManualUnread;
+  const listOpen = chrome?.listOpen ?? false;
+  const chatState = chrome?.chatStates[chat.id];
+  const [dividerAfterSeq, setDividerAfterSeq] = useState<number | null>(() => {
+    const initial = chrome?.chatStates[chat.id];
+    if (initial && initial.unreadCount > 0) return initial.lastReadSeq;
+    return null;
+  });
+  const unreadDividerRef = useRef<HTMLDivElement>(null);
+  const didInitialScrollRef = useRef(false);
+  const [atBottom, setAtBottom] = useState(true);
+  const [pageVisible, setPageVisible] = useState(() =>
+    typeof document === "undefined" ? true : document.visibilityState === "visible",
+  );
   const [thread, setThread] = useState(messages);
   const [threadStamp, setThreadStamp] = useState(() => messageStamp(messages));
   const [canLoadOlder, setCanLoadOlder] = useState(hasOlder);
@@ -74,16 +95,17 @@ export function ChatThread({
   const threadRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
   const knownMessages = useRef<{ chatId: string | null; ids: Set<string> }>({ chatId: null, ids: new Set() });
-  const waitBaseline = useRef<string | null>(null);
-  const replyCaret = useRef(0);
+  const liveSeenBots = useRef<Set<string>>(new Set());
+  const outgoingCleanups = useRef<Map<string, number>>(new Map());
+  const [caretEpoch, setCaretEpoch] = useState(0);
   const shownMessagesRef = useRef(shownMessages);
   shownMessagesRef.current = shownMessages;
-  const [waiting, setWaiting] = useState(false);
   const [lives, setLives] = useState<LiveReply[]>([]);
   const livesRef = useRef<LiveReply[]>([]);
   const [entered, setEntered] = useState<Set<string>>(new Set());
   const [outgoing, setOutgoing] = useState<Outgoing[]>([]);
-  const badgeRef = useRef<HTMLParagraphElement>(null);
+  const hadOutgoingRef = useRef(false);
+  const badgeRef = useRef<HTMLDivElement>(null);
   const [dayLabel, setDayLabel] = useState(() =>
     messages.at(-1) ? formatDay(messages.at(-1)!.createdAt) : "oggi",
   );
@@ -91,23 +113,43 @@ export function ChatThread({
   const nextOutgoing = reconcileOutgoing(outgoing, chat.id, shownMessages);
   if (nextOutgoing !== outgoing) setOutgoing(nextOutgoing);
   const pendingOutgoing = nextOutgoing.filter((item) => item.chatId === chat.id);
-  const threadMessages = foldEmojiReplies(shownMessages);
-  const sending = pendingOutgoing.some((item) => !item.error);
-  const lastBotMessage = [...shownMessages].reverse().find((message) => message.botId) ?? null;
-  const replyLanded =
-    waitBaseline.current !== null && lastBotMessage !== null && lastBotMessage.id !== waitBaseline.current;
+  const optimisticMessages = pendingOutgoing.map(outgoingMessage);
+  const threadMessages = [...foldEmojiReplies(shownMessages), ...optimisticMessages];
   const openLives = lives.filter((item) => !liveDraftSettled(item, shownMessages));
-  if (replyLanded) {
-    replyCaret.current += 1;
-    waitBaseline.current = null;
-    if (waiting) setWaiting(false);
-  }
   if (openLives.length !== lives.length) setLives(openLives);
   const liveKey = openLives
     .map((item) => `${item.botId}:${item.phase}:${item.updatedAt}:${item.body.length}:${item.trace.length}`)
     .join("|");
   const waitingReply = pendingOutgoing.filter((item) => !item.error);
-  const showThinking = waiting && !replyLanded && openLives.length === 0 && chat.bots.length > 0;
+  const named = chat.people.length > 1 || chat.bots.length > 1;
+  const otherPeople = chat.people.filter((person) => person.id !== currentUserId);
+  const latestRealSeq = shownMessages.reduce(
+    (max, message) =>
+      message.seq > max && message.seq < Number.MAX_SAFE_INTEGER ? message.seq : max,
+    0,
+  );
+  const firstUnreadMessageId =
+    dividerAfterSeq !== null
+      ? (threadMessages.find(
+          (message) =>
+            !message.mine &&
+            message.seq < Number.MAX_SAFE_INTEGER &&
+            message.seq > dividerAfterSeq,
+        )?.id ?? null)
+      : null;
+  const unreadBelowCount = !atBottom ? (chatState?.unreadCount ?? 0) : 0;
+  const liveMentions: MentionBadge[] = [
+    ...chat.bots.map((bot): MentionBadge => ({ kind: "bot", name: bot.name, emoji: bot.emoji, color: bot.color })),
+    ...chat.people.map(
+      (person): MentionBadge => ({
+        kind: "person",
+        name: person.name,
+        avatarUrl: person.avatarUrl,
+        emoji: person.emoji,
+        color: person.color,
+      }),
+    ),
+  ];
 
   useEffect(() => {
     const last = shownMessages.at(-1);
@@ -148,6 +190,17 @@ export function ChatThread({
       { event: "*", schema: "public", table: "message_emojis", filter: `chat_id=eq.${chat.id}` },
       reload,
     );
+    const onVisibility = () => {
+      setPageVisible(document.visibilityState === "visible");
+    };
+    const onFocus = () => {
+      if (document.visibilityState === "visible") setPageVisible(true);
+    };
+    const onOnline = () => reload();
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("focus", onFocus);
+    window.addEventListener("online", onOnline);
+
     void supabase.auth.getSession().then(({ data }) => {
       if (stopped) return;
       const token = data.session?.access_token;
@@ -160,13 +213,43 @@ export function ChatThread({
       stopped = true;
       reloadToken.current += 1;
       window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("focus", onFocus);
+      window.removeEventListener("online", onOnline);
       void supabase.removeChannel(channel);
     };
   }, [chat.id, clinicId, noteActivity]);
 
+  useEffect(() => {
+    if (!markRead || listOpen || !pageVisible || !atBottom) return;
+    if (isManuallyUnread?.(chat.id)) return;
+    const hasUnread = Boolean(chatState && (chatState.unreadCount > 0 || chatState.markedUnread));
+    const hasUnmarkedSeq = Boolean(chatState && latestRealSeq > chatState.lastReadSeq);
+    if (!hasUnread && !hasUnmarkedSeq) return;
+    markRead(chat.id, latestRealSeq > 0 ? latestRealSeq : null);
+  }, [
+    chat.id,
+    chatState,
+    latestRealSeq,
+    listOpen,
+    pageVisible,
+    atBottom,
+    markRead,
+    isManuallyUnread,
+  ]);
+
   useLayoutEffect(() => {
     livesRef.current = lives;
+    for (const item of lives) liveSeenBots.current.add(item.botId);
   }, [lives]);
+
+  useEffect(() => {
+    const cleanups = outgoingCleanups.current;
+    return () => {
+      for (const timer of cleanups.values()) window.clearTimeout(timer);
+      cleanups.clear();
+    };
+  }, []);
 
   useEffect(() => {
     const supabase = createClient();
@@ -182,7 +265,7 @@ export function ChatThread({
       commit(livesRef.current.filter((item) => item.botId !== botId));
     };
     const apply = (
-      row: { bot_id?: string; phase?: string; body?: string; updated_at?: string } | null,
+      row: { bot_id?: string; phase?: string; body?: string; trace?: string; updated_at?: string } | null,
       removed: boolean,
     ) => {
       const botId = row?.bot_id;
@@ -211,7 +294,7 @@ export function ChatThread({
             const current = livesRef.current.find((item) => item.botId === botId);
             if (!current || current.updatedAt !== held) return;
             drop(botId);
-          }, 1600),
+          }, 2000),
         );
         return;
       }
@@ -219,21 +302,30 @@ export function ChatThread({
       const previousAt = seenAt.get(botId) ?? "";
       if (updatedAt && previousAt && updatedAt < previousAt) return;
       if (updatedAt) seenAt.set(botId, updatedAt);
-      const phase: LiveReply["phase"] = row.phase === "writing" ? "writing" : "thinking";
+      const current = livesRef.current.find((item) => item.botId === botId);
+      if (current && updatedAt && current.updatedAt && updatedAt < current.updatedAt) return;
+      const incomingPhase: LiveReply["phase"] = row.phase === "writing" ? "writing" : "thinking";
       const rawBody = typeof row.body === "string" ? row.body : "";
+      const rawTrace = typeof row.trace === "string" ? row.trace : "";
+      const keepWriting =
+        current?.phase === "writing" && current.body.trim().length > 0 && incomingPhase === "thinking";
+      const phase: LiveReply["phase"] = keepWriting ? "writing" : incomingPhase;
+      const body = keepWriting ? current.body : phase === "writing" ? rawBody : "";
+      const trace =
+        rawTrace ||
+        (incomingPhase === "thinking" && rawBody ? rawBody : current?.trace ?? "");
       const next: LiveReply = {
         botId,
         phase,
-        body: phase === "writing" ? rawBody : "",
-        trace: phase === "thinking" ? rawBody : "",
+        body,
+        trace,
         updatedAt,
       };
       if (liveDraftSettled(next, shownMessagesRef.current)) {
         drop(botId);
         return;
       }
-      const current = livesRef.current.find((item) => item.botId === botId);
-      if (current && updatedAt && current.updatedAt && updatedAt < current.updatedAt) return;
+      liveSeenBots.current.add(botId);
       commit([...livesRef.current.filter((item) => item.botId !== botId), next]);
     };
     channel.on(
@@ -254,7 +346,7 @@ export function ChatThread({
           if (status !== "SUBSCRIBED" || stopped) return;
           void supabase
             .from("chat_drafts")
-            .select("bot_id, phase, body, updated_at")
+            .select("bot_id, phase, body, trace, updated_at")
             .eq("chat_id", chat.id)
             .then(({ data: existing }) => {
               if (stopped) return;
@@ -275,23 +367,65 @@ export function ChatThread({
     if (known.chatId !== chat.id) {
       known.chatId = chat.id;
       known.ids = new Set(shownMessages.map((message) => message.id));
+      liveSeenBots.current.clear();
+      hadOutgoingRef.current = pendingOutgoing.length > 0;
       setEntered((current) => (current.size === 0 ? current : new Set()));
       return;
     }
-    const arrived = shownMessages.flatMap((message) => {
-      if (known.ids.has(message.id)) return [];
+    let botArrived = false;
+    const arrived: string[] = [];
+    for (const message of shownMessages) {
+      if (known.ids.has(message.id)) continue;
       known.ids.add(message.id);
-      return message.id;
-    });
+      if (message.botId) {
+        botArrived = true;
+        if (liveSeenBots.current.has(message.botId)) {
+          liveSeenBots.current.delete(message.botId);
+          continue;
+        }
+      }
+      if (message.mine && hadOutgoingRef.current) {
+        continue;
+      }
+      arrived.push(message.id);
+    }
+    for (const item of pendingOutgoing) {
+      if (known.ids.has(item.id)) continue;
+      known.ids.add(item.id);
+      arrived.push(item.id);
+    }
+    hadOutgoingRef.current = pendingOutgoing.length > 0;
+    if (botArrived) setCaretEpoch((value) => value + 1);
     if (arrived.length > 0) setEntered(new Set(arrived));
-  }, [chat.id, shownMessages]);
+  }, [chat.id, shownMessages, pendingOutgoing]);
 
   useLayoutEffect(() => {
     const scroller = threadRef.current;
     if (!scroller) return;
-    if (stickToBottom.current) scroller.scrollTop = scroller.scrollHeight;
+    if (!didInitialScrollRef.current) {
+      didInitialScrollRef.current = true;
+      const divider = unreadDividerRef.current;
+      if (divider) {
+        const dividerTop =
+          divider.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop;
+        const maxBottomTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+        if (dividerTop < maxBottomTop + 56) {
+          scroller.scrollTop = Math.max(0, dividerTop - 72);
+          const distance = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+          const nearBottom = distance < 80;
+          stickToBottom.current = nearBottom;
+          setAtBottom(nearBottom);
+          syncDayBadge(scroller, badgeRef.current, setDayLabel);
+          return;
+        }
+      }
+    }
+    if (stickToBottom.current) {
+      scroller.scrollTop = scroller.scrollHeight;
+      setAtBottom(true);
+    }
     syncDayBadge(scroller, badgeRef.current, setDayLabel);
-  }, [chat.id, shownMessages, showThinking, sending, liveKey]);
+  }, [chat.id, shownMessages, pendingOutgoing.length, liveKey]);
 
   useEffect(() => {
     const scroller = threadRef.current;
@@ -300,6 +434,7 @@ export function ChatThread({
       syncDayBadge(scroller, badgeRef.current, setDayLabel);
       const distance = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
       stickToBottom.current = distance < 120;
+      setAtBottom(distance < 80);
     };
     scroller.addEventListener("scroll", sync, { passive: true });
     const observer = new ResizeObserver(sync);
@@ -309,6 +444,16 @@ export function ChatThread({
       observer.disconnect();
     };
   }, [chat.id, shownMessages]);
+
+  function jumpToBottom() {
+    const scroller = threadRef.current;
+    stickToBottom.current = true;
+    setAtBottom(true);
+    if (scroller) {
+      scroller.scrollTo({ top: scroller.scrollHeight, behavior: "smooth" });
+    }
+    markRead?.(chat.id, latestRealSeq > 0 ? latestRealSeq : null);
+  }
 
   function pinToMessage(scroller: HTMLDivElement) {
     const edge = scroller.getBoundingClientRect().top;
@@ -362,6 +507,8 @@ export function ChatThread({
     replyTo: ReplyDraft | null;
     mentions: string[];
   }) {
+    setDividerAfterSeq(null);
+    clearManualUnread?.(chat.id);
     const currentMessages = shownMessagesRef.current;
     const target = input.replyTo ? currentMessages.find((message) => message.id === input.replyTo?.id) : null;
     const item: Outgoing = {
@@ -389,8 +536,25 @@ export function ChatThread({
     ]);
   }
 
-  function settleOutgoing(id: string) {
-    setOutgoing((current) => (current.some((item) => item.id === id) ? current.filter((item) => item.id !== id) : current));
+  function settleOutgoing(id: string, ok: boolean) {
+    const existingTimer = outgoingCleanups.current.get(id);
+    if (existingTimer) {
+      window.clearTimeout(existingTimer);
+      outgoingCleanups.current.delete(id);
+    }
+    if (!ok) {
+      setOutgoing((current) =>
+        current.some((item) => item.id === id) ? current.filter((item) => item.id !== id) : current,
+      );
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      outgoingCleanups.current.delete(id);
+      setOutgoing((current) =>
+        current.some((item) => item.id === id) ? current.filter((item) => item.id !== id) : current,
+      );
+    }, 4000);
+    outgoingCleanups.current.set(id, timer);
     const token = ++reloadToken.current;
     const requested = chat.id;
     void loadLatestChatMessages(clinicId, requested).then((result) => {
@@ -401,24 +565,15 @@ export function ChatThread({
     });
   }
 
-  function noteWaiting(next: boolean) {
-    if (!next) {
-      waitBaseline.current = null;
-      setWaiting(false);
-      return;
-    }
-    waitBaseline.current = lastBotMessage?.id ?? "";
-    setWaiting(true);
-  }
-
   return (
     <>
       <ChatTitle
+        chatId={chat.id}
         label={dayLabel}
         badgeRef={badgeRef}
         color={chat.color}
         emoji={chat.emoji}
-        face={chat.bots.length === 1 ? chat.bots[0] : null}
+        face={chat.directBot}
       />
       <div className="mx-auto flex min-h-0 w-full max-w-4xl flex-1 flex-col">
         <div
@@ -448,100 +603,120 @@ export function ChatThread({
                     <span className="text-sm text-date">{entry.label}</span>
                   </div>
                 ) : (
-                  <ChatTurn
-                    key={entry.message.id}
-                    clinicId={clinicId}
-                    chatId={chat.id}
-                    message={entry.message}
-                    named={chat.people.length > 1 || chat.bots.length > 1}
-                    entered={entered.has(entry.message.id)}
-                    bots={chat.bots}
-                    onReply={setReplyTo}
-                  />
+                  <Fragment key={entry.message.id}>
+                    {entry.message.id === firstUnreadMessageId ? (
+                      <div
+                        ref={unreadDividerRef}
+                        role="separator"
+                        aria-label="Nuovi messaggi"
+                        className="my-2 flex items-center gap-3 self-stretch px-1"
+                      >
+                        <span className="h-px flex-1 bg-teal/30" />
+                        <span className="rounded-full bg-teal/10 px-2.5 py-0.5 text-xs font-medium text-teal">
+                          Nuovi messaggi
+                        </span>
+                        <span className="h-px flex-1 bg-teal/30" />
+                      </div>
+                    ) : null}
+                    <ChatTurn
+                      clinicId={clinicId}
+                      chatId={chat.id}
+                      message={entry.message}
+                      named={named}
+                      entered={entered.has(entry.message.id)}
+                      bots={chat.bots}
+                      people={chat.people}
+                      onReply={setReplyTo}
+                    />
+                  </Fragment>
                 ),
               )
-            ) : chat.hasEvents || chat.bots.length !== 1 ? null : (
+            ) : chat.hasEvents || !chat.directBot ? null : (
               <div className="max-w-[min(36rem,100%)] min-w-0 self-start wrap-anywhere rounded-2xl bg-paper px-4 py-3 text-sm leading-6">
-                <Markdown source={botGreeting} lead={<BotLead bot={chat.bots[0]} />} />
+                <Markdown source={botGreeting} lead={<BotLead bot={chat.directBot} />} />
               </div>
             )}
-            {sending ? (
-              <div role="status" className="flex justify-end self-end py-1">
-                <span className="sr-only">Invio in corso</span>
-                <span className="h-4 w-4 animate-spin rounded-full border-2 border-line border-t-ink motion-reduce:animate-none" />
-              </div>
-            ) : null}
-            {showThinking ? (
-              <div
-                role="status"
-                aria-live="polite"
-                className="flex w-full max-w-[min(36rem,100%)] flex-col items-start gap-2 self-start"
-              >
-                <p className="flex items-center gap-2 py-1 text-sm text-muted">
-                  {chat.bots.length === 1 ? (
-                    <BotGlyph color={chat.bots[0].color} emoji={chat.bots[0].emoji} plain className="h-5 w-5" />
-                  ) : null}
-                  <span>
-                    sto elaborando
-                    <span className="elaborating-dots" aria-hidden="true" />
-                  </span>
-                </p>
-              </div>
-            ) : null}
             {openLives.map((live) => {
               const view = liveDraftView(live, shownMessages, waitingReply);
               const bot = chat.bots.find((item) => item.id === live.botId) ?? null;
+              if (!view.thinking && !view.text.trim() && !view.target) return null;
               return (
-                <div key={live.botId} className="flex w-full max-w-[min(36rem,100%)] flex-col items-start gap-2 self-start">
-                  {view.thinking ? (
-                    <div role="status" aria-live="polite" className="flex w-full flex-col items-start gap-2">
-                      <p className="flex items-center gap-2 py-1 text-sm text-muted">
-                        {bot ? <BotGlyph color={bot.color} emoji={bot.emoji} plain className="h-5 w-5" /> : null}
-                        <span>
-                          sto elaborando
-                          <span className="elaborating-dots" aria-hidden="true" />
-                        </span>
-                      </p>
-                      {view.trace ? <LiveTrace text={view.trace} /> : null}
+                <div
+                  key={live.botId}
+                  role="status"
+                  aria-live="polite"
+                  className="msg-enter-theirs flex w-full max-w-[min(36rem,100%)] min-w-0 flex-col items-start gap-1 self-start"
+                >
+                  {named && bot ? <p className="px-1 text-xs text-muted">{bot.name}</p> : null}
+                  <LiveTrace text={live.trace} />
+                  <div className="flex max-w-full min-w-0 items-center">
+                    <div className="max-w-full min-w-0 wrap-anywhere rounded-2xl bg-paper px-4 py-3 text-sm leading-6">
+                      {view.target ? (
+                        <ReplyQuote
+                          reply={{
+                            id: view.target.id,
+                            excerpt: markdownToPlainText(view.target.body).slice(0, 180),
+                            mine: view.target.mine,
+                            botId: view.target.botId,
+                            authorName: view.target.authorName,
+                            authorBot: view.target.authorBot,
+                          }}
+                          mine={false}
+                        />
+                      ) : null}
+                      {view.thinking ? (
+                        <p className="text-muted">
+                          {bot ? <BotLead bot={bot} animate /> : null}
+                          <span>
+                            sto elaborando
+                            <span className="elaborating-dots" aria-hidden="true" />
+                          </span>
+                        </p>
+                      ) : view.text.trim() ? (
+                        <Markdown
+                          source={view.text}
+                          lead={bot ? <BotLead bot={bot} animate /> : undefined}
+                          mentions={liveMentions}
+                          mine={false}
+                        />
+                      ) : null}
                     </div>
-                  ) : null}
-                  {view.text.trim() || view.target ? (
-                    <div role="status" aria-live="polite" className="flex w-fit max-w-full min-w-0 flex-col">
-                      <div className="max-w-full min-w-0 wrap-anywhere rounded-2xl bg-paper px-4 py-3 text-sm leading-6">
-                        {view.target ? (
-                          <ReplyQuote
-                            reply={{
-                              id: view.target.id,
-                              excerpt: markdownToPlainText(view.target.body).slice(0, 180),
-                              mine: view.target.mine,
-                              botId: view.target.botId,
-                              authorName: view.target.authorName,
-                              authorBot: view.target.authorBot,
-                            }}
-                            mine={false}
-                          />
-                        ) : null}
-                        {view.text.trim() && bot ? <Markdown source={view.text} lead={<BotLead bot={bot} animate />} /> : null}
-                      </div>
-                    </div>
-                  ) : null}
+                  </div>
                 </div>
               );
             })}
           </div>
         </div>
-        <MessageComposer
-          key={chat.id}
-          clinicId={clinicId}
-          chatId={chat.id}
-          bots={chat.bots}
-          replyTo={replyTo?.id ? replyTo : null}
-          onClearReply={() => setReplyTo(null)}
-          onWaiting={chat.bots.length > 0 ? noteWaiting : undefined}
-          caretEpoch={replyCaret.current}
-          onOutgoing={beginOutgoing}
-          onOutgoingSettled={settleOutgoing}
-        />
+        <div className="relative">
+          {unreadBelowCount > 0 ? (
+            <div className="pointer-events-none absolute right-0 -top-11 left-0 z-20 flex justify-center">
+              <button
+                type="button"
+                onClick={jumpToBottom}
+                className="pointer-events-auto flex items-center gap-1.5 rounded-full bg-teal px-3.5 py-1.5 text-xs font-medium text-teal-ink shadow-sm transition-transform hover:scale-[1.02] active:scale-[0.98]"
+              >
+                <ArrowDown className="h-3.5 w-3.5" strokeWidth={2.2} />
+                <span>
+                  {unreadBelowCount === 1
+                    ? "1 nuovo messaggio"
+                    : `${formatUnreadCount(unreadBelowCount)} nuovi messaggi`}
+                </span>
+              </button>
+            </div>
+          ) : null}
+          <MessageComposer
+            key={chat.id}
+            clinicId={clinicId}
+            chatId={chat.id}
+            bots={chat.bots}
+            people={otherPeople}
+            replyTo={replyTo?.id ? replyTo : null}
+            onClearReply={() => setReplyTo(null)}
+            caretEpoch={caretEpoch}
+            onOutgoing={beginOutgoing}
+            onOutgoingSettled={settleOutgoing}
+          />
+        </div>
       </div>
     </>
   );

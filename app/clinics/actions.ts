@@ -10,7 +10,12 @@ import { botGreeting, mastroWGreeting } from "@/lib/bot-greeting";
 import { botFaceIds, channelSymbolIds, isListed, markColorIds } from "@/lib/marks";
 import { isChatEmoji } from "@/lib/chat-emoji";
 import { loadChatThread } from "@/lib/chat-thread";
-import { clinicShellTag, loadClinicChatItem, loadPendingConfirmations } from "@/lib/clinic-frame";
+import { type ChatUnreadRpcRow, type ChatUnreadState } from "@/lib/chat-unread";
+import {
+  clinicShellTag,
+  loadClinicChatItem,
+  loadUserChatStates,
+} from "@/lib/clinic-frame";
 import { listedPermissions, roleSlug } from "@/lib/permissions";
 
 const uuidPattern =
@@ -262,13 +267,6 @@ export async function loadLatestChatMessages(clinicId: string, chatId: string) {
   return { messages: page.messages, hasOlder: page.hasOlder, nextCursor: page.nextCursor };
 }
 
-export async function fetchPendingConfirmations(clinicId: string) {
-  const user = await requireUser();
-  if (!uuidPattern.test(clinicId)) return [];
-  if (!(await clinicMember(clinicId, user.id))) return [];
-  return loadPendingConfirmations(clinicId);
-}
-
 export async function fetchJoinedChat(clinicId: string, chatId: string) {
   const user = await requireUser();
   if (!uuidPattern.test(clinicId) || !uuidPattern.test(chatId)) return null;
@@ -276,6 +274,58 @@ export async function fetchJoinedChat(clinicId: string, chatId: string) {
   const item = await loadClinicChatItem(clinicId, chatId);
   if (item) touchClinicShell(user.id, clinicId);
   return item;
+}
+
+export async function fetchUserChatStates(): Promise<ChatUnreadState[]> {
+  const user = await requireUser();
+  return loadUserChatStates(user.id);
+}
+
+export async function markChatRead(
+  clinicId: string,
+  chatId: string,
+  upToSeq?: number | null,
+): Promise<{ row?: ChatUnreadRpcRow; error?: string }> {
+  const user = await requireUser();
+  if (!uuidPattern.test(clinicId) || !uuidPattern.test(chatId)) return { error: "Chat non valida." };
+  if (upToSeq !== undefined && upToSeq !== null && (!Number.isSafeInteger(upToSeq) || upToSeq < 0)) {
+    return { error: "Sequenza non valida." };
+  }
+  if (!(await clinicMember(clinicId, user.id))) return { error: "Non fai parte di questo studio." };
+  if (!(await chatInClinic(clinicId, chatId))) return { error: "Questa chat non è in questa clinica." };
+
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc("mark_chat_read", {
+    p_chat_id: chatId,
+    p_up_to_seq: upToSeq ?? null,
+  });
+  if (error) return { error: "Non è stato possibile aggiornare lo stato di lettura." };
+  const row = (Array.isArray(data) ? data[0] : data) as ChatUnreadRpcRow | undefined;
+  return { row };
+}
+
+export async function markChatUnread(
+  clinicId: string,
+  chatId: string,
+): Promise<{ row?: ChatUnreadRpcRow; error?: string }> {
+  const user = await requireUser();
+  if (!uuidPattern.test(clinicId) || !uuidPattern.test(chatId)) return { error: "Chat non valida." };
+  if (!(await clinicMember(clinicId, user.id))) return { error: "Non fai parte di questo studio." };
+  if (!(await chatInClinic(clinicId, chatId))) return { error: "Questa chat non è in questa clinica." };
+
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc("mark_chat_unread", {
+    p_chat_id: chatId,
+  });
+  if (error) return { error: "Non è stato possibile segnare la chat come da leggere." };
+  const row = (Array.isArray(data) ? data[0] : data) as ChatUnreadRpcRow | undefined;
+  return { row };
+}
+
+async function directBotChat(chatId: string) {
+  const supabase = await createClient();
+  const { data } = await supabase.from("chats").select("direct_bot_id").eq("id", chatId).maybeSingle();
+  return Boolean(data?.direct_bot_id);
 }
 
 async function botInClinic(clinicId: string, botId: string) {
@@ -325,7 +375,7 @@ export async function createBot(
 
   const { data: chat, error: chatError } = await supabase
     .from("chats")
-    .insert({ title: name, color, shape: "circle", emoji: "star" })
+    .insert({ title: name, color, shape: "circle", emoji: "speechbubble", direct_bot_id: bot.id })
     .select("id")
     .single();
 
@@ -360,7 +410,7 @@ export async function createBot(
       id: chat.id,
       title: name,
       color,
-      emoji: "star",
+      emoji: "speechbubble",
       preview: botGreeting.replace(/\s+/g, " "),
       activityAt,
       bot: { id: bot.id, name, color, emoji },
@@ -403,7 +453,8 @@ export async function updateChat(
   if (title.length > 80) return { error: "Il titolo sta entro 80 caratteri." };
 
   const supabase = await createClient();
-  const { data: current } = await supabase.from("chats").select("emoji").eq("id", chatId).maybeSingle();
+  const { data: current } = await supabase.from("chats").select("emoji, direct_bot_id").eq("id", chatId).maybeSingle();
+  if (current?.direct_bot_id) return { error: "Il nome e la faccia di questa conversazione stanno sul bot." };
   const kept = emoji === current?.emoji;
   if (!isListed(markColorIds, color) || !(kept || isListed(channelSymbolIds, emoji))) {
     return { error: "Scegli un colore e un simbolo." };
@@ -460,6 +511,13 @@ export async function updateBot(
     .select("id");
   if (error || !data?.length) return { error: "Non è stato possibile modificare il bot." };
 
+  const { error: chatError } = await supabase
+    .from("chats")
+    .update({ title: name, color })
+    .eq("id", chatId)
+    .eq("direct_bot_id", botId);
+  if (chatError) return { error: "Il bot è stato modificato, ma la conversazione no." };
+
   revalidatePath(`/clinics/${clinicId}`);
   touchClinicShell(user.id, clinicId);
   redirect(`/clinics/${clinicId}?chat=${chatId}`);
@@ -481,9 +539,11 @@ export async function addBot(
   if (!(await botInClinic(clinicId, botId))) return { error: "Questo bot non è in questa clinica." };
 
   const supabase = await createClient();
+  if (await directBotChat(chatId)) return { error: "Questa conversazione resta fra te e il bot." };
   const { error } = await supabase.from("chat_participants").insert({ chat_id: chatId, bot_id: botId });
   if (error) {
     if (error.code === "23505") return { error: "Questo bot è già nella chat." };
+    if (error.message.includes("stays between")) return { error: "Questa conversazione resta fra te e il bot." };
     return { error: "Non è stato possibile aggiungere il bot." };
   }
   revalidatePath(`/clinics/${clinicId}`);
@@ -501,9 +561,11 @@ export async function addChatPerson(clinicId: string, chatId: string, userId: st
   if (!(await clinicMember(clinicId, userId))) return { error: "Questa persona non è in questo studio." };
 
   const supabase = await createClient();
+  if (await directBotChat(chatId)) return { error: "Questa conversazione resta fra te e il bot." };
   const { error } = await supabase.from("chat_participants").insert({ chat_id: chatId, user_id: userId });
   if (error) {
     if (error.code === "23505") return { error: "Questa persona è già nella chat." };
+    if (error.message.includes("stays between")) return { error: "Questa conversazione resta fra te e il bot." };
     return { error: "Non è stato possibile aggiungere la persona." };
   }
   revalidatePath(`/clinics/${clinicId}`);
@@ -580,19 +642,22 @@ export async function deleteChat(
 export async function sendMessage(
   clinicId: string,
   chatId: string,
-  _state: FormState,
-  formData: FormData,
+  input: {
+    body: string;
+    replyTo?: string | null;
+    mentionIds?: string[];
+  },
 ): Promise<FormState> {
   const user = await requireUser();
   if (!uuidPattern.test(clinicId) || !uuidPattern.test(chatId)) return { error: "Chat non valida." };
   if (!(await clinicMember(clinicId, user.id))) return { error: "Non fai parte di questo studio." };
   if (!(await chatInClinic(clinicId, chatId))) return { error: "Questa chat non è in questa clinica." };
 
-  const body = String(formData.get("body") ?? "").trim();
+  const body = String(input.body ?? "").trim();
   if (!body) return { error: "Scrivi un messaggio." };
   if (body.length > 4000) return { error: "Il messaggio sta entro 4000 caratteri." };
 
-  const replyRaw = String(formData.get("replyTo") ?? "").trim();
+  const replyRaw = String(input.replyTo ?? "").trim();
   let replyToId: string | null = null;
   if (replyRaw) {
     if (!uuidPattern.test(replyRaw)) return { error: "Il messaggio a cui rispondi non è valido." };
@@ -634,23 +699,22 @@ export async function sendMessage(
 
   const mentionIds = [
     ...new Set(
-      [
-        ...formData.getAll("mentions"),
-        ...String(formData.get("mentionIds") ?? "").split(","),
-      ]
+      (Array.isArray(input.mentionIds) ? input.mentionIds : [])
         .map((value) => String(value).trim())
         .filter((id) => uuidPattern.test(id)),
     ),
   ];
   let mentions: string[] = [];
   if (mentionIds.length > 0) {
-    const { data: mentioned } = await supabase
+    const { data: seats } = await supabase
       .from("chat_participants")
-      .select("bot_id")
-      .eq("chat_id", chatId)
-      .in("bot_id", mentionIds);
+      .select("bot_id, user_id")
+      .eq("chat_id", chatId);
     const seated = new Set(
-      (mentioned ?? []).flatMap((seat) => (typeof seat.bot_id === "string" ? [seat.bot_id] : [])),
+      (seats ?? []).flatMap((seat) => [
+        ...(typeof seat.bot_id === "string" ? [seat.bot_id] : []),
+        ...(typeof seat.user_id === "string" ? [seat.user_id] : []),
+      ]),
     );
     mentions = mentionIds.filter((id) => seated.has(id));
   }
@@ -1599,7 +1663,7 @@ export async function startMastroW(
 
   const { data: chat, error: chatError } = await supabase
     .from("chats")
-    .insert({ title: name, color, shape: "circle", emoji: "star" })
+    .insert({ title: name, color, shape: "circle", emoji: "speechbubble", direct_bot_id: bot.id })
     .select("id")
     .single();
 
@@ -1634,7 +1698,7 @@ export async function startMastroW(
       id: chat.id,
       title: name,
       color,
-      emoji: "star",
+      emoji: "speechbubble",
       preview: mastroWGreeting.replace(/\s+/g, " "),
       activityAt,
       bot: { id: bot.id, name, color, emoji },

@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode, type Ref } from "react";
+import { createPortal } from "react-dom";
 import { Ellipsis } from "lucide-react";
 import { ChatActions } from "@/components/chat-actions";
 import { DeleteChatDialog } from "@/components/delete-chat-dialog";
@@ -13,6 +14,15 @@ export function ChatMenu({
   onEdit,
   onPeople,
   onRemoved,
+  onToggleUnread,
+  unread = false,
+  people = true,
+  children,
+  rootRef: rootRefProp,
+  rootClassName = "relative",
+  buttonClassName,
+  menuClassName,
+  label = "Apri il menu della chat",
 }: {
   selected: boolean;
   clinicId: string;
@@ -21,10 +31,28 @@ export function ChatMenu({
   onEdit: () => void;
   onPeople: () => void;
   onRemoved: (chatId: string) => void;
+  onToggleUnread?: () => void;
+  unread?: boolean;
+  people?: boolean;
+  children?: ReactNode;
+  rootRef?: Ref<HTMLDivElement>;
+  rootClassName?: string;
+  buttonClassName?: string;
+  menuClassName?: string;
+  label?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
+  const externalRef = useRef(rootRefProp);
+  externalRef.current = rootRefProp;
+
+  const setRoot = useCallback((node: HTMLDivElement | null) => {
+    rootRef.current = node;
+    const prop = externalRef.current;
+    if (typeof prop === "function") prop(node);
+    else if (prop) prop.current = node;
+  }, []);
 
   useEffect(() => {
     if (!open) return;
@@ -49,21 +77,35 @@ export function ChatMenu({
   }, [open]);
 
   return (
-    <div ref={rootRef} className="relative">
+    <div ref={setRoot} className={rootClassName}>
       <button
         type="button"
-        aria-label="Apri il menu della chat"
+        aria-label={label}
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
-        className={`flex h-6 w-6 items-center justify-center rounded-full ${
-          selected ? "text-paper hover:bg-white/15" : "text-muted hover:bg-background"
-        }`}
+        className={
+          buttonClassName ??
+          `flex h-6 w-6 items-center justify-center rounded-full ${
+            selected ? "text-paper hover:bg-white/15" : "text-muted hover:bg-background"
+          }`
+        }
       >
-        <Ellipsis className="h-4 w-4" strokeWidth={2} />
+        {children ?? <Ellipsis className="h-4 w-4" strokeWidth={2} />}
       </button>
       {open ? (
         <ChatActions
+          menuClassName={menuClassName}
+          people={people}
+          unread={unread}
+          onToggleUnread={
+            onToggleUnread
+              ? () => {
+                  setOpen(false);
+                  onToggleUnread();
+                }
+              : undefined
+          }
           onEdit={() => {
             setOpen(false);
             onEdit();
@@ -78,16 +120,19 @@ export function ChatMenu({
           }}
         />
       ) : null}
-      {confirming ? (
-        <DeleteChatDialog
-          open
-          clinicId={clinicId}
-          chatId={chatId}
-          name={name}
-          onClose={() => setConfirming(false)}
-          onRemoved={onRemoved}
-        />
-      ) : null}
+      {confirming
+        ? createPortal(
+            <DeleteChatDialog
+              open
+              clinicId={clinicId}
+              chatId={chatId}
+              name={name}
+              onClose={() => setConfirming(false)}
+              onRemoved={onRemoved}
+            />,
+            document.body,
+          )
+        : null}
     </div>
   );
 }

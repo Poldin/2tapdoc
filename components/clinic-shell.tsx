@@ -7,7 +7,9 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { ArrowLeft, Check, ChevronRight, Copy, PanelLeftClose, PanelLeftOpen, Plus, Reply, Search, Send, SmilePlus, Star, ThumbsDown, ThumbsUp, X } from "lucide-react";
 import {
   fetchJoinedChat,
-  fetchPendingConfirmations,
+  fetchUserChatStates,
+  markChatRead,
+  markChatUnread,
   preferMessage,
   reactToMessage,
   sendMessage,
@@ -15,7 +17,17 @@ import {
   type CreatedChat,
   type FormState,
 } from "@/app/clinics/actions";
-import { ClinicChromeProvider } from "@/components/clinic-chrome";
+import { ClinicChromeProvider, type ChatMenuTarget } from "@/components/clinic-chrome";
+import {
+  applyOptimisticReadGuard,
+  applyRpcRowToState,
+  asChatUnreadState,
+  formatUnreadCount,
+  isChatUnread,
+  summarizeClinicUnread,
+  unreadWeight,
+  type ChatUnreadState,
+} from "@/lib/chat-unread";
 import {
   formatDuration,
   formatStepTokens,
@@ -49,9 +61,15 @@ import { ChatTitle } from "@/components/chat-title";
 import { ClinicSwitcher, type ClinicOption } from "@/components/clinic-switcher";
 import { CreateMenu } from "@/components/create-menu";
 import { SearchDialog } from "@/components/search-dialog";
-import { Markdown } from "@/components/markdown";
+import { Markdown, type MentionBadge } from "@/components/markdown";
 
-export type ChatPerson = { id: string; name: string };
+export type ChatPerson = {
+  id: string;
+  name: string;
+  avatarUrl?: string | null;
+  emoji?: string | null;
+  color?: string | null;
+};
 
 export type ChatListItem = {
   id: string;
@@ -62,6 +80,7 @@ export type ChatListItem = {
   activityAt: string;
   people: ChatPerson[];
   bots: BotMark[];
+  directBotId: string | null;
 };
 
 export type ChatReply = {
@@ -83,6 +102,7 @@ export type ReplyDraft = {
   id: string;
   label: string;
   excerpt: string;
+  botId?: string | null;
 };
 
 export type ChatMessage = {
@@ -261,8 +281,9 @@ function AgentSteps({ steps, startOpen = false, live = false }: { steps: AgentSt
 
 export function LiveTrace({ text }: { text: string }) {
   const steps = parseAgentSteps(text);
-  if (steps.length > 0) return <AgentSteps steps={steps} startOpen live />;
-  return <AgentSteps steps={[{ name: "passaggi", input: "", outcome: text }]} startOpen live />;
+  if (steps.length > 0) return <AgentSteps steps={steps} live />;
+  if (text.trim()) return <AgentSteps steps={[{ name: "passaggi", input: "", outcome: text }]} live />;
+  return <AgentSteps steps={[{ name: "modello", input: "", outcome: "" }]} live />;
 }
 
 /** Il messaggio del bot è già in chat: la bozza (faccia che pensa o testo a metà) è un residuo del turno appena chiuso. */
@@ -302,6 +323,7 @@ export function messageStamp(messages: ChatMessage[]) {
         message.authorName ?? "",
         message.authorBot?.name ?? "",
         message.replyTo?.excerpt ?? "",
+        message.mentions.join(","),
         message.emojis.map((emoji) => `${emoji.emoji}:${emoji.mine ? 1 : 0}:${emoji.botId ?? ""}`).join("."),
         message.steps
           .map(
@@ -325,7 +347,7 @@ export type Outgoing = {
   mentions: string[];
 };
 
-function outgoingMessage(item: Outgoing): ChatMessage {
+export function outgoingMessage(item: Outgoing): ChatMessage {
   return {
     id: item.id,
     seq: Number.MAX_SAFE_INTEGER,
@@ -392,7 +414,7 @@ export function threadEntries(messages: ChatMessage[]) {
 
 export function syncDayBadge(
   thread: HTMLDivElement,
-  badge: HTMLParagraphElement | null,
+  badge: HTMLElement | null,
   setDayLabel: (value: string) => void,
 ) {
   const pins = [...thread.querySelectorAll<HTMLElement>("[data-day]")];
@@ -453,7 +475,13 @@ function listItem(chat: CreatedChat): ChatListItem {
     activityAt: chat.activityAt,
     people: [],
     bots: chat.bot ? [chat.bot] : [],
+    directBotId: chat.bot?.id ?? null,
   };
+}
+
+function directFace(chat: ChatListItem) {
+  if (!chat.directBotId) return null;
+  return chat.bots.find((bot) => bot.id === chat.directBotId) ?? null;
 }
 
 function chatLabel(title: string | null) {
@@ -515,6 +543,57 @@ function scheduleDesktopCaret(fieldRef: { current: HTMLTextAreaElement | null })
 
 type ComposerMention = { id: string; name: string };
 
+type MentionTarget =
+  | { id: string; name: string; kind: "bot"; color: string; emoji: string }
+  | {
+      id: string;
+      name: string;
+      kind: "person";
+      avatarUrl?: string | null;
+      emoji?: string | null;
+      color?: string | null;
+    };
+
+function buildMentionTargets(bots: BotMark[], people: ChatPerson[]): MentionTarget[] {
+  const seen = new Set<string>();
+  const list: MentionTarget[] = [];
+  for (const bot of bots) {
+    if (seen.has(bot.id)) continue;
+    seen.add(bot.id);
+    list.push({ id: bot.id, name: bot.name, kind: "bot", color: bot.color, emoji: bot.emoji });
+  }
+  for (const person of people) {
+    if (seen.has(person.id)) continue;
+    seen.add(person.id);
+    list.push({
+      id: person.id,
+      name: person.name,
+      kind: "person",
+      avatarUrl: person.avatarUrl,
+      emoji: person.emoji,
+      color: person.color,
+    });
+  }
+  return list;
+}
+
+function mentionTargetFace(target: MentionTarget | undefined, sizeClass: string, photoSizeClass = sizeClass) {
+  if (!target) return null;
+  if (target.kind === "bot") {
+    return <BotGlyph color={target.color} emoji={target.emoji} plain className={sizeClass} />;
+  }
+  if (target.emoji && target.color) {
+    return <BotGlyph color={target.color} emoji={target.emoji} plain className={sizeClass} />;
+  }
+  if (target.avatarUrl) {
+    return (
+      /* eslint-disable-next-line @next/next/no-img-element */
+      <img src={target.avatarUrl} alt="" className={`${photoSizeClass} shrink-0 rounded-full object-cover`} />
+    );
+  }
+  return null;
+}
+
 function readDraft(clinicId: string, chatId: string) {
   try {
     const raw = sessionStorage.getItem(draftKey(clinicId, chatId)) ?? "";
@@ -546,20 +625,28 @@ function writeDraft(clinicId: string, chatId: string, body: string, mentions: Co
   }
 }
 
-function mentionQuery(value: string, caret: number) {
-  const before = value.slice(0, caret);
-  const at = before.lastIndexOf("@");
-  if (at < 0) return null;
-  if (at > 0 && !/\s/.test(before[at - 1] ?? "")) return null;
-  const query = before.slice(at + 1);
-  if (/[\s\n]/.test(query)) return null;
-  return { start: at, query };
+function mentionChoices(targets: MentionTarget[], query: string) {
+  const needle = query.toLocaleLowerCase("it");
+  const list = needle
+    ? targets.filter((target) => target.name.toLocaleLowerCase("it").includes(needle))
+    : [...targets];
+  return list.sort((a, b) => a.name.localeCompare(b.name, "it"));
 }
 
-function mentionChoices(bots: BotMark[], query: string) {
-  const needle = query.toLocaleLowerCase("it");
-  const list = needle ? bots.filter((bot) => bot.name.toLocaleLowerCase("it").includes(needle)) : [...bots];
-  return list.sort((a, b) => a.name.localeCompare(b.name, "it"));
+function mentionQuery(
+  value: string,
+  caret: number,
+  targets: MentionTarget[],
+  committedStarts: Set<number>,
+) {
+  const before = value.slice(0, caret);
+  const at = before.lastIndexOf("@");
+  if (at < 0 || committedStarts.has(at)) return null;
+  if (at > 0 && !/\s/.test(before[at - 1] ?? "")) return null;
+  const query = before.slice(at + 1);
+  if (query.includes("\n") || /\s{2,}/.test(query)) return null;
+  if (/\s/.test(query) && mentionChoices(targets, query).length === 0) return null;
+  return { start: at, query };
 }
 
 function mentionStart(body: string, token: string, from: number) {
@@ -602,16 +689,44 @@ function mentionsInBody(body: string, items: ComposerMention[]) {
   return ranges.map((range) => ({ id: range.id, name: range.name }));
 }
 
-function ComposerMirror({ body, mentions }: { body: string; mentions: ComposerMention[] }) {
+function ComposerMirror({
+  body,
+  mentions,
+  targets,
+}: {
+  body: string;
+  mentions: ComposerMention[];
+  targets: MentionTarget[];
+}) {
   const ranges = mentionRanges(body, mentions);
+  const targetsById = new Map(targets.map((target) => [target.id, target]));
   const nodes = [];
   let cursor = 0;
   for (const range of ranges) {
     if (range.start > cursor) nodes.push(body.slice(cursor, range.start));
+    const face = mentionTargetFace(targetsById.get(range.id), "h-3.5 w-3.5", "h-3 w-3");
     nodes.push(
-      <span key={`${range.id}-${range.start}`} className="rounded-sm bg-teal/25">
-        {body.slice(range.start, range.end)}
-      </span>,
+      face ? (
+        <span
+          key={`${range.id}-${range.start}`}
+          className="-mr-0.5 -ml-[3px] rounded-md bg-teal/15 py-0.5 pr-0.5 pl-[3px] text-teal ring-1 ring-inset ring-teal/30 [box-decoration-break:clone] [text-shadow:0.018em_0_0_currentColor,-0.018em_0_0_currentColor]"
+        >
+          <span className="relative text-transparent [text-shadow:none]">
+            @
+            <span className="pointer-events-none absolute top-1/2 -left-[1.5px] flex -translate-y-1/2 items-center">
+              {face}
+            </span>
+          </span>
+          {body.slice(range.start + 1, range.end)}
+        </span>
+      ) : (
+        <span
+          key={`${range.id}-${range.start}`}
+          className="-mx-0.5 rounded-md bg-teal/15 px-0.5 py-0.5 text-teal ring-1 ring-inset ring-teal/30 [box-decoration-break:clone] [text-shadow:0.018em_0_0_currentColor,-0.018em_0_0_currentColor]"
+        >
+          {body.slice(range.start, range.end)}
+        </span>
+      ),
     );
     cursor = range.end;
   }
@@ -623,9 +738,9 @@ export function MessageComposer({
   clinicId,
   chatId,
   bots,
+  people = [],
   replyTo,
   onClearReply,
-  onWaiting,
   caretEpoch,
   onOutgoing,
   onOutgoingSettled,
@@ -633,9 +748,9 @@ export function MessageComposer({
   clinicId: string;
   chatId: string;
   bots: BotMark[];
+  people?: ChatPerson[];
   replyTo: ReplyDraft | null;
   onClearReply: () => void;
-  onWaiting?: (waiting: boolean) => void;
   caretEpoch: number;
   onOutgoing?: (input: {
     id: string;
@@ -644,11 +759,10 @@ export function MessageComposer({
     replyTo: ReplyDraft | null;
     mentions: string[];
   }) => void;
-  onOutgoingSettled?: (id: string) => void;
+  onOutgoingSettled?: (id: string, ok: boolean) => void;
 }) {
   const formRef = useRef<HTMLFormElement>(null);
   const fieldRef = useRef<HTMLTextAreaElement>(null);
-  const onWaitingRef = useRef(onWaiting);
   const onClearReplyRef = useRef(onClearReply);
   const sentRef = useRef<number | undefined>(undefined);
   const sentSnapshot = useRef<string | null>(null);
@@ -657,10 +771,6 @@ export function MessageComposer({
   const reportedFail = useRef<number | undefined>(undefined);
   const onOutgoingRef = useRef(onOutgoing);
   const onOutgoingSettledRef = useRef(onOutgoingSettled);
-  onWaitingRef.current = onWaiting;
-  onClearReplyRef.current = onClearReply;
-  onOutgoingRef.current = onOutgoing;
-  onOutgoingSettledRef.current = onOutgoingSettled;
   const [ready, setReady] = useState(false);
   const [desktop, setDesktop] = useState(false);
   const [picker, setPicker] = useState<{ start: number; query: string } | null>(null);
@@ -668,22 +778,27 @@ export function MessageComposer({
   const [plain, setPlain] = useState("");
   const [mentions, setMentions] = useState<ComposerMention[]>([]);
   const mentionsRef = useRef<ComposerMention[]>([]);
-  const mentionFieldRef = useRef<HTMLInputElement>(null);
   const mirrorRef = useRef<HTMLDivElement>(null);
+  const targets = buildMentionTargets(bots, people);
+
+  useLayoutEffect(() => {
+    onClearReplyRef.current = onClearReply;
+    onOutgoingRef.current = onOutgoing;
+    onOutgoingSettledRef.current = onOutgoingSettled;
+  });
 
   function rememberMentions(items: ComposerMention[]) {
     mentionsRef.current = items;
     setMentions(items);
-    if (mentionFieldRef.current) {
-      mentionFieldRef.current.value = [...new Set(items.map((item) => item.id))].join(",");
-    }
   }
 
   function applyComposer(field: HTMLTextAreaElement, items: ComposerMention[]) {
-    const kept = mentionsInBody(field.value, items);
+    const ranges = mentionRanges(field.value, items);
+    const kept = ranges.map((range) => ({ id: range.id, name: range.name }));
+    const committedStarts = new Set(ranges.map((range) => range.start));
     rememberMentions(kept);
     setPlain(field.value);
-    setPicker(mentionQuery(field.value, field.selectionStart ?? field.value.length));
+    setPicker(mentionQuery(field.value, field.selectionStart ?? field.value.length, targets, committedStarts));
     setPickIndex(0);
     writeDraft(clinicId, chatId, field.value, kept);
     setReady(field.value.trim().length > 0);
@@ -692,23 +807,41 @@ export function MessageComposer({
     if (mirror) mirror.scrollTop = field.scrollTop;
   }
 
-  function chooseMention(bot: BotMark) {
+  function chooseMention(target: MentionTarget) {
     const field = fieldRef.current;
     const query = picker;
     if (!field || !query) return;
     const caret = field.selectionStart ?? field.value.length;
-    const next = `${field.value.slice(0, query.start)}@${bot.name} ${field.value.slice(caret)}`;
+    const next = `${field.value.slice(0, query.start)}@${target.name} ${field.value.slice(caret)}`;
     field.value = next;
-    const cursor = query.start + bot.name.length + 2;
+    const cursor = query.start + target.name.length + 2;
     field.setSelectionRange(cursor, cursor);
-    applyComposer(field, [...mentionsRef.current, { id: bot.id, name: bot.name }]);
+    applyComposer(field, [...mentionsRef.current, { id: target.id, name: target.name }]);
     field.focus();
   }
-  const pickerBots = picker ? mentionChoices(bots, picker.query) : [];
-  if (pickIndex > 0 && pickIndex >= pickerBots.length) setPickIndex(0);
+
+  const pickerItems = picker ? mentionChoices(targets, picker.query) : [];
+  if (pickIndex > 0 && pickIndex >= pickerItems.length) setPickIndex(0);
+  const mentionIds = [...new Set(mentions.map((item) => item.id))];
+
   const [state, action, pending] = useActionState<FormState & { failed?: number }, FormData>(
-    async (previous, formData) => {
-      const result = await sendMessage(clinicId, chatId, previous, formData);
+    async (_previous, formData) => {
+      const body = String(formData.get("body") ?? "");
+      const replyRaw = String(formData.get("replyTo") ?? "").trim();
+      const ids = [
+        ...new Set([
+          ...sentMentions.current.map((item) => item.id),
+          ...String(formData.get("mentionIds") ?? "")
+            .split(",")
+            .map((value) => value.trim())
+            .filter(Boolean),
+        ]),
+      ];
+      const result = await sendMessage(clinicId, chatId, {
+        body,
+        replyTo: replyRaw || null,
+        mentionIds: ids,
+      });
       return result.error ? { ...result, failed: Date.now() } : result;
     },
     {},
@@ -739,7 +872,7 @@ export function MessageComposer({
       sentSnapshot.current = null;
       const id = outgoingId.current;
       outgoingId.current = null;
-      if (id) onOutgoingSettledRef.current?.(id);
+      if (id) onOutgoingSettledRef.current?.(id, false);
       if (snapshot) {
         field.value = snapshot;
         rememberMentions(sentMentions.current);
@@ -762,7 +895,7 @@ export function MessageComposer({
       onClearReplyRef.current();
       const id = outgoingId.current;
       outgoingId.current = null;
-      if (id) onOutgoingSettledRef.current?.(id);
+      if (id) onOutgoingSettledRef.current?.(id, true);
     }
     return scheduleDesktopCaret(fieldRef);
   }, [state.sent]);
@@ -776,11 +909,6 @@ export function MessageComposer({
     if (replyTo) fieldRef.current?.focus();
   }, [replyTo]);
 
-  useEffect(() => {
-    if (pending) onWaitingRef.current?.(true);
-    else if (state.error) onWaitingRef.current?.(false);
-  }, [pending, state.error]);
-
   return (
     <form
       ref={formRef}
@@ -791,19 +919,19 @@ export function MessageComposer({
         const body = snapshot.trim();
         if (!body) return;
         const kept = mentionsInBody(snapshot, mentionsRef.current);
-        rememberMentions(kept);
+        const ids = [...new Set(kept.map((item) => item.id))];
         sentSnapshot.current = snapshot;
         sentMentions.current = kept;
-        onWaitingRef.current?.(bots.length === 1 || kept.length > 0);
         const id = `pending-${crypto.randomUUID()}`;
         outgoingId.current = id;
         flushSync(() => {
+          rememberMentions(kept);
           onOutgoingRef.current?.({
             id,
             chatId,
             body,
             replyTo,
-            mentions: [...new Set(kept.map((item) => item.id))],
+            mentions: ids,
           });
         });
         queueMicrotask(() => {
@@ -821,7 +949,7 @@ export function MessageComposer({
       className="flex flex-col gap-2 px-4 pb-3"
     >
       {state.error ? <p className="px-4 text-sm text-teal">{state.error}</p> : null}
-      <input ref={mentionFieldRef} type="hidden" name="mentionIds" defaultValue="" />
+      <input type="hidden" name="mentionIds" value={mentionIds.join(",")} />
       {replyTo ? (
         <div className="flex items-stretch gap-2 rounded-2xl border border-line bg-paper px-3 py-2">
           <span className="w-0.5 shrink-0 rounded-full bg-ink" />
@@ -841,14 +969,14 @@ export function MessageComposer({
         </div>
       ) : null}
       <div className="relative flex items-end gap-2">
-        {picker && pickerBots.length > 0 ? (
+        {picker && pickerItems.length > 0 ? (
           <ul
             id="mention-list"
             className="absolute bottom-full left-0 z-30 mb-2 max-h-48 w-full max-w-sm overflow-y-auto rounded-2xl border border-line bg-paper p-1 shadow-sm"
             role="listbox"
           >
-            {pickerBots.map((bot, index) => (
-              <li key={bot.id}>
+            {pickerItems.map((target, index) => (
+              <li key={target.id}>
                 <button
                   type="button"
                   role="option"
@@ -856,13 +984,17 @@ export function MessageComposer({
                   ref={index === pickIndex ? (node) => node?.scrollIntoView({ block: "nearest" }) : undefined}
                   onMouseDown={(event) => event.preventDefault()}
                   onMouseEnter={() => setPickIndex(index)}
-                  onClick={() => chooseMention(bot)}
+                  onClick={() => chooseMention(target)}
                   className={`flex w-full items-center gap-2 rounded-2xl px-2 py-1.5 text-left text-sm transition-colors duration-200 motion-reduce:transition-none hover:bg-line ${
                     index === pickIndex ? "bg-line" : ""
                   }`}
                 >
-                  <BotGlyph color={bot.color} emoji={bot.emoji} plain className="h-6 w-6" />
-                  <span className="truncate">{bot.name}</span>
+                  {mentionTargetFace(target, "h-6 w-6") ?? (
+                    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-background text-xs font-medium">
+                      {(target.name.trim()[0] || "?").toUpperCase()}
+                    </span>
+                  )}
+                  <span className="truncate">{target.name}</span>
                 </button>
               </li>
             ))}
@@ -874,7 +1006,7 @@ export function MessageComposer({
             aria-hidden
             className="pointer-events-none absolute inset-0 overflow-hidden px-4 py-3 text-sm leading-5 wrap-anywhere whitespace-pre-wrap text-ink"
           >
-            {plain ? <ComposerMirror body={plain} mentions={mentions} /> : null}
+            {plain ? <ComposerMirror body={plain} mentions={mentions} targets={targets} /> : null}
           </div>
           <textarea
             ref={fieldRef}
@@ -884,8 +1016,8 @@ export function MessageComposer({
             maxLength={4000}
             placeholder="Scrivi qui..."
             aria-label="Messaggio"
-            aria-expanded={Boolean(picker && pickerBots.length > 0)}
-            aria-controls={picker && pickerBots.length > 0 ? "mention-list" : undefined}
+            aria-expanded={Boolean(picker && pickerItems.length > 0)}
+            aria-controls={picker && pickerItems.length > 0 ? "mention-list" : undefined}
             disabled={pending && !desktop}
             onInput={(event) => applyComposer(event.currentTarget, mentionsRef.current)}
             onClick={(event) => applyComposer(event.currentTarget, mentionsRef.current)}
@@ -922,15 +1054,15 @@ export function MessageComposer({
                   }
                 }
               }
-              if (picker && pickerBots.length > 0) {
+              if (picker && pickerItems.length > 0) {
                 if (event.key === "ArrowDown") {
                   event.preventDefault();
-                  setPickIndex((index) => (index + 1) % pickerBots.length);
+                  setPickIndex((index) => (index + 1) % pickerItems.length);
                   return;
                 }
                 if (event.key === "ArrowUp") {
                   event.preventDefault();
-                  setPickIndex((index) => (index - 1 + pickerBots.length) % pickerBots.length);
+                  setPickIndex((index) => (index - 1 + pickerItems.length) % pickerItems.length);
                   return;
                 }
                 if (event.key === "Escape") {
@@ -943,8 +1075,8 @@ export function MessageComposer({
                   (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing)
                 ) {
                   event.preventDefault();
-                  const bot = pickerBots[pickIndex];
-                  if (bot) chooseMention(bot);
+                  const target = pickerItems[pickIndex];
+                  if (target) chooseMention(target);
                   return;
                 }
               }
@@ -952,7 +1084,7 @@ export function MessageComposer({
               event.preventDefault();
               if (!pending && event.currentTarget.value.trim()) formRef.current?.requestSubmit();
             }}
-            className="composer-field relative z-10 max-h-40 min-h-12 w-full resize-none overflow-x-hidden overflow-y-auto rounded-3xl border-0 bg-transparent px-4 py-3 text-sm leading-5 wrap-anywhere text-transparent caret-ink outline-none placeholder:text-muted"
+            className="composer-field relative z-10 block max-h-40 min-h-12 w-full resize-none overflow-x-hidden overflow-y-auto rounded-3xl border-0 bg-transparent px-4 py-3 text-sm leading-5 wrap-anywhere text-transparent caret-ink outline-none placeholder:text-muted"
           />
         </div>
         <button
@@ -1169,6 +1301,7 @@ export function ChatTurn({
   named,
   entered,
   bots,
+  people = [],
   error,
   onReply,
 }: {
@@ -1178,6 +1311,7 @@ export function ChatTurn({
   named: boolean;
   entered: boolean;
   bots: BotMark[];
+  people?: ChatPerson[];
   error?: string | null;
   onReply: (reply: ReplyDraft) => void;
 }) {
@@ -1286,6 +1420,7 @@ export function ChatTurn({
             id: message.id,
             label: speakerName(message),
             excerpt: markdownToPlainText(message.body).slice(0, 180),
+            botId: message.botId,
           })
         }
         className="flex h-7 w-7 items-center justify-center rounded-full text-muted"
@@ -1335,7 +1470,22 @@ export function ChatTurn({
           <Markdown
             source={message.body}
             lead={message.authorBot ? <BotLead bot={message.authorBot} /> : undefined}
-            mentions={bots.filter((bot) => message.mentions.includes(bot.id))}
+            mentions={[
+              ...bots
+                .filter((bot) => message.mentions.includes(bot.id))
+                .map((bot): MentionBadge => ({ kind: "bot", name: bot.name, emoji: bot.emoji, color: bot.color })),
+              ...people
+                .filter((person) => message.mentions.includes(person.id))
+                .map(
+                  (person): MentionBadge => ({
+                    kind: "person",
+                    name: person.name,
+                    avatarUrl: person.avatarUrl,
+                    emoji: person.emoji,
+                    color: person.color,
+                  }),
+                ),
+            ]}
             mine={message.mine}
           />
         </div>
@@ -1384,12 +1534,30 @@ export function ChatTurn({
 const listChatPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+function indexChatStates(list: ChatUnreadState[]) {
+  const map: Record<string, ChatUnreadState> = {};
+  for (const item of list) map[item.chatId] = item;
+  return map;
+}
+
+function pendingFromRow(row: unknown, names: Map<string, string>): BotActionRequest | null {
+  if (!row || typeof row !== "object") return null;
+  const record = row as { id?: unknown; action?: unknown; status?: unknown; bot_id?: unknown };
+  if (typeof record.id !== "string" || record.status !== "pending") return null;
+  const action = typeof record.action === "string" ? record.action.trim() : "";
+  if (!action) return null;
+  const botId = typeof record.bot_id === "string" ? record.bot_id : "";
+  return { id: record.id, action, botName: names.get(botId) || "Un agente" };
+}
+
 export function ClinicShell({
   clinicId,
   clinicName,
   clinics,
   email,
   chats,
+  initialChatStates,
+  initialPendingConfirmations,
   currentUserId,
   clinicPeople,
   myBots,
@@ -1401,6 +1569,8 @@ export function ClinicShell({
   clinics: ClinicOption[];
   email: string;
   chats: ChatListItem[];
+  initialChatStates: ChatUnreadState[];
+  initialPendingConfirmations: BotActionRequest[];
   currentUserId: string;
   clinicPeople: ChatPerson[];
   myBots: BotMark[];
@@ -1455,6 +1625,207 @@ export function ClinicShell({
   const [added, setAdded] = useState<ChatListItem[]>([]);
   const [removed, setRemoved] = useState<string[]>([]);
   const [patches, setPatches] = useState<Record<string, { preview: string | null; activityAt: string }>>({});
+  const [allChatStates, setAllChatStates] = useState<Record<string, ChatUnreadState>>(() =>
+    indexChatStates(initialChatStates),
+  );
+  const [statesClinicSeen, setStatesClinicSeen] = useState(clinicId);
+  if (statesClinicSeen !== clinicId) {
+    setStatesClinicSeen(clinicId);
+    setAllChatStates(indexChatStates(initialChatStates));
+  }
+  const allChatStatesRef = useRef(allChatStates);
+  const optimisticReadSeqRef = useRef<Map<string, number>>(new Map());
+  const optimisticClearedMarkedRef = useRef<Set<string>>(new Set());
+  const inFlightReadSeqRef = useRef<Map<string, number>>(new Map());
+  const failedReadSeqRef = useRef<Map<string, number>>(new Map());
+  const manualUnreadIdsRef = useRef<Set<string>>(new Set());
+  const prevSelectedChatRef = useRef<string | null>(selectedChatId);
+  const knownChatIdsRef = useRef<Set<string>>(new Set());
+
+  useLayoutEffect(() => {
+    allChatStatesRef.current = allChatStates;
+  }, [allChatStates]);
+
+  useEffect(() => {
+    if (prevSelectedChatRef.current && prevSelectedChatRef.current !== selectedChatId) {
+      manualUnreadIdsRef.current.delete(prevSelectedChatRef.current);
+    }
+    prevSelectedChatRef.current = selectedChatId;
+  }, [selectedChatId]);
+
+  const reconcileChatStates = useCallback(() => {
+    void fetchUserChatStates().then((rows) => {
+      setAllChatStates((current) => {
+        const next: Record<string, ChatUnreadState> = {};
+        for (const raw of rows) {
+          const optSeq = optimisticReadSeqRef.current.get(raw.chatId);
+          const optClear = optimisticClearedMarkedRef.current.has(raw.chatId);
+          const guarded = applyOptimisticReadGuard(raw, optSeq, optClear);
+          if (optSeq !== undefined && raw.lastReadSeq >= optSeq && !raw.markedUnread) {
+            optimisticReadSeqRef.current.delete(raw.chatId);
+            optimisticClearedMarkedRef.current.delete(raw.chatId);
+          }
+          next[guarded.chatId] = guarded;
+        }
+        // Keep any optimistic-only entry for a chat just marked unread locally
+        for (const [chatId, prev] of Object.entries(current)) {
+          if (!next[chatId] && manualUnreadIdsRef.current.has(chatId)) {
+            next[chatId] = prev;
+          }
+        }
+        return next;
+      });
+    });
+  }, []);
+
+  const isManuallyUnread = useCallback((chatId: string) => manualUnreadIdsRef.current.has(chatId), []);
+
+  const clearManualUnread = useCallback((chatId: string) => {
+    manualUnreadIdsRef.current.delete(chatId);
+    optimisticClearedMarkedRef.current.add(chatId);
+    setAllChatStates((prev) => {
+      const existing = prev[chatId];
+      if (!existing || !existing.markedUnread) return prev;
+      return { ...prev, [chatId]: { ...existing, markedUnread: false } };
+    });
+  }, []);
+
+  const markRead = useCallback(
+    (chatId: string, upToSeq?: number | null, options?: { force?: boolean }) => {
+      const force = Boolean(options?.force);
+      if (!force && manualUnreadIdsRef.current.has(chatId)) return;
+      if (force) manualUnreadIdsRef.current.delete(chatId);
+
+      const current = allChatStatesRef.current[chatId];
+      const targetSeq =
+        typeof upToSeq === "number" && Number.isSafeInteger(upToSeq) && upToSeq >= 0
+          ? upToSeq
+          : (current?.lastMessageSeq ?? 0);
+
+      const hasWork = Boolean(
+        force ||
+          !current ||
+          current.unreadCount > 0 ||
+          current.markedUnread ||
+          targetSeq > current.lastReadSeq,
+      );
+      if (!hasWork) return;
+      // Automatic retries of a failed read would loop: the reconcile below re-triggers the caller.
+      if (!force && failedReadSeqRef.current.get(chatId) === targetSeq) return;
+
+      const lastInFlight = inFlightReadSeqRef.current.get(chatId);
+      if (
+        !force &&
+        lastInFlight !== undefined &&
+        targetSeq <= lastInFlight &&
+        !current?.markedUnread &&
+        (current?.unreadCount ?? 0) === 0
+      ) {
+        return;
+      }
+
+      inFlightReadSeqRef.current.set(chatId, targetSeq);
+      const prevOpt = optimisticReadSeqRef.current.get(chatId) ?? 0;
+      const nextOpt = Math.max(prevOpt, targetSeq);
+      optimisticReadSeqRef.current.set(chatId, nextOpt);
+      optimisticClearedMarkedRef.current.add(chatId);
+
+      setAllChatStates((prev) => {
+        const existing = prev[chatId];
+        if (!existing) return prev;
+        const caughtUp = targetSeq >= existing.lastMessageSeq;
+        if (
+          existing.lastReadSeq >= targetSeq &&
+          !existing.markedUnread &&
+          (!caughtUp || existing.unreadCount === 0)
+        ) {
+          return prev;
+        }
+        return {
+          ...prev,
+          [chatId]: {
+            ...existing,
+            lastReadSeq: Math.max(existing.lastReadSeq, targetSeq),
+            unreadCount: caughtUp ? 0 : existing.unreadCount,
+            unreadMentionsCount: caughtUp ? 0 : existing.unreadMentionsCount,
+            markedUnread: false,
+          },
+        };
+      });
+
+      void markChatRead(clinicId, chatId, upToSeq ?? null).then((result) => {
+        if (result.error || !result.row) {
+          failedReadSeqRef.current.set(chatId, targetSeq);
+          inFlightReadSeqRef.current.delete(chatId);
+          optimisticReadSeqRef.current.delete(chatId);
+          optimisticClearedMarkedRef.current.delete(chatId);
+          reconcileChatStates();
+          return;
+        }
+        failedReadSeqRef.current.delete(chatId);
+        setAllChatStates((prev) => {
+          const updated = applyRpcRowToState(prev[chatId], clinicId, result.row!);
+          if (!updated) return prev;
+          const optSeq = optimisticReadSeqRef.current.get(chatId);
+          const optClear = optimisticClearedMarkedRef.current.has(chatId);
+          const guarded = applyOptimisticReadGuard(updated, optSeq, optClear);
+          if (optSeq !== undefined && updated.lastReadSeq >= optSeq && !updated.markedUnread) {
+            optimisticReadSeqRef.current.delete(chatId);
+            optimisticClearedMarkedRef.current.delete(chatId);
+          }
+          return { ...prev, [chatId]: guarded };
+        });
+      });
+    },
+    [clinicId, reconcileChatStates],
+  );
+
+  const markUnread = useCallback(
+    (chatId: string) => {
+      optimisticReadSeqRef.current.delete(chatId);
+      optimisticClearedMarkedRef.current.delete(chatId);
+      inFlightReadSeqRef.current.delete(chatId);
+      if (chatId === prevSelectedChatRef.current) {
+        manualUnreadIdsRef.current.add(chatId);
+      }
+
+      setAllChatStates((prev) => {
+        const existing = prev[chatId];
+        if (existing) {
+          return { ...prev, [chatId]: { ...existing, markedUnread: true } };
+        }
+        return {
+          ...prev,
+          [chatId]: {
+            chatId,
+            clinicId,
+            lastReadSeq: 0,
+            unreadCount: 0,
+            unreadMentionsCount: 0,
+            markedUnread: true,
+            lastMessageSeq: 0,
+            lastMessageAt: null,
+            lastMessagePreview: null,
+          },
+        };
+      });
+
+      void markChatUnread(clinicId, chatId).then((result) => {
+        if (result.error || !result.row) {
+          manualUnreadIdsRef.current.delete(chatId);
+          reconcileChatStates();
+          return;
+        }
+        setAllChatStates((prev) => {
+          const updated = applyRpcRowToState(prev[chatId], clinicId, result.row!);
+          if (!updated) return prev;
+          return { ...prev, [chatId]: updated };
+        });
+      });
+    },
+    [clinicId, reconcileChatStates],
+  );
+
   const noteActivity = useCallback((chatId: string, preview: string | null, activityAt: string) => {
     setPatches((current) => {
       const prev = current[chatId];
@@ -1469,12 +1840,46 @@ export function ClinicShell({
     ...chats.filter((chat) => !hidden.has(chat.id)),
   ]
     .map((chat) => {
+      let preview = chat.preview;
+      let activityAt = chat.activityAt;
       const patch = patches[chat.id];
-      if (!patch || patch.activityAt < chat.activityAt) return chat;
-      if (patch.activityAt === chat.activityAt && patch.preview === chat.preview) return chat;
-      return { ...chat, preview: patch.preview, activityAt: patch.activityAt };
+      if (patch && patch.activityAt >= activityAt) {
+        activityAt = patch.activityAt;
+        preview = patch.preview;
+      }
+      const state = allChatStates[chat.id];
+      if (state?.lastMessageAt && state.lastMessageAt >= activityAt) {
+        activityAt = state.lastMessageAt;
+        if (state.lastMessagePreview !== null) preview = state.lastMessagePreview;
+      }
+      if (activityAt === chat.activityAt && preview === chat.preview) return chat;
+      return { ...chat, preview, activityAt };
     })
     .sort((a, b) => b.activityAt.localeCompare(a.activityAt));
+
+  useLayoutEffect(() => {
+    knownChatIdsRef.current = new Set(visibleChats.map((chat) => chat.id));
+  }, [visibleChats]);
+
+  const clinicUnread = summarizeClinicUnread(Object.values(allChatStates));
+  const currentClinicUnreadTotal = visibleChats.reduce(
+    (sum, chat) => sum + unreadWeight(allChatStates[chat.id]),
+    0,
+  );
+  const otherChatsUnreadTotal = visibleChats.reduce(
+    (sum, chat) => (chat.id === selectedChatId ? sum : sum + unreadWeight(allChatStates[chat.id])),
+    0,
+  );
+
+  useEffect(() => {
+    const stripPrefix = (title: string) => title.replace(/^\(\d+\+?\)\s+/, "");
+    const base = stripPrefix(document.title) || `${clinicName} · Clinico`;
+    document.title =
+      currentClinicUnreadTotal > 0 ? `(${formatUnreadCount(currentClinicUnreadTotal)}) ${base}` : base;
+    return () => {
+      document.title = stripPrefix(document.title);
+    };
+  }, [currentClinicUnreadTotal, clinicName]);
   const rows = placeByRecency(visibleChats, [
     { id: agendaListId, at: shownRecency.agendaAt },
     { id: patientsListId, at: shownRecency.patientsAt },
@@ -1493,8 +1898,19 @@ export function ClinicShell({
   const quietChatIds = useRef(new Set<string>());
   const creatingBot = useRef(false);
   creatingBot.current = botOpen && botDraft === null;
-  const [pendingConfirmations, setPendingConfirmations] = useState<BotActionRequest[]>([]);
-  const pendingConfirmation = pendingConfirmations[0] ?? null;
+  const [pendingConfirmations, setPendingConfirmations] = useState(initialPendingConfirmations);
+  const [confirmationsClinicSeen, setConfirmationsClinicSeen] = useState(clinicId);
+  if (confirmationsClinicSeen !== clinicId) {
+    setConfirmationsClinicSeen(clinicId);
+    setPendingConfirmations(initialPendingConfirmations);
+  }
+  const shownConfirmations = confirmationsClinicSeen === clinicId ? pendingConfirmations : initialPendingConfirmations;
+  const pendingConfirmation = shownConfirmations[0] ?? null;
+  const botNamesRef = useRef(new Map<string, string>());
+  botNamesRef.current = new Map<string, string>([
+    ...myBots.map((bot) => [bot.id, bot.name] as const),
+    ...chats.flatMap((chat) => chat.bots.map((bot) => [bot.id, bot.name] as const)),
+  ]);
 
 
   useEffect(() => {
@@ -1539,22 +1955,29 @@ export function ClinicShell({
 
   useEffect(() => {
     const supabase = createClient();
-    let timer = 0;
     let stopped = false;
-    const pull = () => {
-      window.clearTimeout(timer);
-      timer = window.setTimeout(() => {
-        void fetchPendingConfirmations(clinicId).then((items) => {
-          if (!stopped) setPendingConfirmations(items);
-        });
-      }, 50);
+    const apply = (payload: { eventType: string; new: Record<string, unknown>; old: Record<string, unknown> }) => {
+      const row = payload.eventType === "DELETE" ? payload.old : payload.new;
+      const id = typeof row.id === "string" ? row.id : null;
+      if (!id) return;
+      const next = payload.eventType === "DELETE" ? null : pendingFromRow(row, botNamesRef.current);
+      setPendingConfirmations((current) => {
+        const index = current.findIndex((item) => item.id === id);
+        if (!next) return index === -1 ? current : current.filter((item) => item.id !== id);
+        if (index === -1) return [...current, next];
+        if (current[index].action === next.action && current[index].botName === next.botName) return current;
+        const copy = current.slice();
+        copy[index] = next;
+        return copy;
+      });
     };
-    pull();
     const channel = supabase.channel(`clinic-confirmations:${clinicId}`);
     channel.on(
       "postgres_changes",
       { event: "*", schema: "public", table: "bot_confirmations", filter: `clinic_id=eq.${clinicId}` },
-      pull,
+      (payload) => {
+        if (!stopped) apply(payload);
+      },
     );
     void supabase.auth.getSession().then(({ data }) => {
       if (stopped) return;
@@ -1566,10 +1989,96 @@ export function ClinicShell({
     });
     return () => {
       stopped = true;
-      window.clearTimeout(timer);
       void supabase.removeChannel(channel);
     };
   }, [clinicId]);
+
+  useEffect(() => {
+    const supabase = createClient();
+    let reconcileTimer = 0;
+    let stopped = false;
+    let opened = false;
+
+    const scheduleReconcile = () => {
+      window.clearTimeout(reconcileTimer);
+      reconcileTimer = window.setTimeout(() => {
+        if (!stopped) reconcileChatStates();
+      }, 150);
+    };
+
+    const channel = supabase.channel(`user-chat-state:${currentUserId}`);
+    channel.on(
+      "postgres_changes",
+      {
+        event: "*",
+        schema: "public",
+        table: "chat_user_state",
+        filter: `user_id=eq.${currentUserId}`,
+      },
+      (payload) => {
+        if (stopped) return;
+        if (payload.eventType === "DELETE") {
+          const deletedId = (payload.old as { chat_id?: unknown } | null)?.chat_id;
+          if (typeof deletedId === "string") {
+            setAllChatStates((current) => {
+              if (!(deletedId in current)) return current;
+              const next = { ...current };
+              delete next[deletedId];
+              return next;
+            });
+          }
+          return;
+        }
+        const parsed = asChatUnreadState(payload.new);
+        if (!parsed) return;
+        const optSeq = optimisticReadSeqRef.current.get(parsed.chatId);
+        const optClear = optimisticClearedMarkedRef.current.has(parsed.chatId);
+        const guarded = applyOptimisticReadGuard(parsed, optSeq, optClear);
+        if (optSeq !== undefined && parsed.lastReadSeq >= optSeq && !parsed.markedUnread) {
+          optimisticReadSeqRef.current.delete(parsed.chatId);
+          optimisticClearedMarkedRef.current.delete(parsed.chatId);
+        }
+        setAllChatStates((current) => ({ ...current, [guarded.chatId]: guarded }));
+
+        if (
+          parsed.clinicId === clinicId &&
+          !knownChatIdsRef.current.has(parsed.chatId) &&
+          !creatingBot.current &&
+          !quietChatIds.current.has(parsed.chatId)
+        ) {
+          void fetchJoinedChat(clinicId, parsed.chatId).then((item) => {
+            if (stopped || !item) return;
+            setAdded((current) => [item, ...current.filter((entry) => entry.id !== item.id)]);
+            setRemoved((current) => current.filter((id) => id !== item.id));
+          });
+        }
+      },
+    );
+
+    const onOnline = () => scheduleReconcile();
+    window.addEventListener("online", onOnline);
+
+    void supabase.auth.getSession().then(({ data }) => {
+      if (stopped) return;
+      const token = data.session?.access_token;
+      const ready = token ? supabase.realtime.setAuth(token) : Promise.resolve();
+      void ready.then(() => {
+        if (stopped) return;
+        channel.subscribe((status) => {
+          if (status !== "SUBSCRIBED" || stopped) return;
+          if (opened) scheduleReconcile();
+          opened = true;
+        });
+      });
+    });
+
+    return () => {
+      stopped = true;
+      window.clearTimeout(reconcileTimer);
+      window.removeEventListener("online", onOnline);
+      void supabase.removeChannel(channel);
+    };
+  }, [currentUserId, clinicId, reconcileChatStates]);
 
   function onChatCreated(chat: CreatedChat) {
     const item = listItem(chat);
@@ -1595,6 +2104,17 @@ export function ClinicShell({
   function onChatRemoved(chatId: string) {
     setAdded((current) => current.filter((entry) => entry.id !== chatId));
     setRemoved((current) => (current.includes(chatId) ? current : [...current, chatId]));
+    setAllChatStates((current) => {
+      if (!(chatId in current)) return current;
+      const next = { ...current };
+      delete next[chatId];
+      return next;
+    });
+    manualUnreadIdsRef.current.delete(chatId);
+    optimisticReadSeqRef.current.delete(chatId);
+    optimisticClearedMarkedRef.current.delete(chatId);
+    inFlightReadSeqRef.current.delete(chatId);
+    failedReadSeqRef.current.delete(chatId);
   }
 
   useLayoutEffect(() => {
@@ -1661,8 +2181,69 @@ export function ClinicShell({
     return () => cancelAnimationFrame(frame);
   }, [focusBox]);
 
+  function chatMenuTarget(chatId: string): ChatMenuTarget | null {
+    const chat = visibleChats.find((item) => item.id === chatId);
+    if (!chat) return null;
+    const face = directFace(chat);
+    const unread = isChatUnread(allChatStates[chat.id]);
+    return {
+      clinicId,
+      chatId: chat.id,
+      name: chatName(chat),
+      people: !chat.directBotId,
+      unread,
+      onToggleUnread: () => {
+        if (unread) markRead(chat.id, null, { force: true });
+        else markUnread(chat.id);
+      },
+      onRemoved: onChatRemoved,
+      onPeople: () => {
+        setSearchOpen(false);
+        setMenuOpen(false);
+        setSeatsChatId(chat.id);
+      },
+      onEdit: () => {
+        setSearchOpen(false);
+        setMenuOpen(false);
+        if (face) {
+          setBotDraft({
+            botId: face.id,
+            chatId: chat.id,
+            name: face.name,
+            color: face.color,
+            emoji: face.emoji,
+          });
+          setBotOpen(true);
+          setChannelOpen(false);
+          setChannelDraft(null);
+          return;
+        }
+        setChannelDraft({
+          chatId: chat.id,
+          title: chat.title ?? "",
+          color: chat.color,
+          emoji: chat.emoji,
+        });
+        setChannelOpen(true);
+        setBotOpen(false);
+      },
+    };
+  }
+
   return (
-    <ClinicChromeProvider value={{ onChatCreated, noteActivity }}>
+    <ClinicChromeProvider
+      value={{
+        onChatCreated,
+        noteActivity,
+        chatStates: allChatStates,
+        listOpen,
+        isManuallyUnread,
+        clearManualUnread,
+        markRead,
+        markUnread,
+        chatMenuTarget,
+      }}
+    >
     <div className="fixed inset-0 flex bg-background text-ink">
       <aside
         className={`${showPanel && !listOpen ? "hidden md:flex" : "flex"} relative z-30 h-full min-w-0 shrink-0 flex-col bg-paper motion-reduce:transition-none md:border-r md:border-line md:transition-[width] md:duration-200 md:ease-out ${
@@ -1678,6 +2259,7 @@ export function ClinicShell({
             currentId={clinicId}
             name={clinicName}
             open={clinicsOpen}
+            clinicUnread={clinicUnread}
             onOpenChange={(next) => {
               setClinicsOpen(next);
               if (next) {
@@ -1802,19 +2384,33 @@ export function ClinicShell({
               if (row.kind !== "chat") return null;
               const chat = row.chat;
                 const selected = chat.id === selectedChatId;
-                const face = chat.bots.length === 1 ? chat.bots[0] : null;
+                const face = directFace(chat);
+                const menu = chatMenuTarget(chat.id);
+                const chatState = allChatStates[chat.id];
+                const unread = isChatUnread(chatState);
+                const unreadCount = chatState?.unreadCount ?? 0;
+                const hasMention = (chatState?.unreadMentionsCount ?? 0) > 0;
+                const unreadAria =
+                  unreadCount > 0
+                    ? `${unreadCount} ${unreadCount === 1 ? "messaggio non letto" : "messaggi non letti"}`
+                    : "Da leggere";
                 return (
                   <li key={chat.id} data-chat={chat.id} className="relative">
                     <Link
                       href={`/clinics/${clinicId}?chat=${chat.id}`}
                       aria-current={selected ? "page" : undefined}
-                      title={chatName(chat)}
-                      onClick={() => setListOpen(false)}
+                      title={unread ? `${chatName(chat)} (${unreadAria})` : chatName(chat)}
+                      onClick={() => {
+                        setListOpen(false);
+                        if (selected && unread) {
+                          markRead(chat.id, null, { force: true });
+                        }
+                      }}
                       className={`relative z-10 flex items-stretch gap-3 rounded-2xl py-2 pr-3 pl-2 transition-colors duration-200 motion-reduce:transition-none ${
                         railClosed ? "md:justify-center md:px-2" : ""
                       } ${selected ? "text-paper" : "hover:bg-line"}`}
                     >
-                      <span className="flex h-12 w-12 shrink-0 self-center">
+                      <span className="relative flex h-12 w-12 shrink-0 self-center">
                         {face ? (
                           <BotGlyph
                             color={face.color}
@@ -1832,46 +2428,101 @@ export function ClinicShell({
                             className="h-full w-full"
                           />
                         )}
+                        {railClosed && unread ? (
+                          unreadCount > 0 ? (
+                            <span
+                              aria-label={unreadAria}
+                              className={`pointer-events-none absolute -top-1 -right-1 hidden h-5 min-w-5 items-center justify-center rounded-full px-1 text-[10px] leading-none font-semibold tabular-nums ring-2 md:inline-flex ${
+                                selected
+                                  ? "bg-paper text-ink ring-ink"
+                                  : "bg-teal text-teal-ink ring-paper"
+                              }`}
+                            >
+                              {formatUnreadCount(unreadCount)}
+                            </span>
+                          ) : (
+                            <span
+                              aria-label={unreadAria}
+                              className={`pointer-events-none absolute -top-0.5 -right-0.5 hidden h-3 w-3 rounded-full ring-2 md:block ${
+                                selected ? "bg-paper ring-ink" : "bg-teal ring-paper"
+                              }`}
+                            />
+                          )
+                        ) : null}
                       </span>
                       <span
                         className={`flex min-w-0 flex-1 flex-col justify-center ${railClosed ? "md:sr-only" : ""}`}
                       >
-                        <span className="truncate pr-7 font-medium">{chatName(chat)}</span>
-                        <span className="mt-1 flex items-center justify-between gap-3">
-                          <span className={`min-w-0 truncate text-sm ${selected ? "text-paper/70" : "text-muted"}`}>
+                        <span
+                          className={`truncate pr-7 ${
+                            unread && !selected ? "font-semibold text-ink" : "font-medium"
+                          }`}
+                        >
+                          {chatName(chat)}
+                        </span>
+                        <span className="mt-1 flex items-center justify-between gap-2">
+                          <span
+                            className={`min-w-0 truncate text-sm ${
+                              selected
+                                ? "text-paper/70"
+                                : unread
+                                  ? "font-medium text-ink/85"
+                                  : "text-muted"
+                            }`}
+                          >
                             {chat.preview || "Nessun messaggio"}
                           </span>
-                          <span className={`shrink-0 text-xs ${selected ? "text-paper/70" : "text-muted"}`}>
-                            {formatActivity(chat.activityAt)}
+                          <span className="flex shrink-0 items-center gap-1.5">
+                            <span
+                              className={`text-xs ${
+                                selected
+                                  ? "text-paper/70"
+                                  : unread
+                                    ? "font-medium text-teal"
+                                    : "text-muted"
+                              }`}
+                            >
+                              {formatActivity(chat.activityAt)}
+                            </span>
+                            {unread ? (
+                              unreadCount > 0 ? (
+                                <span
+                                  aria-label={unreadAria}
+                                  className={`inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-[11px] leading-none font-semibold tabular-nums ${
+                                    selected ? "bg-paper text-ink" : "bg-teal text-teal-ink"
+                                  }`}
+                                >
+                                  {hasMention ? "@" : ""}
+                                  {formatUnreadCount(unreadCount)}
+                                </span>
+                              ) : (
+                                <span
+                                  aria-label={unreadAria}
+                                  className={`h-2.5 w-2.5 shrink-0 rounded-full ${
+                                    selected ? "bg-paper" : "bg-teal"
+                                  }`}
+                                />
+                              )
+                            ) : null}
                           </span>
                         </span>
                       </span>
                     </Link>
                     <div className={`absolute top-3 right-3 z-20 ${railClosed ? "md:hidden" : ""}`}>
-                      <ChatMenu
-                        selected={selected}
-                        clinicId={clinicId}
-                        chatId={chat.id}
-                        name={chatName(chat)}
-                        onRemoved={onChatRemoved}
-                        onPeople={() => {
-                          setSearchOpen(false);
-                          setMenuOpen(false);
-                          setSeatsChatId(chat.id);
-                        }}
-                        onEdit={() => {
-                          setSearchOpen(false);
-                          setMenuOpen(false);
-                          setChannelDraft({
-                            chatId: chat.id,
-                            title: chat.title ?? "",
-                            color: chat.color,
-                            emoji: chat.emoji,
-                          });
-                          setChannelOpen(true);
-                          setBotOpen(false);
-                        }}
-                      />
+                      {menu ? (
+                        <ChatMenu
+                          selected={selected}
+                          clinicId={menu.clinicId}
+                          chatId={menu.chatId}
+                          name={menu.name}
+                          people={menu.people}
+                          unread={menu.unread}
+                          onToggleUnread={menu.onToggleUnread}
+                          onRemoved={menu.onRemoved}
+                          onPeople={menu.onPeople}
+                          onEdit={menu.onEdit}
+                        />
+                      ) : null}
                     </div>
                   </li>
                 );
@@ -1905,9 +2556,18 @@ export function ClinicShell({
           type="button"
           onClick={() => setListOpen(true)}
           className="absolute top-2 left-2 z-20 flex h-10 w-10 items-center justify-center rounded-full border border-line bg-paper shadow-sm md:hidden"
-          aria-label="Torna alle chat"
+          aria-label={
+            otherChatsUnreadTotal > 0
+              ? `Torna alle chat (${otherChatsUnreadTotal} non letti)`
+              : "Torna alle chat"
+          }
         >
           <ArrowLeft className="h-5 w-5" strokeWidth={2} />
+          {otherChatsUnreadTotal > 0 ? (
+            <span className="pointer-events-none absolute -top-1 -right-1 inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-teal px-1 text-[10px] leading-none font-semibold text-teal-ink tabular-nums ring-2 ring-background">
+              {formatUnreadCount(otherChatsUnreadTotal)}
+            </span>
+          ) : null}
         </button>
         {children}
       </section>

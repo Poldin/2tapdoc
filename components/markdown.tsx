@@ -30,33 +30,49 @@ function cleanCodeText(value: string) {
   return text;
 }
 
-export type MentionBadge = {
-  name: string;
-  emoji: string;
-  color: string;
-};
+export type MentionBadge =
+  | { kind?: "bot"; name: string; emoji: string; color: string }
+  | {
+      kind: "person";
+      name: string;
+      avatarUrl?: string | null;
+      emoji?: string | null;
+      color?: string | null;
+    };
 
 function takeMention(rest: string, mentions: MentionBadge[]) {
   const ordered = [...mentions].sort((a, b) => b.name.length - a.name.length);
-  for (const bot of ordered) {
-    const token = `@${bot.name}`;
+  for (const target of ordered) {
+    const token = `@${target.name}`;
     if (!rest.startsWith(token)) continue;
     const after = rest.charAt(token.length);
     if (after !== "" && !/[\s.,!?;:)\]"'»]/.test(after)) continue;
-    return bot;
+    return target;
   }
   return null;
 }
 
-function MentionChip({ bot, mine }: { bot: MentionBadge; mine: boolean }) {
+function MentionChip({ target, mine }: { target: MentionBadge; mine: boolean }) {
+  const face =
+    target.kind !== "person" ? (
+      <BotGlyph color={target.color} emoji={target.emoji} plain className="h-4 w-4" />
+    ) : target.emoji && target.color ? (
+      <BotGlyph color={target.color} emoji={target.emoji} plain className="h-4 w-4" />
+    ) : target.avatarUrl ? (
+      /* eslint-disable-next-line @next/next/no-img-element */
+      <img src={target.avatarUrl} alt="" className="h-4 w-4 shrink-0 rounded-full object-cover" />
+    ) : null;
+
   return (
     <span
-      className={`mx-0.5 inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 align-middle font-semibold leading-none ${
-        mine ? "bg-paper/20" : "bg-teal/15 text-teal"
+      className={`mx-0.5 inline-flex items-center gap-1 rounded-full px-2 py-0.5 align-[-0.15em] text-[0.92em] font-semibold leading-5 ${
+        mine
+          ? "bg-paper/20 text-paper ring-1 ring-inset ring-paper/25"
+          : "bg-teal/15 text-teal ring-1 ring-inset ring-teal/25"
       }`}
     >
-      <BotGlyph color={bot.color} emoji={bot.emoji} plain className="h-4 w-4" />
-      {bot.name}
+      {face}
+      <span>{face ? target.name : `@${target.name}`}</span>
     </span>
   );
 }
@@ -81,7 +97,7 @@ function parseInline(text: string, keyPrefix: string, mentions: MentionBadge[] =
 
     const mention = takeMention(rest, mentions);
     if (mention) {
-      nodes.push(<MentionChip key={key()} bot={mention} mine={mine} />);
+      nodes.push(<MentionChip key={key()} target={mention} mine={mine} />);
       rest = rest.slice(mention.name.length + 1);
       continue;
     }
@@ -261,7 +277,7 @@ export function Markdown({
       blocks.push(
         <p key={key()} className={level <= 2 ? "text-base font-semibold" : "font-semibold"}>
           {takeLead()}
-          {parseInline(heading[2], key())}
+          {parseInline(heading[2], key(), mentions, mine)}
         </p>,
       );
       i++;
@@ -291,7 +307,7 @@ export function Markdown({
               <tr>
                 {header.map((cell, c) => (
                   <th key={c} className="border-b border-current/20 px-2 py-1 font-semibold">
-                    {parseInline(cell, `${key()}-h${c}`)}
+                    {parseInline(cell, `${key()}-h${c}`, mentions, mine)}
                   </th>
                 ))}
               </tr>
@@ -301,7 +317,7 @@ export function Markdown({
                 <tr key={r}>
                   {header.map((_, c) => (
                     <td key={c} className="border-b border-current/10 px-2 py-1 align-top">
-                      {parseInline(row[c] ?? "", `${key()}-r${r}c${c}`)}
+                      {parseInline(row[c] ?? "", `${key()}-r${r}c${c}`, mentions, mine)}
                     </td>
                   ))}
                 </tr>
@@ -323,7 +339,7 @@ export function Markdown({
           {quoted.map((quotedLine, q) => (
             <span key={q}>
               {q > 0 ? <br /> : null}
-              {parseInline(quotedLine, `${key()}-q${q}`)}
+              {parseInline(quotedLine, `${key()}-q${q}`, mentions, mine)}
             </span>
           ))}
         </blockquote>,
@@ -352,7 +368,7 @@ export function Markdown({
           {items.map((item, itemIndex) => (
             <li key={itemIndex}>
               {itemIndex === 0 ? takeLead() : null}
-              {parseInline(item.replace(/^\[[ xX]\]\s+/, ""), `${key()}-item-${itemIndex}`)}
+              {parseInline(item.replace(/^\[[ xX]\]\s+/, ""), `${key()}-item-${itemIndex}`, mentions, mine)}
             </li>
           ))}
         </ListTag>,

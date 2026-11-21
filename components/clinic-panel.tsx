@@ -72,7 +72,7 @@ export async function ClinicPanel({
       supabase
         .from("chats")
         .select(
-          "id, color, emoji, chat_participants(user_id, bots(id, name, color, emoji)), chat_clinics!inner(clinic_id)",
+          "id, color, emoji, direct_bot_id, chat_participants(user_id, bots(id, name, color, emoji)), chat_clinics!inner(clinic_id)",
         )
         .eq("id", chatId)
         .eq("chat_clinics.clinic_id", id)
@@ -86,6 +86,8 @@ export async function ClinicPanel({
       return null;
     }
     const seats = (row.chat_participants ?? []) as SeatRow[];
+    const seatedBots = seatBots(seats);
+    const directBotId = typeof row.direct_bot_id === "string" ? row.direct_bot_id : null;
     const userIds = [...new Set(seats.flatMap((seat) => (seat.user_id ? [seat.user_id] : [])))];
     const { data: profileRows } =
       userIds.length > 0
@@ -101,6 +103,7 @@ export async function ClinicPanel({
       <ChatThread
         key={chatId}
         clinicId={id}
+        currentUserId={user.id}
         chat={{
           id: chatId,
           color: row.color,
@@ -108,7 +111,8 @@ export async function ClinicPanel({
           people: seats.flatMap((seat) =>
             seat.user_id ? [{ id: seat.user_id, name: profileName.get(seat.user_id) ?? "Qualcuno" }] : [],
           ),
-          bots: seatBots(seats),
+          bots: seatedBots,
+          directBot: directBotId ? (seatedBots.find((bot) => bot.id === directBotId) ?? null) : null,
           hasEvents: (count ?? 0) > 0,
         }}
         messages={thread.messages}
