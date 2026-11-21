@@ -35,6 +35,7 @@ export type ThreadMessage = {
   } | null;
   emojis: { emoji: string; mine: boolean; botId: string | null }[];
   steps: AgentStep[];
+  mentions: string[];
 };
 
 type EventRow = {
@@ -55,6 +56,13 @@ export function messageBody(payload: unknown) {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
   const body = (payload as { body?: unknown }).body;
   return typeof body === "string" && body.trim() !== "" ? body : null;
+}
+
+function messageMentions(payload: unknown) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return [];
+  const mentions = (payload as { mentions?: unknown }).mentions;
+  if (!Array.isArray(mentions)) return [];
+  return [...new Set(mentions.filter((id): id is string => typeof id === "string" && id.length > 0))];
 }
 
 function messageSteps(payload: unknown) {
@@ -214,6 +222,7 @@ export async function loadChatThread(
           : null,
         emojis: emojiByEvent.get(row.id) ?? [],
         steps: row.bot_id ? messageSteps(row.payload) : [],
+        mentions: messageMentions(row.payload),
       },
     ];
   });

@@ -1,6 +1,6 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
+import { revalidatePath, updateTag } from "next/cache";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { getSessionUser } from "@/lib/auth/session";
@@ -10,6 +10,7 @@ import { botGreeting, mastroWGreeting } from "@/lib/bot-greeting";
 import { botFaceIds, channelSymbolIds, isListed, markColorIds } from "@/lib/marks";
 import { isChatEmoji } from "@/lib/chat-emoji";
 import { loadChatThread } from "@/lib/chat-thread";
+import { clinicShellTag, loadClinicChatItem, loadPendingConfirmations } from "@/lib/clinic-frame";
 import { listedPermissions, roleSlug } from "@/lib/permissions";
 
 const uuidPattern =
@@ -44,6 +45,7 @@ export type CreatedChat = {
     } | null;
     emojis: { emoji: string; mine: boolean; botId: string | null }[];
     steps: { name: string; input: string; outcome: string }[];
+    mentions: string[];
   }[];
 };
 
@@ -60,6 +62,10 @@ async function requireUser() {
   const user = await getSessionUser();
   if (!user) redirect("/login");
   return user;
+}
+
+function touchClinicShell(userId: string, clinicId: string) {
+  updateTag(clinicShellTag(userId, clinicId));
 }
 
 export async function createClinic(_state: FormState, formData: FormData): Promise<FormState> {
@@ -193,6 +199,7 @@ export async function createChat(
     return { error: "Non è stato possibile aprire la chat." };
   }
   revalidatePath(`/clinics/${clinicId}`);
+  touchClinicShell(user.id, clinicId);
   return {
     created: {
       id: data.id,
@@ -243,6 +250,34 @@ export async function loadOlderChatMessages(clinicId: string, chatId: string, be
   return { messages: page.messages, hasOlder: page.hasOlder, nextCursor: page.nextCursor };
 }
 
+export async function loadLatestChatMessages(clinicId: string, chatId: string) {
+  const user = await requireUser();
+  if (!uuidPattern.test(clinicId) || !uuidPattern.test(chatId)) return { error: "Chat non valida." };
+  if (!(await clinicMember(clinicId, user.id))) return { error: "Non fai parte di questo studio." };
+  if (!(await chatInClinic(clinicId, chatId))) return { error: "Questa chat non è in questa clinica." };
+
+  const supabase = await createClient();
+  const page = await loadChatThread(supabase, user.id, chatId, null);
+  if (page.error) return { error: "Non è stato possibile aggiornare la chat." };
+  return { messages: page.messages, hasOlder: page.hasOlder, nextCursor: page.nextCursor };
+}
+
+export async function fetchPendingConfirmations(clinicId: string) {
+  const user = await requireUser();
+  if (!uuidPattern.test(clinicId)) return [];
+  if (!(await clinicMember(clinicId, user.id))) return [];
+  return loadPendingConfirmations(clinicId);
+}
+
+export async function fetchJoinedChat(clinicId: string, chatId: string) {
+  const user = await requireUser();
+  if (!uuidPattern.test(clinicId) || !uuidPattern.test(chatId)) return null;
+  if (!(await clinicMember(clinicId, user.id))) return null;
+  const item = await loadClinicChatItem(clinicId, chatId);
+  if (item) touchClinicShell(user.id, clinicId);
+  return item;
+}
+
 async function botInClinic(clinicId: string, botId: string) {
   const supabase = await createClient();
   const { data } = await supabase
@@ -290,7 +325,7 @@ export async function createBot(
 
   const { data: chat, error: chatError } = await supabase
     .from("chats")
-    .insert({ title: name, color, shape: "circle", emoji: "speechbubble" })
+    .insert({ title: name, color, shape: "circle", emoji: "star" })
     .select("id")
     .single();
 
@@ -318,13 +353,14 @@ export async function createBot(
   });
   if (greetError) return { error: "Il bot è entrato, ma il saluto no." };
 
+  touchClinicShell(user.id, clinicId);
   const activityAt = new Date().toISOString();
   return {
     created: {
       id: chat.id,
       title: name,
       color,
-      emoji: "speechbubble",
+      emoji: "star",
       preview: botGreeting.replace(/\s+/g, " "),
       activityAt,
       bot: { id: bot.id, name, color, emoji },
@@ -343,6 +379,7 @@ export async function createBot(
           replyTo: null,
           emojis: [],
           steps: [],
+          mentions: [],
         },
       ],
     },
@@ -364,11 +401,14 @@ export async function updateChat(
   const color = String(formData.get("color") ?? "");
   const emoji = String(formData.get("emoji") ?? "");
   if (title.length > 80) return { error: "Il titolo sta entro 80 caratteri." };
-  if (!isListed(markColorIds, color) || !isListed(channelSymbolIds, emoji)) {
+
+  const supabase = await createClient();
+  const { data: current } = await supabase.from("chats").select("emoji").eq("id", chatId).maybeSingle();
+  const kept = emoji === current?.emoji;
+  if (!isListed(markColorIds, color) || !(kept || isListed(channelSymbolIds, emoji))) {
     return { error: "Scegli un colore e un simbolo." };
   }
 
-  const supabase = await createClient();
   const { data, error } = await supabase
     .from("chats")
     .update({ title: title || null, color, emoji })
@@ -377,6 +417,7 @@ export async function updateChat(
 
   if (error || !data?.length) return { error: "Non è stato possibile modificare la chat." };
   revalidatePath(`/clinics/${clinicId}`);
+  touchClinicShell(user.id, clinicId);
   redirect(`/clinics/${clinicId}?chat=${chatId}`);
 }
 
@@ -420,6 +461,7 @@ export async function updateBot(
   if (error || !data?.length) return { error: "Non è stato possibile modificare il bot." };
 
   revalidatePath(`/clinics/${clinicId}`);
+  touchClinicShell(user.id, clinicId);
   redirect(`/clinics/${clinicId}?chat=${chatId}`);
 }
 
@@ -445,6 +487,7 @@ export async function addBot(
     return { error: "Non è stato possibile aggiungere il bot." };
   }
   revalidatePath(`/clinics/${clinicId}`);
+  touchClinicShell(user.id, clinicId);
   return { sent: Date.now() };
 }
 
@@ -464,6 +507,7 @@ export async function addChatPerson(clinicId: string, chatId: string, userId: st
     return { error: "Non è stato possibile aggiungere la persona." };
   }
   revalidatePath(`/clinics/${clinicId}`);
+  touchClinicShell(user.id, clinicId);
   return { sent: Date.now() };
 }
 
@@ -488,6 +532,7 @@ export async function leaveChat(clinicId: string, chatId: string): Promise<FormS
   }
   if (!data?.length) return { error: "Non è stato possibile uscire dalla chat." };
   revalidatePath(`/clinics/${clinicId}`);
+  touchClinicShell(user.id, clinicId);
   return { sent: Date.now() };
 }
 
@@ -509,6 +554,7 @@ export async function removeChatBot(clinicId: string, chatId: string, botId: str
     .select("id");
   if (error || !data?.length) return { error: "Non è stato possibile togliere il bot." };
   revalidatePath(`/clinics/${clinicId}`);
+  touchClinicShell(user.id, clinicId);
   return { sent: Date.now() };
 }
 
@@ -527,6 +573,7 @@ export async function deleteChat(
   const { data, error } = await supabase.from("chats").delete().eq("id", chatId).select("id");
   if (error || !data?.length) return { error: "Non è stato possibile eliminare la chat." };
 
+  touchClinicShell(user.id, clinicId);
   return { removed: chatId };
 }
 
@@ -617,7 +664,6 @@ export async function sendMessage(
   });
 
   if (error) return { error: "Non è stato possibile inviare il messaggio." };
-  revalidatePath(`/clinics/${clinicId}`);
   return { sent: Date.now() };
 }
 
@@ -644,7 +690,6 @@ export async function preferMessage(
     .select("id");
 
   if (error || !data?.length) return { error: "Non è stato possibile aggiornare il preferito." };
-  revalidatePath(`/clinics/${clinicId}`);
   return {};
 }
 
@@ -683,7 +728,6 @@ export async function reactToMessage(
   });
 
   if (error) return { error: "Non è stato possibile registrare il voto." };
-  revalidatePath(`/clinics/${clinicId}`);
   return {};
 }
 
@@ -740,7 +784,6 @@ export async function setMessageEmoji(
     if (error) return { error: "Non è stato possibile reagire." };
   }
 
-  revalidatePath(`/clinics/${clinicId}`);
   return {};
 }
 
@@ -1556,7 +1599,7 @@ export async function startMastroW(
 
   const { data: chat, error: chatError } = await supabase
     .from("chats")
-    .insert({ title: name, color, shape: "circle", emoji: "speechbubble" })
+    .insert({ title: name, color, shape: "circle", emoji: "star" })
     .select("id")
     .single();
 
@@ -1591,7 +1634,7 @@ export async function startMastroW(
       id: chat.id,
       title: name,
       color,
-      emoji: "speechbubble",
+      emoji: "star",
       preview: mastroWGreeting.replace(/\s+/g, " "),
       activityAt,
       bot: { id: bot.id, name, color, emoji },
@@ -1610,6 +1653,7 @@ export async function startMastroW(
           replyTo: null,
           emojis: [],
           steps: [],
+          mentions: [],
         },
       ],
     },

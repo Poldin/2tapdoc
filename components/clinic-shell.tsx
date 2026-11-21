@@ -1,12 +1,13 @@
 "use client";
 
-import { useActionState, useEffect, useLayoutEffect, useRef, useState, useTransition, type MouseEvent } from "react";
+import { useActionState, useCallback, useEffect, useLayoutEffect, useRef, useState, useTransition, type MouseEvent, type ReactNode } from "react";
 import { createPortal, flushSync } from "react-dom";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { ArrowLeft, Check, ChevronRight, Copy, PanelLeftClose, PanelLeftOpen, Plus, Reply, Search, Send, SmilePlus, Star, ThumbsDown, ThumbsUp, X } from "lucide-react";
 import {
-  loadOlderChatMessages,
+  fetchJoinedChat,
+  fetchPendingConfirmations,
   preferMessage,
   reactToMessage,
   sendMessage,
@@ -14,6 +15,7 @@ import {
   type CreatedChat,
   type FormState,
 } from "@/app/clinics/actions";
+import { ClinicChromeProvider } from "@/components/clinic-chrome";
 import {
   formatDuration,
   formatStepTokens,
@@ -25,24 +27,10 @@ import {
 import { chatEmojis, isChatEmoji } from "@/lib/chat-emoji";
 import { markdownToPlainText } from "@/lib/markdown";
 import { takeReplyMarker } from "@/lib/reply-marker";
-import { botGreeting } from "@/lib/bot-greeting";
 import { AgendaListItem, agendaListId } from "@/components/agenda-list-item";
-import { type AgendaEditPatient } from "@/components/agenda-edit-dialog";
-import { AgendaView, type AgendaAppointment, type AgendaBlock, type AgendaLane } from "@/components/agenda-view";
 import { PatientsListItem, patientsListId } from "@/components/patients-list-item";
-import { PatientPage } from "@/components/patient-page";
 import { BotActionDialog, type BotActionRequest } from "@/components/bot-action-dialog";
-import { PatientsView } from "@/components/patients-view";
-import { type PatientRecord } from "@/lib/patients";
 import { SettingsListItem, settingsListId } from "@/components/settings-list-item";
-import {
-  SettingsView,
-  type ClinicAsset,
-  type ClinicIntegration,
-  type ClinicMember,
-  type ClinicRole,
-  type Specialist,
-} from "@/components/settings-view";
 import {
   rememberAgenda,
   rememberPatients,
@@ -111,6 +99,7 @@ export type ChatMessage = {
   replyTo: ChatReply | null;
   emojis: ChatEmojiMark[];
   steps: AgentStep[];
+  mentions: string[];
 };
 
 export type BotMark = {
@@ -120,7 +109,7 @@ export type BotMark = {
   emoji: string;
 };
 
-type LiveReply = {
+export type LiveReply = {
   botId: string;
   phase: "thinking" | "writing";
   body: string;
@@ -270,14 +259,14 @@ function AgentSteps({ steps, startOpen = false, live = false }: { steps: AgentSt
   );
 }
 
-function LiveTrace({ text }: { text: string }) {
+export function LiveTrace({ text }: { text: string }) {
   const steps = parseAgentSteps(text);
   if (steps.length > 0) return <AgentSteps steps={steps} startOpen live />;
   return <AgentSteps steps={[{ name: "passaggi", input: "", outcome: text }]} startOpen live />;
 }
 
 /** Il messaggio del bot è già in chat: la bozza (faccia che pensa o testo a metà) è un residuo del turno appena chiuso. */
-function liveDraftView(live: LiveReply, messages: ChatMessage[], waiting: Outgoing[]) {
+export function liveDraftView(live: LiveReply, messages: ChatMessage[], waiting: Outgoing[]) {
   const streamBody = live.phase === "writing" && live.body.trim() ? live.body : "";
   const marker = streamBody ? takeReplyMarker(streamBody) : null;
   const saved = marker ? (messages.find((message) => message.id === marker.id) ?? null) : null;
@@ -289,7 +278,7 @@ function liveDraftView(live: LiveReply, messages: ChatMessage[], waiting: Outgoi
   return { text, target, thinking, trace: thinking ? live.trace : "" };
 }
 
-function liveDraftSettled(live: LiveReply, messages: ChatMessage[]) {
+export function liveDraftSettled(live: LiveReply, messages: ChatMessage[]) {
   const message = [...messages].reverse().find((item) => item.botId === live.botId);
   if (!message) return false;
   const draftAt = Date.parse(live.updatedAt);
@@ -301,7 +290,7 @@ function liveDraftSettled(live: LiveReply, messages: ChatMessage[]) {
   return savedAt >= draftAt;
 }
 
-function messageStamp(messages: ChatMessage[]) {
+export function messageStamp(messages: ChatMessage[]) {
   return messages
     .map((message) =>
       [
@@ -325,7 +314,7 @@ function messageStamp(messages: ChatMessage[]) {
     .join("\u001e");
 }
 
-type Outgoing = {
+export type Outgoing = {
   id: string;
   chatId: string;
   body: string;
@@ -333,6 +322,7 @@ type Outgoing = {
   replyTo: ChatReply | null;
   error: string | null;
   seenIds: string[];
+  mentions: string[];
 };
 
 function outgoingMessage(item: Outgoing): ChatMessage {
@@ -350,6 +340,7 @@ function outgoingMessage(item: Outgoing): ChatMessage {
     replyTo: item.replyTo,
     emojis: [],
     steps: [],
+    mentions: item.mentions,
   };
 }
 
@@ -357,7 +348,7 @@ function sameBody(a: string, b: string) {
   return a.replace(/\r\n?/g, "\n").trim() === b.replace(/\r\n?/g, "\n").trim();
 }
 
-function reconcileOutgoing(items: Outgoing[], chatId: string | null, server: ChatMessage[]) {
+export function reconcileOutgoing(items: Outgoing[], chatId: string | null, server: ChatMessage[]) {
   if (!chatId) return items;
   const mine = server.filter((message) => message.mine);
   const used = new Set<string>();
@@ -376,14 +367,14 @@ function reconcileOutgoing(items: Outgoing[], chatId: string | null, server: Cha
   return changed ? next : items;
 }
 
-function mergeThread(current: ChatMessage[], incoming: ChatMessage[]) {
+export function mergeThread(current: ChatMessage[], incoming: ChatMessage[]) {
   const byId = new Map<string, ChatMessage>();
   for (const message of current) byId.set(message.id, message);
   for (const message of incoming) byId.set(message.id, message);
   return [...byId.values()].sort((a, b) => a.seq - b.seq || a.createdAt.localeCompare(b.createdAt));
 }
 
-function threadEntries(messages: ChatMessage[]) {
+export function threadEntries(messages: ChatMessage[]) {
   const entries: Array<{ kind: "day"; key: string; label: string } | { kind: "message"; message: ChatMessage }> =
     [];
   let previous = "";
@@ -399,7 +390,7 @@ function threadEntries(messages: ChatMessage[]) {
   return entries;
 }
 
-function syncDayBadge(
+export function syncDayBadge(
   thread: HTMLDivElement,
   badge: HTMLParagraphElement | null,
   setDayLabel: (value: string) => void,
@@ -424,7 +415,7 @@ function syncDayBadge(
   setDayLabel(active);
 }
 
-function formatDay(iso: string) {
+export function formatDay(iso: string) {
   const date = new Date(iso);
   const today = new Date();
   const yesterday = new Date(today);
@@ -522,25 +513,38 @@ function scheduleDesktopCaret(fieldRef: { current: HTMLTextAreaElement | null })
   };
 }
 
+type ComposerMention = { id: string; name: string };
+
 function readDraft(clinicId: string, chatId: string) {
   try {
-    return sessionStorage.getItem(draftKey(clinicId, chatId)) ?? "";
+    const raw = sessionStorage.getItem(draftKey(clinicId, chatId)) ?? "";
+    if (raw.startsWith("{")) {
+      const parsed = JSON.parse(raw) as { body?: unknown; mentions?: unknown };
+      if (typeof parsed.body === "string" && Array.isArray(parsed.mentions)) {
+        const mentions = parsed.mentions.flatMap((item) => {
+          if (!item || typeof item !== "object") return [];
+          const row = item as { id?: unknown; name?: unknown };
+          if (typeof row.id !== "string" || typeof row.name !== "string" || !row.name) return [];
+          return [{ id: row.id, name: row.name }];
+        });
+        return { body: parsed.body, mentions };
+      }
+    }
+    return { body: raw, mentions: [] as ComposerMention[] };
   } catch {
-    return "";
+    return { body: "", mentions: [] as ComposerMention[] };
   }
 }
 
-function writeDraft(clinicId: string, chatId: string, value: string) {
+function writeDraft(clinicId: string, chatId: string, body: string, mentions: ComposerMention[]) {
   try {
     const key = draftKey(clinicId, chatId);
-    if (value) sessionStorage.setItem(key, value);
-    else sessionStorage.removeItem(key);
+    if (!body) sessionStorage.removeItem(key);
+    else sessionStorage.setItem(key, JSON.stringify({ body, mentions }));
   } catch {
     return;
   }
 }
-
-type ComposerMention = { id: string; name: string };
 
 function mentionQuery(value: string, caret: number) {
   const before = value.slice(0, caret);
@@ -548,27 +552,74 @@ function mentionQuery(value: string, caret: number) {
   if (at < 0) return null;
   if (at > 0 && !/\s/.test(before[at - 1] ?? "")) return null;
   const query = before.slice(at + 1);
-  if (query.includes("\n")) return null;
+  if (/[\s\n]/.test(query)) return null;
   return { start: at, query };
 }
 
-function mentionsInBody(body: string, items: ComposerMention[]) {
-  const used = new Map<string, number>();
-  return items.filter((item) => {
-    const token = `@${item.name}`;
-    const seen = used.get(item.name) ?? 0;
-    let from = 0;
-    for (let index = 0; index <= seen; index += 1) {
-      const at = body.indexOf(token, from);
-      if (at < 0) return false;
-      from = at + token.length;
-    }
-    used.set(item.name, seen + 1);
-    return true;
-  });
+function mentionChoices(bots: BotMark[], query: string) {
+  const needle = query.toLocaleLowerCase("it");
+  const list = needle ? bots.filter((bot) => bot.name.toLocaleLowerCase("it").includes(needle)) : [...bots];
+  return list.sort((a, b) => a.name.localeCompare(b.name, "it"));
 }
 
-function MessageComposer({
+function mentionStart(body: string, token: string, from: number) {
+  let at = from;
+  while (at < body.length) {
+    const found = body.indexOf(token, at);
+    if (found < 0) return -1;
+    const before = found === 0 ? "" : (body[found - 1] ?? "");
+    const after = body[found + token.length] ?? "";
+    const open = before === "" || /\s/.test(before);
+    const closed = after === "" || /[\s.,!?;:)\]"'»]/.test(after);
+    if (open && closed) return found;
+    at = found + token.length;
+  }
+  return -1;
+}
+
+function mentionRanges(body: string, items: ComposerMention[]) {
+  const seen = new Map<string, number>();
+  const ranges: { start: number; end: number; id: string; name: string }[] = [];
+  for (const item of items) {
+    const token = `@${item.name}`;
+    const nth = seen.get(token) ?? 0;
+    let from = 0;
+    let start = -1;
+    for (let index = 0; index <= nth; index += 1) {
+      start = mentionStart(body, token, from);
+      if (start < 0) break;
+      from = start + token.length;
+    }
+    if (start < 0) continue;
+    ranges.push({ start, end: start + token.length, id: item.id, name: item.name });
+    seen.set(token, nth + 1);
+  }
+  return ranges.sort((a, b) => a.start - b.start);
+}
+
+function mentionsInBody(body: string, items: ComposerMention[]) {
+  const ranges = mentionRanges(body, items);
+  return ranges.map((range) => ({ id: range.id, name: range.name }));
+}
+
+function ComposerMirror({ body, mentions }: { body: string; mentions: ComposerMention[] }) {
+  const ranges = mentionRanges(body, mentions);
+  const nodes = [];
+  let cursor = 0;
+  for (const range of ranges) {
+    if (range.start > cursor) nodes.push(body.slice(cursor, range.start));
+    nodes.push(
+      <span key={`${range.id}-${range.start}`} className="rounded-sm bg-teal/25">
+        {body.slice(range.start, range.end)}
+      </span>,
+    );
+    cursor = range.end;
+  }
+  if (cursor < body.length) nodes.push(body.slice(cursor));
+  return nodes;
+}
+
+export function MessageComposer({
   clinicId,
   chatId,
   bots,
@@ -586,7 +637,13 @@ function MessageComposer({
   onClearReply: () => void;
   onWaiting?: (waiting: boolean) => void;
   caretEpoch: number;
-  onOutgoing?: (input: { id: string; chatId: string; body: string; replyTo: ReplyDraft | null }) => void;
+  onOutgoing?: (input: {
+    id: string;
+    chatId: string;
+    body: string;
+    replyTo: ReplyDraft | null;
+    mentions: string[];
+  }) => void;
   onOutgoingSettled?: (id: string) => void;
 }) {
   const formRef = useRef<HTMLFormElement>(null);
@@ -595,6 +652,7 @@ function MessageComposer({
   const onClearReplyRef = useRef(onClearReply);
   const sentRef = useRef<number | undefined>(undefined);
   const sentSnapshot = useRef<string | null>(null);
+  const sentMentions = useRef<ComposerMention[]>([]);
   const outgoingId = useRef<string | null>(null);
   const reportedFail = useRef<number | undefined>(undefined);
   const onOutgoingRef = useRef(onOutgoing);
@@ -607,12 +665,31 @@ function MessageComposer({
   const [desktop, setDesktop] = useState(false);
   const [picker, setPicker] = useState<{ start: number; query: string } | null>(null);
   const [pickIndex, setPickIndex] = useState(0);
+  const [plain, setPlain] = useState("");
+  const [mentions, setMentions] = useState<ComposerMention[]>([]);
   const mentionsRef = useRef<ComposerMention[]>([]);
   const mentionFieldRef = useRef<HTMLInputElement>(null);
+  const mirrorRef = useRef<HTMLDivElement>(null);
 
   function rememberMentions(items: ComposerMention[]) {
     mentionsRef.current = items;
-    if (mentionFieldRef.current) mentionFieldRef.current.value = items.map((item) => item.id).join(",");
+    setMentions(items);
+    if (mentionFieldRef.current) {
+      mentionFieldRef.current.value = [...new Set(items.map((item) => item.id))].join(",");
+    }
+  }
+
+  function applyComposer(field: HTMLTextAreaElement, items: ComposerMention[]) {
+    const kept = mentionsInBody(field.value, items);
+    rememberMentions(kept);
+    setPlain(field.value);
+    setPicker(mentionQuery(field.value, field.selectionStart ?? field.value.length));
+    setPickIndex(0);
+    writeDraft(clinicId, chatId, field.value, kept);
+    setReady(field.value.trim().length > 0);
+    fitField(field);
+    const mirror = mirrorRef.current;
+    if (mirror) mirror.scrollTop = field.scrollTop;
   }
 
   function chooseMention(bot: BotMark) {
@@ -624,22 +701,10 @@ function MessageComposer({
     field.value = next;
     const cursor = query.start + bot.name.length + 2;
     field.setSelectionRange(cursor, cursor);
-    const kept = mentionsInBody(
-      next,
-      mentionsRef.current.some((item) => item.id === bot.id)
-        ? mentionsRef.current
-        : [...mentionsRef.current, { id: bot.id, name: bot.name }],
-    );
-    rememberMentions(kept);
-    setPicker(null);
-    setPickIndex(0);
-    writeDraft(clinicId, chatId, next);
-    setReady(next.trim().length > 0);
-    fitField(field);
+    applyComposer(field, [...mentionsRef.current, { id: bot.id, name: bot.name }]);
+    field.focus();
   }
-  const pickerBots = picker
-    ? bots.filter((bot) => bot.name.toLocaleLowerCase("it").includes(picker.query.toLocaleLowerCase("it")))
-    : [];
+  const pickerBots = picker ? mentionChoices(bots, picker.query) : [];
   if (pickIndex > 0 && pickIndex >= pickerBots.length) setPickIndex(0);
   const [state, action, pending] = useActionState<FormState & { failed?: number }, FormData>(
     async (previous, formData) => {
@@ -664,7 +729,8 @@ function MessageComposer({
       const snapshot = sentSnapshot.current;
       sentSnapshot.current = null;
       if (snapshot == null || field.value === snapshot) {
-        writeDraft(clinicId, chatId, "");
+        writeDraft(clinicId, chatId, "", []);
+        rememberMentions([]);
         formRef.current?.reset();
       }
     } else if (state.failed && state.error && state.failed !== reportedFail.current) {
@@ -676,12 +742,15 @@ function MessageComposer({
       if (id) onOutgoingSettledRef.current?.(id);
       if (snapshot) {
         field.value = snapshot;
-        writeDraft(clinicId, chatId, snapshot);
+        rememberMentions(sentMentions.current);
+        writeDraft(clinicId, chatId, snapshot, sentMentions.current);
       }
     } else if (!state.failed) {
       const saved = readDraft(clinicId, chatId);
-      if (saved) field.value = saved;
+      if (saved.body) field.value = saved.body;
+      rememberMentions(saved.mentions);
     }
+    setPlain(field.value);
     setReady(field.value.trim().length > 0);
     fitField(field);
   }, [state.sent, state.failed, state.error, clinicId, chatId]);
@@ -724,17 +793,27 @@ function MessageComposer({
         const kept = mentionsInBody(snapshot, mentionsRef.current);
         rememberMentions(kept);
         sentSnapshot.current = snapshot;
+        sentMentions.current = kept;
         onWaitingRef.current?.(bots.length === 1 || kept.length > 0);
         const id = `pending-${crypto.randomUUID()}`;
         outgoingId.current = id;
         flushSync(() => {
-          onOutgoingRef.current?.({ id, chatId, body, replyTo });
+          onOutgoingRef.current?.({
+            id,
+            chatId,
+            body,
+            replyTo,
+            mentions: [...new Set(kept.map((item) => item.id))],
+          });
         });
         queueMicrotask(() => {
           const current = fieldRef.current;
           if (!current || current.value !== snapshot) return;
           current.value = "";
-          writeDraft(clinicId, chatId, "");
+          writeDraft(clinicId, chatId, "", []);
+          rememberMentions([]);
+          setPlain("");
+          setPicker(null);
           setReady(false);
           fitField(current);
         });
@@ -742,27 +821,6 @@ function MessageComposer({
       className="flex flex-col gap-2 px-4 pb-3"
     >
       {state.error ? <p className="px-4 text-sm text-teal">{state.error}</p> : null}
-      {picker && pickerBots.length > 0 ? (
-        <ul className="max-h-48 overflow-y-auto rounded-2xl border border-line bg-paper p-1" role="listbox">
-          {pickerBots.map((bot, index) => (
-            <li key={bot.id}>
-              <button
-                type="button"
-                role="option"
-                aria-selected={index === pickIndex}
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => chooseMention(bot)}
-                className={`flex w-full items-center gap-2 rounded-xl px-2 py-1.5 text-left text-sm ${
-                  index === pickIndex ? "bg-background" : ""
-                }`}
-              >
-                <BotGlyph color={bot.color} emoji={bot.emoji} plain className="h-6 w-6" />
-                <span className="truncate">{bot.name}</span>
-              </button>
-            </li>
-          ))}
-        </ul>
-      ) : null}
       <input ref={mentionFieldRef} type="hidden" name="mentionIds" defaultValue="" />
       {replyTo ? (
         <div className="flex items-stretch gap-2 rounded-2xl border border-line bg-paper px-3 py-2">
@@ -782,57 +840,121 @@ function MessageComposer({
           <input type="hidden" name="replyTo" value={replyTo.id} />
         </div>
       ) : null}
-      <div className="flex items-end gap-2">
-        <textarea
-          ref={fieldRef}
-          name="body"
-          required
-          rows={1}
-          maxLength={4000}
-          placeholder="Scrivi qui..."
-          aria-label="Messaggio"
-          disabled={pending && !desktop}
-          onInput={(event) => {
-            const field = event.currentTarget;
-            const kept = mentionsInBody(field.value, mentionsRef.current);
-            rememberMentions(kept);
-            const nextPicker = mentionQuery(field.value, field.selectionStart ?? field.value.length);
-            setPicker(nextPicker);
-            setPickIndex(0);
-            writeDraft(clinicId, chatId, field.value);
-            setReady(field.value.trim().length > 0);
-            fitField(field);
-          }}
-          onKeyDown={(event) => {
-            if (picker && pickerBots.length > 0) {
-              if (event.key === "ArrowDown") {
-                event.preventDefault();
-                setPickIndex((index) => (index + 1) % pickerBots.length);
-                return;
+      <div className="relative flex items-end gap-2">
+        {picker && pickerBots.length > 0 ? (
+          <ul
+            id="mention-list"
+            className="absolute bottom-full left-0 z-30 mb-2 max-h-48 w-full max-w-sm overflow-y-auto rounded-2xl border border-line bg-paper p-1 shadow-sm"
+            role="listbox"
+          >
+            {pickerBots.map((bot, index) => (
+              <li key={bot.id}>
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={index === pickIndex}
+                  ref={index === pickIndex ? (node) => node?.scrollIntoView({ block: "nearest" }) : undefined}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onMouseEnter={() => setPickIndex(index)}
+                  onClick={() => chooseMention(bot)}
+                  className={`flex w-full items-center gap-2 rounded-2xl px-2 py-1.5 text-left text-sm transition-colors duration-200 motion-reduce:transition-none hover:bg-line ${
+                    index === pickIndex ? "bg-line" : ""
+                  }`}
+                >
+                  <BotGlyph color={bot.color} emoji={bot.emoji} plain className="h-6 w-6" />
+                  <span className="truncate">{bot.name}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+        <div className={`relative min-w-0 flex-1 rounded-3xl border border-line bg-paper ${pending && !desktop ? "opacity-50" : ""}`}>
+          <div
+            ref={mirrorRef}
+            aria-hidden
+            className="pointer-events-none absolute inset-0 overflow-hidden px-4 py-3 text-sm leading-5 wrap-anywhere whitespace-pre-wrap text-ink"
+          >
+            {plain ? <ComposerMirror body={plain} mentions={mentions} /> : null}
+          </div>
+          <textarea
+            ref={fieldRef}
+            name="body"
+            required
+            rows={1}
+            maxLength={4000}
+            placeholder="Scrivi qui..."
+            aria-label="Messaggio"
+            aria-expanded={Boolean(picker && pickerBots.length > 0)}
+            aria-controls={picker && pickerBots.length > 0 ? "mention-list" : undefined}
+            disabled={pending && !desktop}
+            onInput={(event) => applyComposer(event.currentTarget, mentionsRef.current)}
+            onClick={(event) => applyComposer(event.currentTarget, mentionsRef.current)}
+            onKeyUp={(event) => {
+              if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+                applyComposer(event.currentTarget, mentionsRef.current);
               }
-              if (event.key === "ArrowUp") {
-                event.preventDefault();
-                setPickIndex((index) => (index - 1 + pickerBots.length) % pickerBots.length);
-                return;
+            }}
+            onScroll={(event) => {
+              const mirror = mirrorRef.current;
+              if (mirror) mirror.scrollTop = event.currentTarget.scrollTop;
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Backspace" && !event.nativeEvent.isComposing) {
+                const field = event.currentTarget;
+                const caret = field.selectionStart ?? 0;
+                if (caret === field.selectionEnd) {
+                  const ranges = mentionRanges(field.value, mentionsRef.current);
+                  const inside = ranges.find((range) => caret > range.start && caret <= range.end);
+                  const afterSpace = ranges.find((range) => caret === range.end + 1 && field.value[range.end] === " ");
+                  const hit = inside ?? afterSpace;
+                  if (hit) {
+                    event.preventDefault();
+                    const cut = afterSpace ? hit.end + 1 : hit.end;
+                    field.value = field.value.slice(0, hit.start) + field.value.slice(cut);
+                    field.setSelectionRange(hit.start, hit.start);
+                    applyComposer(
+                      field,
+                      ranges
+                        .filter((range) => range !== hit)
+                        .map((range) => ({ id: range.id, name: range.name })),
+                    );
+                    return;
+                  }
+                }
               }
-              if (event.key === "Escape") {
-                event.preventDefault();
-                setPicker(null);
-                return;
+              if (picker && pickerBots.length > 0) {
+                if (event.key === "ArrowDown") {
+                  event.preventDefault();
+                  setPickIndex((index) => (index + 1) % pickerBots.length);
+                  return;
+                }
+                if (event.key === "ArrowUp") {
+                  event.preventDefault();
+                  setPickIndex((index) => (index - 1 + pickerBots.length) % pickerBots.length);
+                  return;
+                }
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  setPicker(null);
+                  return;
+                }
+                if (
+                  (event.key === "Tab" && !event.shiftKey) ||
+                  (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing)
+                ) {
+                  event.preventDefault();
+                  const bot = pickerBots[pickIndex];
+                  if (bot) chooseMention(bot);
+                  return;
+                }
               }
-              if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
-                event.preventDefault();
-                const bot = pickerBots[pickIndex];
-                if (bot) chooseMention(bot);
-                return;
-              }
-            }
-            if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
-            event.preventDefault();
-            if (!pending && event.currentTarget.value.trim()) formRef.current?.requestSubmit();
-          }}
-          className="composer-field max-h-40 min-h-12 min-w-0 flex-1 resize-none overflow-x-hidden overflow-y-auto rounded-3xl border border-line bg-paper px-4 py-3 text-sm leading-5 disabled:opacity-50"
-        />
+              if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
+              event.preventDefault();
+              if (!pending && event.currentTarget.value.trim()) formRef.current?.requestSubmit();
+            }}
+            className="composer-field relative z-10 max-h-40 min-h-12 w-full resize-none overflow-x-hidden overflow-y-auto rounded-3xl border-0 bg-transparent px-4 py-3 text-sm leading-5 wrap-anywhere text-transparent caret-ink outline-none placeholder:text-muted"
+          />
+        </div>
         <button
           type="submit"
           disabled={pending || !ready}
@@ -850,7 +972,7 @@ function MessageComposer({
   );
 }
 
-function BotLead({ bot, animate = false }: { bot: BotMark; animate?: boolean }) {
+export function BotLead({ bot, animate = false }: { bot: BotMark; animate?: boolean }) {
   return (
     <BotGlyph
       color={bot.color}
@@ -976,7 +1098,7 @@ function speakerName(message: { mine: boolean; authorName: string | null; author
   return "Messaggio";
 }
 
-function ReplyQuote({ reply, mine }: { reply: ChatReply; mine: boolean }) {
+export function ReplyQuote({ reply, mine }: { reply: ChatReply; mine: boolean }) {
   return (
     <button
       type="button"
@@ -998,7 +1120,7 @@ function focusMessage(id: string) {
   node.classList.add("message-flash");
 }
 
-function foldEmojiReplies(messages: ChatMessage[]): ChatMessage[] {
+export function foldEmojiReplies(messages: ChatMessage[]): ChatMessage[] {
   const byId = new Map(messages.map((message) => [message.id, message]));
   const extras = new Map<string, ChatEmojiMark[]>();
   const hidden = new Set<string>();
@@ -1040,12 +1162,13 @@ function shownEmojiGroups(emojis: ChatEmojiMark[], mineEmoji: string | null) {
   return [...groups.values()];
 }
 
-function ChatTurn({
+export function ChatTurn({
   clinicId,
   chatId,
   message,
   named,
   entered,
+  bots,
   error,
   onReply,
 }: {
@@ -1054,6 +1177,7 @@ function ChatTurn({
   message: ChatMessage;
   named: boolean;
   entered: boolean;
+  bots: BotMark[];
   error?: string | null;
   onReply: (reply: ReplyDraft) => void;
 }) {
@@ -1211,6 +1335,8 @@ function ChatTurn({
           <Markdown
             source={message.body}
             lead={message.authorBot ? <BotLead bot={message.authorBot} /> : undefined}
+            mentions={bots.filter((bot) => message.mentions.includes(bot.id))}
+            mine={message.mine}
           />
         </div>
         {message.mine ? null : gestures}
@@ -1255,82 +1381,31 @@ function ChatTurn({
   );
 }
 
+const listChatPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 export function ClinicShell({
   clinicId,
   clinicName,
   clinics,
   email,
   chats,
-  activeChatId,
-  messages,
-  hasOlder,
-  olderCursor: olderCursorProp,
-  hasEvents,
-  agendaOpen,
-  lanes,
-  appointments = [],
-  blocks = [],
-  agendaPatients = [],
-  patientsOpen,
-  patients,
-  selectedPatient,
-  canWritePatients,
-  settingsOpen,
-  settingsMembers,
-  settingsRoles,
-  specialists,
-  assets,
-  integrations,
-  canRenameClinic,
-  canDeleteClinic,
-  canManageMembers,
-  canManageRoles,
-  canManageAgenda,
-  canManageIntegrations,
-  webhookVerifyToken,
   currentUserId,
   clinicPeople,
   myBots,
   recency: initialRecency,
-  confirmations,
+  children,
 }: {
   clinicId: string;
   clinicName: string;
   clinics: ClinicOption[];
   email: string;
   chats: ChatListItem[];
-  activeChatId: string | null;
-  messages: ChatMessage[];
-  hasOlder: boolean;
-  olderCursor: number | null;
-  hasEvents: boolean;
-  agendaOpen: boolean;
-  lanes: AgendaLane[];
-  appointments?: AgendaAppointment[];
-  blocks?: AgendaBlock[];
-  agendaPatients?: AgendaEditPatient[];
-  patientsOpen: boolean;
-  patients: PatientRecord[];
-  selectedPatient: PatientRecord | null;
-  canWritePatients: boolean;
-  settingsOpen: boolean;
-  settingsMembers: ClinicMember[];
-  settingsRoles: ClinicRole[];
-  specialists: Specialist[];
-  assets: ClinicAsset[];
-  integrations: ClinicIntegration[];
-  canRenameClinic: boolean;
-  canDeleteClinic: boolean;
-  canManageMembers: boolean;
-  canManageRoles: boolean;
-  canManageAgenda: boolean;
-  canManageIntegrations: boolean;
-  webhookVerifyToken: string;
   currentUserId: string;
   clinicPeople: ChatPerson[];
   myBots: BotMark[];
   recency: ClinicRecency;
-  confirmations: BotActionRequest[];
+  children: ReactNode;
 }) {
   const [searchOpen, setSearchOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -1342,34 +1417,16 @@ export function ClinicShell({
   const [seatsChatId, setSeatsChatId] = useState<string | null>(null);
   const [listOpen, setListOpen] = useState(false);
   const [navCollapsed, setNavCollapsed] = useState(false);
-  const [thread, setThread] = useState(messages);
-  const [threadChat, setThreadChat] = useState(activeChatId);
-  const [threadStamp, setThreadStamp] = useState(() => messageStamp(messages));
-  const [canLoadOlder, setCanLoadOlder] = useState(hasOlder);
-  const [olderCursor, setOlderCursor] = useState(olderCursorProp);
-  const [historyChat, setHistoryChat] = useState(activeChatId);
-  const [loadingOlder, setLoadingOlder] = useState(false);
-  const [olderError, setOlderError] = useState<string | null>(null);
-  const viewedChat = useRef(activeChatId);
-  const loadToken = useRef(0);
-  viewedChat.current = activeChatId;
-  const stamp = messageStamp(messages);
-  if (threadChat !== activeChatId || historyChat !== activeChatId) {
-    loadToken.current += 1;
-    setThreadChat(activeChatId);
-    setHistoryChat(activeChatId);
-    setThread(messages);
-    setThreadStamp(stamp);
-    setCanLoadOlder(hasOlder);
-    setOlderCursor(olderCursorProp);
-    setLoadingOlder(false);
-    setOlderError(null);
-  } else if (threadStamp !== stamp) {
-    setThreadStamp(stamp);
-    setThread(mergeThread(thread, messages));
-  }
-  const historyReady = threadChat === activeChatId && historyChat === activeChatId;
-  const history = !historyReady ? messages : threadStamp === stamp ? thread : mergeThread(thread, messages);
+  const searchParams = useSearchParams();
+  const view = searchParams.get("view");
+  const agendaOpen = view === "agenda";
+  const patientsOpen = view === "patients";
+  const settingsOpen = view === "settings";
+  const chatParam = searchParams.get("chat");
+  const selectedChatId =
+    !agendaOpen && !patientsOpen && !settingsOpen && chatParam && listChatPattern.test(chatParam)
+      ? chatParam
+      : null;
   const [recency, setRecency] = useState(initialRecency);
   const recencyToken = `${clinicId}\n${initialRecency.agendaAt ?? ""}\n${initialRecency.patientsAt ?? ""}\n${initialRecency.settingsAt ?? ""}`;
   const [recencyTokenSeen, setRecencyTokenSeen] = useState(recencyToken);
@@ -1393,197 +1450,76 @@ export function ClinicShell({
   const router = useRouter();
   const initial = (email.trim()[0] || "?").toUpperCase();
   const listRef = useRef<HTMLUListElement>(null);
-  const threadRef = useRef<HTMLDivElement>(null);
-  const stickToBottom = useRef(true);
-  const knownMessages = useRef<{ chatId: string | null; ids: Set<string> }>({
-    chatId: null,
-    ids: new Set(),
-  });
-  const waitBaseline = useRef<string | null>(null);
-  const replyCaret = useRef(0);
-  const shownMessagesRef = useRef<ChatMessage[]>([]);
-  const [draftChatId, setDraftChatId] = useState(activeChatId);
-  const [waiting, setWaiting] = useState(false);
-  const [lives, setLives] = useState<LiveReply[]>([]);
-  const livesRef = useRef<LiveReply[]>([]);
-  const [entered, setEntered] = useState<Set<string>>(new Set());
-  const [outgoing, setOutgoing] = useState<Outgoing[]>([]);
-  const badgeRef = useRef<HTMLParagraphElement>(null);
-  const [dayChat, setDayChat] = useState(activeChatId);
-  const [dayLabel, setDayLabel] = useState(() =>
-    messages.at(-1) ? formatDay(messages.at(-1)!.createdAt) : "oggi",
-  );
-  const [replyTo, setReplyTo] = useState<ReplyDraft | null>(null);
-  const [replyChatId, setReplyChatId] = useState(activeChatId);
-  if (replyChatId !== activeChatId) {
-    setReplyChatId(activeChatId);
-    setReplyTo(null);
-  }
   const [focusBox, setFocusBox] = useState<{ top: number; height: number } | null>(null);
   const [slide, setSlide] = useState(false);
   const [added, setAdded] = useState<ChatListItem[]>([]);
   const [removed, setRemoved] = useState<string[]>([]);
-  const [opened, setOpened] = useState<{
-    id: string;
-    messages: ChatMessage[];
-    hasEvents: boolean;
-    from: string | null;
-  } | null>(null);
-  let openThread = opened;
-  if (openThread && activeChatId !== openThread.from) {
-    openThread = null;
-    setOpened(null);
-  }
+  const [patches, setPatches] = useState<Record<string, { preview: string | null; activityAt: string }>>({});
+  const noteActivity = useCallback((chatId: string, preview: string | null, activityAt: string) => {
+    setPatches((current) => {
+      const prev = current[chatId];
+      if (prev && prev.preview === preview && prev.activityAt === activityAt) return current;
+      return { ...current, [chatId]: { preview, activityAt } };
+    });
+  }, []);
   const serverIds = new Set(chats.map((chat) => chat.id));
   const hidden = new Set(removed.filter((id) => serverIds.has(id)));
   const visibleChats = [
     ...added.filter((chat) => !serverIds.has(chat.id) && !removed.includes(chat.id)),
     ...chats.filter((chat) => !hidden.has(chat.id)),
-  ].sort((a, b) => b.activityAt.localeCompare(a.activityAt));
-  const viewingChat = Boolean(openThread);
-  const showAgenda = agendaOpen && !viewingChat;
-  const showPatients = patientsOpen && !viewingChat;
-  const showSettings = settingsOpen && !viewingChat;
-  const shownActiveId = openThread?.id ?? activeChatId;
-  const shownMessages = openThread?.messages ?? history;
-  const shownCanLoadOlder = openThread ? false : historyReady ? canLoadOlder : hasOlder;
-  const shownCursor = openThread ? null : historyReady ? olderCursor : olderCursorProp;
-  const shownOlderError = historyReady && !openThread ? olderError : null;
-  const shownLoadingOlder = historyReady && !openThread && loadingOlder;
-  const shownHasEvents = openThread?.hasEvents ?? hasEvents;
-  const lastBotMessage = [...shownMessages].reverse().find((message) => message.botId) ?? null;
-  shownMessagesRef.current = shownMessages;
-  const nextOutgoing = reconcileOutgoing(outgoing, shownActiveId, shownMessages);
-  if (nextOutgoing !== outgoing) setOutgoing(nextOutgoing);
-  const pendingOutgoing = nextOutgoing.filter((item) => item.chatId === shownActiveId);
-  const visibleMessages = shownMessages;
-  const threadMessages = foldEmojiReplies(visibleMessages);
-  const sending = pendingOutgoing.some((item) => !item.error);
-  const replyLanded =
-    draftChatId === shownActiveId &&
-    waitBaseline.current !== null &&
-    lastBotMessage !== null &&
-    lastBotMessage.id !== waitBaseline.current;
-  const openLives =
-    draftChatId === shownActiveId ? lives.filter((item) => !liveDraftSettled(item, shownMessages)) : [];
-  if (draftChatId !== shownActiveId) {
-    setDraftChatId(shownActiveId);
-    setWaiting(false);
-    if (lives.length) setLives([]);
-    waitBaseline.current = null;
-    stickToBottom.current = true;
-  } else if (replyLanded) {
-    replyCaret.current += 1;
-    waitBaseline.current = null;
-    if (waiting) setWaiting(false);
-  }
-  if (draftChatId === shownActiveId && openLives.length !== lives.length) setLives(openLives);
-  const visibleLives = draftChatId === shownActiveId ? openLives : [];
-  const liveKey = visibleLives
-    .map((item) => `${item.botId}:${item.phase}:${item.updatedAt}:${item.body.length}:${item.trace.length}`)
-    .join("|");
-  const visibleWaiting = draftChatId === shownActiveId && waiting && !replyLanded;
-  const active = visibleChats.find((chat) => chat.id === shownActiveId) ?? null;
-  const waitingReply = pendingOutgoing.filter((item) => !item.error);
-  const showThinking = visibleWaiting && visibleLives.length === 0 && (active?.bots.length ?? 0) > 0;
+  ]
+    .map((chat) => {
+      const patch = patches[chat.id];
+      if (!patch || patch.activityAt < chat.activityAt) return chat;
+      if (patch.activityAt === chat.activityAt && patch.preview === chat.preview) return chat;
+      return { ...chat, preview: patch.preview, activityAt: patch.activityAt };
+    })
+    .sort((a, b) => b.activityAt.localeCompare(a.activityAt));
   const rows = placeByRecency(visibleChats, [
     { id: agendaListId, at: shownRecency.agendaAt },
     { id: patientsListId, at: shownRecency.patientsAt },
     { id: settingsListId, at: shownRecency.settingsAt },
   ]);
-  const visibleKey = rows
-    .map((row) => (row.kind === "chat" ? row.chat.id : row.id))
-    .join(" ");
-  const showPanel = showAgenda || showPatients || showSettings || Boolean(active);
-  const selectedListId = openThread
-    ? openThread.id
-    : showSettings
-      ? settingsListId
-      : showPatients
-        ? patientsListId
-        : showAgenda
-          ? agendaListId
-          : active?.id ?? null;
-  const openedDay = shownMessages.at(-1) ? formatDay(shownMessages.at(-1)!.createdAt) : "oggi";
-  if (dayChat !== shownActiveId) {
-    setDayChat(shownActiveId);
-    setDayLabel(openedDay);
-  }
+  const visibleKey = rows.map((row) => (row.kind === "chat" ? row.chat.id : row.id)).join(" ");
+  const showPanel = agendaOpen || patientsOpen || settingsOpen || Boolean(selectedChatId);
+  const selectedListId = settingsOpen
+    ? settingsListId
+    : patientsOpen
+      ? patientsListId
+      : agendaOpen
+        ? agendaListId
+        : selectedChatId;
   const railClosed = navCollapsed && showPanel;
-  const refreshPage = useRef(router.refresh);
-  refreshPage.current = router.refresh;
   const quietChatIds = useRef(new Set<string>());
   const creatingBot = useRef(false);
   creatingBot.current = botOpen && botDraft === null;
-  const confirmationToken = confirmations.map((item) => `${item.id}:${item.action}`).join("|");
-  const [pendingConfirmations, setPendingConfirmations] = useState(confirmations);
-  const [seenConfirmationToken, setSeenConfirmationToken] = useState(confirmationToken);
-  if (seenConfirmationToken !== confirmationToken) {
-    setSeenConfirmationToken(confirmationToken);
-    setPendingConfirmations(confirmations);
-  }
+  const [pendingConfirmations, setPendingConfirmations] = useState<BotActionRequest[]>([]);
   const pendingConfirmation = pendingConfirmations[0] ?? null;
 
-  const activeId = active?.id ?? null;
 
   useEffect(() => {
-    if (opened || !activeId || agendaOpen || patientsOpen || settingsOpen) return;
-
     const supabase = createClient();
     let timer = 0;
-    let listTimer = 0;
     let stopped = false;
-    const refresh = () => {
+    const pull = (chatId: string) => {
       window.clearTimeout(timer);
-      timer = window.setTimeout(() => refreshPage.current(), 50);
+      timer = window.setTimeout(() => {
+        if (creatingBot.current) return;
+        if (quietChatIds.current.has(chatId)) return;
+        void fetchJoinedChat(clinicId, chatId).then((item) => {
+          if (stopped || !item) return;
+          setAdded((current) => [item, ...current.filter((entry) => entry.id !== item.id)]);
+          setRemoved((current) => current.filter((id) => id !== item.id));
+        });
+      }, 50);
     };
-    const channel = supabase.channel(`clinic:${clinicId}:${activeId}`);
+    const channel = supabase.channel(`clinic-list:${clinicId}`);
     channel.on(
       "postgres_changes",
-      {
-        event: "INSERT",
-        schema: "public",
-        table: "chat_events",
-        filter: `chat_id=eq.${activeId}`,
-      },
-      refresh,
-    );
-    channel.on(
-      "postgres_changes",
-      {
-        event: "UPDATE",
-        schema: "public",
-        table: "chat_events",
-        filter: `chat_id=eq.${activeId}`,
-      },
-      refresh,
-    );
-    channel.on(
-      "postgres_changes",
-      {
-        event: "*",
-        schema: "public",
-        table: "message_emojis",
-        filter: `chat_id=eq.${activeId}`,
-      },
-      refresh,
-    );
-    channel.on(
-      "postgres_changes",
-      {
-        event: "INSERT",
-        schema: "public",
-        table: "chat_clinics",
-        filter: `clinic_id=eq.${clinicId}`,
-      },
+      { event: "INSERT", schema: "public", table: "chat_clinics", filter: `clinic_id=eq.${clinicId}` },
       (payload) => {
         const chatId = payload.new.chat_id;
-        window.clearTimeout(listTimer);
-        listTimer = window.setTimeout(() => {
-          if (creatingBot.current) return;
-          if (typeof chatId === "string" && quietChatIds.current.has(chatId)) return;
-          refreshPage.current();
-        }, 50);
+        if (typeof chatId === "string") pull(chatId);
       },
     );
     void supabase.auth.getSession().then(({ data }) => {
@@ -1594,151 +1530,31 @@ export function ClinicShell({
         if (!stopped) channel.subscribe();
       });
     });
-
     return () => {
       stopped = true;
       window.clearTimeout(timer);
-      window.clearTimeout(listTimer);
       void supabase.removeChannel(channel);
     };
-  }, [opened, activeId, agendaOpen, patientsOpen, settingsOpen, clinicId]);
-
-  useLayoutEffect(() => {
-    livesRef.current = lives;
-  }, [lives]);
-
-  useEffect(() => {
-    if (opened || !activeId || agendaOpen || patientsOpen || settingsOpen) return;
-
-    const supabase = createClient();
-    let stopped = false;
-    const channel = supabase.channel(`draft:${clinicId}:${activeId}`);
-    const seenAt = new Map<string, string>();
-    const dropTimers = new Map<string, number>();
-
-    const commit = (next: LiveReply[]) => {
-      livesRef.current = next;
-      setLives(next);
-    };
-    const drop = (botId: string) => {
-      commit(livesRef.current.filter((item) => item.botId !== botId));
-    };
-
-    const apply = (
-      row: { bot_id?: string; phase?: string; body?: string; updated_at?: string } | null,
-      removed: boolean,
-    ) => {
-      const botId = row?.bot_id;
-      if (!botId) return;
-      const pending = dropTimers.get(botId);
-      if (pending) {
-        window.clearTimeout(pending);
-        dropTimers.delete(botId);
-      }
-      if (removed) {
-        const previous = livesRef.current.find((item) => item.botId === botId) ?? null;
-        const hold =
-          previous !== null &&
-          previous.phase === "writing" &&
-          previous.body.trim().length > 0 &&
-          !liveDraftSettled(previous, shownMessagesRef.current);
-        if (!hold || !previous) {
-          drop(botId);
-          return;
-        }
-        const stamp = previous.updatedAt;
-        dropTimers.set(
-          botId,
-          window.setTimeout(() => {
-            dropTimers.delete(botId);
-            const current = livesRef.current.find((item) => item.botId === botId);
-            if (!current || current.updatedAt !== stamp) return;
-            drop(botId);
-          }, 1600),
-        );
-        return;
-      }
-      const updatedAt = typeof row.updated_at === "string" ? row.updated_at : "";
-      const previousAt = seenAt.get(botId) ?? "";
-      if (updatedAt && previousAt && updatedAt < previousAt) return;
-      if (updatedAt) seenAt.set(botId, updatedAt);
-      const phase: LiveReply["phase"] = row.phase === "writing" ? "writing" : "thinking";
-      const rawBody = typeof row.body === "string" ? row.body : "";
-      const next: LiveReply = {
-        botId,
-        phase,
-        body: phase === "writing" ? rawBody : "",
-        trace: phase === "thinking" ? rawBody : "",
-        updatedAt,
-      };
-      if (liveDraftSettled(next, shownMessagesRef.current)) {
-        drop(botId);
-        return;
-      }
-      const current = livesRef.current.find((item) => item.botId === botId);
-      if (current && updatedAt && current.updatedAt && updatedAt < current.updatedAt) return;
-      commit([...livesRef.current.filter((item) => item.botId !== botId), next]);
-    };
-
-    channel.on(
-      "postgres_changes",
-      {
-        event: "*",
-        schema: "public",
-        table: "chat_drafts",
-        filter: `chat_id=eq.${activeId}`,
-      },
-      (payload) => {
-        if (payload.eventType === "DELETE") apply(payload.old, true);
-        else apply(payload.new, false);
-      },
-    );
-
-    void supabase.auth.getSession().then(({ data }) => {
-      if (stopped) return;
-      const token = data.session?.access_token;
-      const ready = token ? supabase.realtime.setAuth(token) : Promise.resolve();
-      void ready.then(() => {
-        if (stopped) return;
-        channel.subscribe((status) => {
-          if (status !== "SUBSCRIBED" || stopped) return;
-          void supabase
-            .from("chat_drafts")
-            .select("bot_id, phase, body, updated_at")
-            .eq("chat_id", activeId)
-            .then(({ data: existing }) => {
-              if (stopped) return;
-              for (const row of existing ?? []) apply(row, false);
-            });
-        });
-      });
-    });
-
-    return () => {
-      stopped = true;
-      for (const timer of dropTimers.values()) window.clearTimeout(timer);
-      void supabase.removeChannel(channel);
-    };
-  }, [opened, activeId, agendaOpen, patientsOpen, settingsOpen, clinicId]);
+  }, [clinicId]);
 
   useEffect(() => {
     const supabase = createClient();
     let timer = 0;
     let stopped = false;
-    const refresh = () => {
+    const pull = () => {
       window.clearTimeout(timer);
-      timer = window.setTimeout(() => refreshPage.current(), 50);
+      timer = window.setTimeout(() => {
+        void fetchPendingConfirmations(clinicId).then((items) => {
+          if (!stopped) setPendingConfirmations(items);
+        });
+      }, 50);
     };
+    pull();
     const channel = supabase.channel(`clinic-confirmations:${clinicId}`);
     channel.on(
       "postgres_changes",
-      {
-        event: "*",
-        schema: "public",
-        table: "bot_confirmations",
-        filter: `clinic_id=eq.${clinicId}`,
-      },
-      refresh,
+      { event: "*", schema: "public", table: "bot_confirmations", filter: `clinic_id=eq.${clinicId}` },
+      pull,
     );
     void supabase.auth.getSession().then(({ data }) => {
       if (stopped) return;
@@ -1748,7 +1564,6 @@ export function ClinicShell({
         if (!stopped) channel.subscribe();
       });
     });
-
     return () => {
       stopped = true;
       window.clearTimeout(timer);
@@ -1760,12 +1575,6 @@ export function ClinicShell({
     const item = listItem(chat);
     setAdded((current) => [item, ...current.filter((entry) => entry.id !== item.id)]);
     setRemoved((current) => current.filter((id) => id !== item.id));
-    setOpened({
-      id: chat.id,
-      messages: chat.messages,
-      hasEvents: chat.messages.length > 0,
-      from: activeChatId,
-    });
     setChannelOpen(false);
     setChannelDraft(null);
     setBotOpen(false);
@@ -1786,7 +1595,6 @@ export function ClinicShell({
   function onChatRemoved(chatId: string) {
     setAdded((current) => current.filter((entry) => entry.id !== chatId));
     setRemoved((current) => (current.includes(chatId) ? current : [...current, chatId]));
-    if (opened?.id === chatId) setOpened(null);
   }
 
   useLayoutEffect(() => {
@@ -1853,134 +1661,8 @@ export function ClinicShell({
     return () => cancelAnimationFrame(frame);
   }, [focusBox]);
 
-  useLayoutEffect(() => {
-    const known = knownMessages.current;
-    if (known.chatId !== shownActiveId) {
-      known.chatId = shownActiveId;
-      known.ids = new Set(shownMessages.map((message) => message.id));
-      setEntered((current) => (current.size === 0 ? current : new Set()));
-      return;
-    }
-    const arrived = visibleMessages.flatMap((message) => {
-      if (known.ids.has(message.id)) return [];
-      known.ids.add(message.id);
-      return message.id;
-    });
-    if (arrived.length > 0) setEntered(new Set(arrived));
-  }, [shownActiveId, visibleMessages]);
-
-  useLayoutEffect(() => {
-    const thread = threadRef.current;
-    if (!thread) return;
-    if (stickToBottom.current) thread.scrollTop = thread.scrollHeight;
-    syncDayBadge(thread, badgeRef.current, setDayLabel);
-  }, [shownActiveId, visibleMessages, showThinking, sending, liveKey]);
-
-  useEffect(() => {
-    const thread = threadRef.current;
-    if (!thread) return;
-    const sync = () => {
-      syncDayBadge(thread, badgeRef.current, setDayLabel);
-      const distance = thread.scrollHeight - thread.scrollTop - thread.clientHeight;
-      stickToBottom.current = distance < 120;
-    };
-    thread.addEventListener("scroll", sync, { passive: true });
-    const observer = new ResizeObserver(sync);
-    observer.observe(thread);
-    return () => {
-      thread.removeEventListener("scroll", sync);
-      observer.disconnect();
-    };
-  }, [shownActiveId, shownMessages]);
-
-  function pinToMessage(scroller: HTMLDivElement) {
-    const edge = scroller.getBoundingClientRect().top;
-    for (const node of scroller.querySelectorAll<HTMLElement>("[id^='message-']")) {
-      const box = node.getBoundingClientRect();
-      if (box.bottom > edge + 1) return { id: node.id, offset: box.top - edge };
-    }
-    return null;
-  }
-
-  async function loadOlder() {
-    const cursor = shownCursor;
-    if (!active || shownLoadingOlder || !shownCanLoadOlder || cursor === null) return;
-    const requested = active.id;
-    const token = ++loadToken.current;
-    const scroller = threadRef.current;
-    const anchor = scroller ? pinToMessage(scroller) : null;
-    setLoadingOlder(true);
-    setOlderError(null);
-    const result = await loadOlderChatMessages(clinicId, requested, cursor);
-    if (loadToken.current !== token || viewedChat.current !== requested) return;
-    if ("error" in result) {
-      setLoadingOlder(false);
-      setOlderError(result.error ?? "Non è stato possibile caricare i messaggi precedenti.");
-      return;
-    }
-    const page = result;
-    for (const message of page.messages) knownMessages.current.ids.add(message.id);
-    const more = page.hasOlder && page.nextCursor !== null && page.nextCursor !== cursor;
-    flushSync(() => {
-      if (page.messages.length > 0) setThread((current) => mergeThread(current, page.messages));
-      setCanLoadOlder(more);
-      setOlderCursor(page.nextCursor);
-      setLoadingOlder(false);
-    });
-    const nextScroller = threadRef.current;
-    if (anchor && nextScroller) {
-      const node = nextScroller.querySelector<HTMLElement>(`#${CSS.escape(anchor.id)}`);
-      if (node) {
-        const edge = nextScroller.getBoundingClientRect().top;
-        nextScroller.scrollTop += node.getBoundingClientRect().top - edge - anchor.offset;
-      }
-      const distance = nextScroller.scrollHeight - nextScroller.scrollTop - nextScroller.clientHeight;
-      stickToBottom.current = distance < 120;
-    }
-  }
-
-  function beginOutgoing(input: { id: string; chatId: string; body: string; replyTo: ReplyDraft | null }) {
-    const messages = shownMessagesRef.current;
-    const target = input.replyTo ? messages.find((message) => message.id === input.replyTo?.id) : null;
-    const item: Outgoing = {
-      id: input.id,
-      chatId: input.chatId,
-      body: input.body,
-      createdAt: new Date().toISOString(),
-      replyTo: input.replyTo
-        ? {
-            id: input.replyTo.id,
-            excerpt: input.replyTo.excerpt,
-            mine: target?.mine ?? false,
-            botId: target?.botId ?? null,
-            authorName: target?.authorName ?? null,
-            authorBot: target?.authorBot ?? null,
-          }
-        : null,
-      error: null,
-      seenIds: messages.map((message) => message.id),
-    };
-    setOutgoing((current) => [
-      ...current.filter((entry) => !(entry.chatId === input.chatId && entry.error && entry.body === input.body)),
-      item,
-    ]);
-  }
-
-  function settleOutgoing(id: string) {
-    setOutgoing((current) => (current.some((item) => item.id === id) ? current.filter((item) => item.id !== id) : current));
-  }
-
-  function noteWaiting(next: boolean) {
-    if (!next) {
-      waitBaseline.current = null;
-      setWaiting(false);
-      return;
-    }
-    waitBaseline.current = lastBotMessage?.id ?? "";
-    setWaiting(true);
-  }
-
   return (
+    <ClinicChromeProvider value={{ onChatCreated, noteActivity }}>
     <div className="fixed inset-0 flex bg-background text-ink">
       <aside
         className={`${showPanel && !listOpen ? "hidden md:flex" : "flex"} relative z-30 h-full min-w-0 shrink-0 flex-col bg-paper motion-reduce:transition-none md:border-r md:border-line md:transition-[width] md:duration-200 md:ease-out ${
@@ -2119,7 +1801,8 @@ export function ClinicShell({
               }
               if (row.kind !== "chat") return null;
               const chat = row.chat;
-                const selected = chat.id === active?.id;
+                const selected = chat.id === selectedChatId;
+                const face = chat.bots.length === 1 ? chat.bots[0] : null;
                 return (
                   <li key={chat.id} data-chat={chat.id} className="relative">
                     <Link
@@ -2132,13 +1815,23 @@ export function ClinicShell({
                       } ${selected ? "text-paper" : "hover:bg-line"}`}
                     >
                       <span className="flex h-12 w-12 shrink-0 self-center">
-                        <ChannelMark
-                          color={chat.color}
-                          emoji={chat.emoji}
-                          animate={selected}
-                          plain
-                          className="h-full w-full"
-                        />
+                        {face ? (
+                          <BotGlyph
+                            color={face.color}
+                            emoji={face.emoji}
+                            animate={selected}
+                            plain
+                            className="h-full w-full"
+                          />
+                        ) : (
+                          <ChannelMark
+                            color={chat.color}
+                            emoji={chat.emoji}
+                            animate={selected}
+                            plain
+                            className="h-full w-full"
+                          />
+                        )}
                       </span>
                       <span
                         className={`flex min-w-0 flex-1 flex-col justify-center ${railClosed ? "md:sr-only" : ""}`}
@@ -2216,167 +1909,11 @@ export function ClinicShell({
         >
           <ArrowLeft className="h-5 w-5" strokeWidth={2} />
         </button>
-        {showSettings ? (
-          <SettingsView
-            clinicId={clinicId}
-            clinicName={clinicName}
-            canRename={canRenameClinic}
-            canDelete={canDeleteClinic}
-            canManageMembers={canManageMembers}
-            canManageRoles={canManageRoles}
-            canManageAgenda={canManageAgenda}
-            currentUserId={currentUserId}
-            members={settingsMembers}
-            roles={settingsRoles}
-            specialists={specialists}
-            assets={assets}
-            integrations={integrations}
-            canManageIntegrations={canManageIntegrations}
-            webhookVerifyToken={webhookVerifyToken}
-            onCreatedChat={onChatCreated}
-          />
-        ) : showPatients && selectedPatient ? (
-          <PatientPage clinicId={clinicId} patient={selectedPatient} />
-        ) : showPatients ? (
-          <PatientsView clinicId={clinicId} patients={patients} canWrite={canWritePatients} />
-        ) : showAgenda ? (
-          <AgendaView
-            clinicId={clinicId}
-            lanes={lanes}
-            appointments={appointments}
-            blocks={blocks}
-            patients={agendaPatients}
-            canMove={canManageAgenda}
-          />
-        ) : active ? (
-        <>
-        <ChatTitle label={dayLabel} badgeRef={badgeRef} color={active.color} emoji={active.emoji} />
-
-        <div className="mx-auto flex min-h-0 w-full max-w-4xl flex-1 flex-col">
-        <div
-          ref={threadRef}
-          className="flex min-h-0 flex-1 flex-col overflow-x-hidden overflow-y-auto px-4 pt-14 pb-6 [-ms-overflow-style:none] scrollbar-none [&::-webkit-scrollbar]:hidden"
-        >
-          <div className="mt-auto flex flex-col gap-3">
-          {shownCanLoadOlder || shownOlderError ? (
-            <div className="flex flex-col items-center gap-1 self-center">
-              {shownCanLoadOlder ? (
-                <button
-                  type="button"
-                  onClick={() => void loadOlder()}
-                  disabled={shownLoadingOlder}
-                  className="rounded-full px-3 py-1 text-sm text-muted hover:text-ink disabled:opacity-60"
-                >
-                  {shownLoadingOlder ? "Caricamento…" : "Messaggi precedenti"}
-                </button>
-              ) : null}
-              {shownOlderError ? <p className="text-center text-sm text-teal">{shownOlderError}</p> : null}
-            </div>
-          ) : null}
-          {threadMessages.length > 0 ? (
-            threadEntries(threadMessages).map((entry) =>
-              entry.kind === "day" ? (
-                <div key={entry.key} data-day={entry.label} className="self-center">
-                  <span className="text-sm text-date">{entry.label}</span>
-                </div>
-              ) : (
-                <ChatTurn
-                  key={entry.message.id}
-                  clinicId={clinicId}
-                  chatId={active.id}
-                  message={entry.message}
-                  named={active.people.length > 1 || active.bots.length > 1}
-                  entered={entered.has(entry.message.id)}
-                  onReply={setReplyTo}
-                />
-              ),
-            )
-          ) : shownHasEvents || active.bots.length !== 1 ? null : (
-            <div className="max-w-[min(36rem,100%)] min-w-0 self-start wrap-anywhere rounded-2xl bg-paper px-4 py-3 text-sm leading-6">
-              <Markdown source={botGreeting} lead={<BotLead bot={active.bots[0]} />} />
-            </div>
-          )}
-          {sending ? (
-            <div role="status" className="flex justify-end self-end py-1">
-              <span className="sr-only">Invio in corso</span>
-              <span className="h-4 w-4 animate-spin rounded-full border-2 border-line border-t-ink motion-reduce:animate-none" />
-            </div>
-          ) : null}
-          {showThinking ? (
-            <div role="status" aria-live="polite" className="flex w-full max-w-[min(36rem,100%)] flex-col items-start gap-2 self-start">
-              <p className="flex items-center gap-2 py-1 text-sm text-muted">
-                {active.bots.length === 1 ? (
-                  <BotGlyph color={active.bots[0].color} emoji={active.bots[0].emoji} plain className="h-5 w-5" />
-                ) : null}
-                <span>
-                  sto elaborando
-                  <span className="elaborating-dots" aria-hidden="true" />
-                </span>
-              </p>
-            </div>
-          ) : null}
-          {visibleLives.map((live) => {
-            const view = liveDraftView(live, shownMessages, waitingReply);
-            const bot = active.bots.find((item) => item.id === live.botId) ?? null;
-            return (
-              <div key={live.botId} className="flex w-full max-w-[min(36rem,100%)] flex-col items-start gap-2 self-start">
-                {view.thinking ? (
-                  <div role="status" aria-live="polite" className="flex w-full flex-col items-start gap-2">
-                    <p className="flex items-center gap-2 py-1 text-sm text-muted">
-                      {bot ? <BotGlyph color={bot.color} emoji={bot.emoji} plain className="h-5 w-5" /> : null}
-                      <span>
-                        sto elaborando
-                        <span className="elaborating-dots" aria-hidden="true" />
-                      </span>
-                    </p>
-                    {view.trace ? <LiveTrace text={view.trace} /> : null}
-                  </div>
-                ) : null}
-                {view.text.trim() || view.target ? (
-                  <div role="status" aria-live="polite" className="flex w-fit max-w-full min-w-0 flex-col">
-                    <div className="max-w-full min-w-0 wrap-anywhere rounded-2xl bg-paper px-4 py-3 text-sm leading-6">
-                      {view.target ? (
-                        <ReplyQuote
-                          reply={{
-                            id: view.target.id,
-                            excerpt: markdownToPlainText(view.target.body).slice(0, 180),
-                            mine: view.target.mine,
-                            botId: view.target.botId,
-                            authorName: view.target.authorName,
-                            authorBot: view.target.authorBot,
-                          }}
-                          mine={false}
-                        />
-                      ) : null}
-                      {view.text.trim() && bot ? (
-                        <Markdown source={view.text} lead={<BotLead bot={bot} animate />} />
-                      ) : null}
-                    </div>
-                  </div>
-                ) : null}
-              </div>
-            );
-          })}
-          </div>
-        </div>
-
-        <MessageComposer
-          key={active.id}
-          clinicId={clinicId}
-          chatId={active.id}
-          bots={active.bots}
-          replyTo={replyTo?.id ? replyTo : null}
-          onClearReply={() => setReplyTo(null)}
-          onWaiting={active.bots.length > 0 ? noteWaiting : undefined}
-          caretEpoch={replyCaret.current}
-          onOutgoing={beginOutgoing}
-          onOutgoingSettled={settleOutgoing}
-        />
-        </div>
-        </>
-        ) : null}
+        {children}
       </section>
-      ) : null}
+      ) : (
+        children
+      )}
       {seatsChatId ? (
         <ChatSeats
           clinicId={clinicId}
@@ -2444,5 +1981,6 @@ export function ClinicShell({
       />
       <SearchDialog open={searchOpen} onClose={() => setSearchOpen(false)} />
     </div>
+    </ClinicChromeProvider>
   );
 }

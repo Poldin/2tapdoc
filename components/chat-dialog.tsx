@@ -3,7 +3,12 @@
 import { useActionState, useEffect, useRef, useState } from "react";
 import { createChat, updateChat, type CreatedChat, type FormState } from "@/app/clinics/actions";
 import { ChannelMark } from "@/components/mark";
+import { pickChatTitle } from "@/lib/chat-titles";
 import { channelSymbols } from "@/lib/marks";
+
+function pickChannelSymbol() {
+  return channelSymbols[Math.floor(Math.random() * channelSymbols.length)]?.id ?? "star";
+}
 
 export type ChatDraft = {
   chatId: string;
@@ -26,7 +31,8 @@ export function ChatDialog({
   onCreated?: (chat: CreatedChat) => void;
 }) {
   const color = draft?.color ?? "teal";
-  const [emoji, setEmoji] = useState(draft?.emoji ?? "speechbubble");
+  const [emoji, setEmoji] = useState(draft?.emoji ?? pickChannelSymbol);
+  const [suggestedTitle] = useState(draft?.title ?? pickChatTitle);
   const [state, action, pending] = useActionState<FormState, FormData>(
     draft ? updateChat.bind(null, clinicId, draft.chatId) : createChat.bind(null, clinicId),
     {},
@@ -87,7 +93,7 @@ export function ChatDialog({
             name="title"
             autoFocus
             maxLength={80}
-            defaultValue={draft?.title ?? ""}
+            defaultValue={suggestedTitle}
             placeholder="Titolo"
             aria-label="Titolo della chat"
             className="h-10 min-w-0 flex-1 rounded-xl border border-line bg-background px-3 text-sm outline-none focus:border-teal"
@@ -104,7 +110,9 @@ export function ChatDialog({
                 aria-label={item.label}
                 aria-pressed={emoji === item.id}
                 onClick={() => setEmoji(item.id)}
-                className={`rounded-full ${emoji === item.id ? "ring-2 ring-ink ring-offset-1" : ""}`}
+                className={`rounded-full [contain-intrinsic-size:1.75rem] [content-visibility:auto] ${
+                  emoji === item.id ? "ring-2 ring-ink ring-offset-1" : ""
+                }`}
               >
                 <ChannelMark color={color} emoji={item.id} plain className="h-7 w-7" />
               </button>

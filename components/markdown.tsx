@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { BotGlyph } from "@/components/mark";
 
 /**
  * Tiny, safe Markdown renderer for chat bubbles (0 dependencies).
@@ -29,7 +30,38 @@ function cleanCodeText(value: string) {
   return text;
 }
 
-function parseInline(text: string, keyPrefix: string): ReactNode[] {
+export type MentionBadge = {
+  name: string;
+  emoji: string;
+  color: string;
+};
+
+function takeMention(rest: string, mentions: MentionBadge[]) {
+  const ordered = [...mentions].sort((a, b) => b.name.length - a.name.length);
+  for (const bot of ordered) {
+    const token = `@${bot.name}`;
+    if (!rest.startsWith(token)) continue;
+    const after = rest.charAt(token.length);
+    if (after !== "" && !/[\s.,!?;:)\]"'»]/.test(after)) continue;
+    return bot;
+  }
+  return null;
+}
+
+function MentionChip({ bot, mine }: { bot: MentionBadge; mine: boolean }) {
+  return (
+    <span
+      className={`mx-0.5 inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 align-middle font-semibold leading-none ${
+        mine ? "bg-paper/20" : "bg-teal/15 text-teal"
+      }`}
+    >
+      <BotGlyph color={bot.color} emoji={bot.emoji} plain className="h-4 w-4" />
+      {bot.name}
+    </span>
+  );
+}
+
+function parseInline(text: string, keyPrefix: string, mentions: MentionBadge[] = [], mine = false): ReactNode[] {
   const nodes: ReactNode[] = [];
   let rest = text;
   let index = 0;
@@ -39,13 +71,20 @@ function parseInline(text: string, keyPrefix: string): ReactNode[] {
   };
 
   while (rest.length > 0) {
-    const special = rest.search(/[`*_~\[<]|https?:\/\/|www\./);
+    const special = rest.search(/[`*_~\[<@]|https?:\/\/|www\./);
     if (special === -1) {
       pushText(rest);
       break;
     }
     pushText(rest.slice(0, special));
     rest = rest.slice(special);
+
+    const mention = takeMention(rest, mentions);
+    if (mention) {
+      nodes.push(<MentionChip key={key()} bot={mention} mine={mine} />);
+      rest = rest.slice(mention.name.length + 1);
+      continue;
+    }
 
     // Inline code: `code` or ``code``
     if (rest.startsWith("`")) {
@@ -69,7 +108,7 @@ function parseInline(text: string, keyPrefix: string): ReactNode[] {
     const emphasis = rest.match(/^(\*\*\*|___|\*\*|__|\*|_|~~)([\s\S]+?)\1/);
     if (emphasis && emphasis[2].trim() !== "") {
       const [, marker, inner] = emphasis;
-      const parsed = parseInline(inner, key());
+      const parsed = parseInline(inner, key(), mentions, mine);
       if (marker === "***" || marker === "___") {
         nodes.push(
           <strong key={key()} className="font-semibold">
@@ -104,10 +143,10 @@ function parseInline(text: string, keyPrefix: string): ReactNode[] {
             rel="noreferrer"
             className="break-words underline underline-offset-2"
           >
-            {parseInline(label, key())}
+            {parseInline(label, key(), mentions, mine)}
           </a>
         ) : (
-          parseInline(label, key())
+          parseInline(label, key(), mentions, mine)
         ),
       );
       rest = rest.slice(link[0].length);
@@ -140,14 +179,20 @@ function parseInline(text: string, keyPrefix: string): ReactNode[] {
   return nodes;
 }
 
-function renderParagraph(lines: string[], key: string, lead?: ReactNode): ReactNode {
+function renderParagraph(
+  lines: string[],
+  key: string,
+  lead?: ReactNode,
+  mentions: MentionBadge[] = [],
+  mine = false,
+): ReactNode {
   return (
     <p key={key}>
       {lead}
       {lines.map((line, i) => (
         <span key={`${key}-line-${i}`}>
           {i > 0 ? <br /> : null}
-          {parseInline(line, `${key}-${i}`)}
+          {parseInline(line, `${key}-${i}`, mentions, mine)}
         </span>
       ))}
     </p>
@@ -161,7 +206,17 @@ const splitRow = (line: string) =>
     .split("|")
     .map((cell) => cell.trim());
 
-export function Markdown({ source, lead }: { source: string; lead?: ReactNode }) {
+export function Markdown({
+  source,
+  lead,
+  mentions = [],
+  mine = false,
+}: {
+  source: string;
+  lead?: ReactNode;
+  mentions?: MentionBadge[];
+  mine?: boolean;
+}) {
   const lines = source.replace(/\r\n?/g, "\n").split("\n");
   const blocks: ReactNode[] = [];
   const leadBox: { value: ReactNode } = { value: lead };
@@ -315,7 +370,7 @@ export function Markdown({ source, lead }: { source: string; lead?: ReactNode })
     ) {
       paragraph.push(lines[i++]);
     }
-    blocks.push(renderParagraph(paragraph, key(), takeLead()));
+    blocks.push(renderParagraph(paragraph, key(), takeLead(), mentions, mine));
   }
 
   return <div className="space-y-2 break-words [overflow-wrap:anywhere]">{blocks}</div>;
