@@ -54,6 +54,8 @@ export type TurnMessage = {
   replyToId?: string | null;
   replyExcerpt?: string | null;
   reactions?: string[];
+  /** A person is waiting on this bot: the chat has one bot, or the message names this bot. */
+  addressed?: boolean;
 };
 
 export type ClinicDoctor = {
@@ -326,7 +328,7 @@ function personIsWaiting(messages: TurnMessage[]): boolean {
   }
   return messages
     .slice(lastAssistant + 1)
-    .some((message) => message.role === "user" && !message.content.startsWith("Altro bot: "));
+    .some((message) => message.role === "user" && message.addressed === true);
 }
 
 function reactionWake(notice: string, waiting: boolean): string {

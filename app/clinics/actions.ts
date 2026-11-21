@@ -30,9 +30,18 @@ export type CreatedChat = {
     createdAt: string;
     mine: boolean;
     botId: string | null;
+    authorName: string | null;
+    authorBot: { id: string; name: string; color: string; emoji: string } | null;
     preferredAt: string | null;
     reaction: "up" | "down" | null;
-    replyTo: { id: string; excerpt: string; mine: boolean; botId: string | null } | null;
+    replyTo: {
+      id: string;
+      excerpt: string;
+      mine: boolean;
+      botId: string | null;
+      authorName: string | null;
+      authorBot: { id: string; name: string; color: string; emoji: string } | null;
+    } | null;
     emojis: { emoji: string; mine: boolean; botId: string | null }[];
     steps: { name: string; input: string; outcome: string }[];
   }[];
@@ -327,6 +336,8 @@ export async function createBot(
           createdAt: activityAt,
           mine: false,
           botId: bot.id,
+          authorName: null,
+          authorBot: { id: bot.id, name, color, emoji },
           preferredAt: null,
           reaction: null,
           replyTo: null,
@@ -408,9 +419,6 @@ export async function updateBot(
     .select("id");
   if (error || !data?.length) return { error: "Non è stato possibile modificare il bot." };
 
-  const { error: titleError } = await supabase.from("chats").update({ title: name }).eq("id", chatId);
-  if (titleError) return { error: "Il bot è stato modificato, ma il titolo della chat no." };
-
   revalidatePath(`/clinics/${clinicId}`);
   redirect(`/clinics/${clinicId}?chat=${chatId}`);
 }
@@ -436,7 +444,72 @@ export async function addBot(
     if (error.code === "23505") return { error: "Questo bot è già nella chat." };
     return { error: "Non è stato possibile aggiungere il bot." };
   }
-  redirect(`/clinics/${clinicId}?chat=${chatId}`);
+  revalidatePath(`/clinics/${clinicId}`);
+  return { sent: Date.now() };
+}
+
+export async function addChatPerson(clinicId: string, chatId: string, userId: string): Promise<FormState> {
+  const user = await requireUser();
+  if (!uuidPattern.test(clinicId) || !uuidPattern.test(chatId) || !uuidPattern.test(userId)) {
+    return { error: "Persona non valida." };
+  }
+  if (!(await clinicMember(clinicId, user.id))) return { error: "Non fai parte di questo studio." };
+  if (!(await chatInClinic(clinicId, chatId))) return { error: "Questa chat non è in questa clinica." };
+  if (!(await clinicMember(clinicId, userId))) return { error: "Questa persona non è in questo studio." };
+
+  const supabase = await createClient();
+  const { error } = await supabase.from("chat_participants").insert({ chat_id: chatId, user_id: userId });
+  if (error) {
+    if (error.code === "23505") return { error: "Questa persona è già nella chat." };
+    return { error: "Non è stato possibile aggiungere la persona." };
+  }
+  revalidatePath(`/clinics/${clinicId}`);
+  return { sent: Date.now() };
+}
+
+export async function leaveChat(clinicId: string, chatId: string): Promise<FormState> {
+  const user = await requireUser();
+  if (!uuidPattern.test(clinicId) || !uuidPattern.test(chatId)) return { error: "Chat non valida." };
+  if (!(await clinicMember(clinicId, user.id))) return { error: "Non fai parte di questo studio." };
+  if (!(await chatInClinic(clinicId, chatId))) return { error: "Questa chat non è in questa clinica." };
+
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("chat_participants")
+    .delete()
+    .eq("chat_id", chatId)
+    .eq("user_id", user.id)
+    .select("id");
+  if (error) {
+    if (error.message.includes("at least one person")) {
+      return { error: "In una chat resta almeno una persona." };
+    }
+    return { error: "Non è stato possibile uscire dalla chat." };
+  }
+  if (!data?.length) return { error: "Non è stato possibile uscire dalla chat." };
+  revalidatePath(`/clinics/${clinicId}`);
+  return { sent: Date.now() };
+}
+
+export async function removeChatBot(clinicId: string, chatId: string, botId: string): Promise<FormState> {
+  const user = await requireUser();
+  if (!uuidPattern.test(clinicId) || !uuidPattern.test(chatId) || !uuidPattern.test(botId)) {
+    return { error: "Bot non valido." };
+  }
+  if (!(await clinicMember(clinicId, user.id))) return { error: "Non fai parte di questo studio." };
+  if (!(await chatInClinic(clinicId, chatId))) return { error: "Questa chat non è in questa clinica." };
+  if (!(await botInClinic(clinicId, botId))) return { error: "Questo bot non è in questa clinica." };
+
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("chat_participants")
+    .delete()
+    .eq("chat_id", chatId)
+    .eq("bot_id", botId)
+    .select("id");
+  if (error || !data?.length) return { error: "Non è stato possibile togliere il bot." };
+  revalidatePath(`/clinics/${clinicId}`);
+  return { sent: Date.now() };
 }
 
 export async function deleteChat(
@@ -512,11 +585,34 @@ export async function sendMessage(
     }
   }
 
+  const mentionIds = [
+    ...new Set(
+      [
+        ...formData.getAll("mentions"),
+        ...String(formData.get("mentionIds") ?? "").split(","),
+      ]
+        .map((value) => String(value).trim())
+        .filter((id) => uuidPattern.test(id)),
+    ),
+  ];
+  let mentions: string[] = [];
+  if (mentionIds.length > 0) {
+    const { data: mentioned } = await supabase
+      .from("chat_participants")
+      .select("bot_id")
+      .eq("chat_id", chatId)
+      .in("bot_id", mentionIds);
+    const seated = new Set(
+      (mentioned ?? []).flatMap((seat) => (typeof seat.bot_id === "string" ? [seat.bot_id] : [])),
+    );
+    mentions = mentionIds.filter((id) => seated.has(id));
+  }
+
   const { error } = await supabase.from("chat_events").insert({
     chat_id: chatId,
     user_id: user.id,
     kind: "message",
-    payload: { body },
+    payload: mentions.length > 0 ? { body, mentions } : { body },
     reply_to_id: replyToId,
   });
 
@@ -1507,6 +1603,8 @@ export async function startMastroW(
           createdAt: activityAt,
           mine: false,
           botId: bot.id,
+          authorName: null,
+          authorBot: { id: bot.id, name, color, emoji },
           preferredAt: null,
           reaction: null,
           replyTo: null,

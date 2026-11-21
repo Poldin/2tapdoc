@@ -56,11 +56,14 @@ import { BotDialog, type BotDraft } from "@/components/bot-dialog";
 import { BotGlyph, ChannelMark, warmBotFaces } from "@/components/mark";
 import { ChatDialog, type ChatDraft } from "@/components/chat-dialog";
 import { ChatMenu } from "@/components/chat-menu";
+import { ChatSeats } from "@/components/chat-seats";
 import { ChatTitle } from "@/components/chat-title";
 import { ClinicSwitcher, type ClinicOption } from "@/components/clinic-switcher";
 import { CreateMenu } from "@/components/create-menu";
 import { SearchDialog } from "@/components/search-dialog";
 import { Markdown } from "@/components/markdown";
+
+export type ChatPerson = { id: string; name: string };
 
 export type ChatListItem = {
   id: string;
@@ -69,7 +72,8 @@ export type ChatListItem = {
   emoji: string;
   preview: string | null;
   activityAt: string;
-  bot: BotMark | null;
+  people: ChatPerson[];
+  bots: BotMark[];
 };
 
 export type ChatReply = {
@@ -77,6 +81,8 @@ export type ChatReply = {
   excerpt: string;
   mine: boolean;
   botId: string | null;
+  authorName: string | null;
+  authorBot: BotMark | null;
 };
 
 export type ChatEmojiMark = {
@@ -98,6 +104,8 @@ export type ChatMessage = {
   createdAt: string;
   mine: boolean;
   botId: string | null;
+  authorName: string | null;
+  authorBot: BotMark | null;
   preferredAt: string | null;
   reaction: "up" | "down" | null;
   replyTo: ChatReply | null;
@@ -116,6 +124,7 @@ type LiveReply = {
   botId: string;
   phase: "thinking" | "writing";
   body: string;
+  trace: string;
   updatedAt: string;
 };
 
@@ -268,6 +277,18 @@ function LiveTrace({ text }: { text: string }) {
 }
 
 /** Il messaggio del bot è già in chat: la bozza (faccia che pensa o testo a metà) è un residuo del turno appena chiuso. */
+function liveDraftView(live: LiveReply, messages: ChatMessage[], waiting: Outgoing[]) {
+  const streamBody = live.phase === "writing" && live.body.trim() ? live.body : "";
+  const marker = streamBody ? takeReplyMarker(streamBody) : null;
+  const saved = marker ? (messages.find((message) => message.id === marker.id) ?? null) : null;
+  const target =
+    saved ?? (marker && !saved && waiting.length === 1 ? outgoingMessage(waiting[0]) : null);
+  const emojiReply = Boolean(marker && isChatEmoji(marker.body));
+  const text = emojiReply ? "" : marker && saved ? marker.body : streamBody;
+  const thinking = !text.trim() && (live.phase === "thinking" || (emojiReply && Boolean(streamBody)));
+  return { text, target, thinking, trace: thinking ? live.trace : "" };
+}
+
 function liveDraftSettled(live: LiveReply, messages: ChatMessage[]) {
   const message = [...messages].reverse().find((item) => item.botId === live.botId);
   if (!message) return false;
@@ -289,6 +310,8 @@ function messageStamp(messages: ChatMessage[]) {
         message.body,
         message.preferredAt ?? "",
         message.reaction ?? "",
+        message.authorName ?? "",
+        message.authorBot?.name ?? "",
         message.replyTo?.excerpt ?? "",
         message.emojis.map((emoji) => `${emoji.emoji}:${emoji.mine ? 1 : 0}:${emoji.botId ?? ""}`).join("."),
         message.steps
@@ -320,6 +343,8 @@ function outgoingMessage(item: Outgoing): ChatMessage {
     createdAt: item.createdAt,
     mine: true,
     botId: null,
+    authorName: null,
+    authorBot: null,
     preferredAt: null,
     reaction: null,
     replyTo: item.replyTo,
@@ -435,7 +460,8 @@ function listItem(chat: CreatedChat): ChatListItem {
     emoji: chat.emoji,
     preview: chat.preview,
     activityAt: chat.activityAt,
-    bot: chat.bot,
+    people: [],
+    bots: chat.bot ? [chat.bot] : [],
   };
 }
 
@@ -446,7 +472,7 @@ function chatLabel(title: string | null) {
 const navKey = "clinic-nav";
 
 function chatName(chat: ChatListItem) {
-  return chat.bot?.name ?? chatLabel(chat.title);
+  return chatLabel(chat.title);
 }
 
 function fitField(field: HTMLTextAreaElement) {
@@ -514,9 +540,38 @@ function writeDraft(clinicId: string, chatId: string, value: string) {
   }
 }
 
+type ComposerMention = { id: string; name: string };
+
+function mentionQuery(value: string, caret: number) {
+  const before = value.slice(0, caret);
+  const at = before.lastIndexOf("@");
+  if (at < 0) return null;
+  if (at > 0 && !/\s/.test(before[at - 1] ?? "")) return null;
+  const query = before.slice(at + 1);
+  if (query.includes("\n")) return null;
+  return { start: at, query };
+}
+
+function mentionsInBody(body: string, items: ComposerMention[]) {
+  const used = new Map<string, number>();
+  return items.filter((item) => {
+    const token = `@${item.name}`;
+    const seen = used.get(item.name) ?? 0;
+    let from = 0;
+    for (let index = 0; index <= seen; index += 1) {
+      const at = body.indexOf(token, from);
+      if (at < 0) return false;
+      from = at + token.length;
+    }
+    used.set(item.name, seen + 1);
+    return true;
+  });
+}
+
 function MessageComposer({
   clinicId,
   chatId,
+  bots,
   replyTo,
   onClearReply,
   onWaiting,
@@ -526,6 +581,7 @@ function MessageComposer({
 }: {
   clinicId: string;
   chatId: string;
+  bots: BotMark[];
   replyTo: ReplyDraft | null;
   onClearReply: () => void;
   onWaiting?: (waiting: boolean) => void;
@@ -549,6 +605,42 @@ function MessageComposer({
   onOutgoingSettledRef.current = onOutgoingSettled;
   const [ready, setReady] = useState(false);
   const [desktop, setDesktop] = useState(false);
+  const [picker, setPicker] = useState<{ start: number; query: string } | null>(null);
+  const [pickIndex, setPickIndex] = useState(0);
+  const mentionsRef = useRef<ComposerMention[]>([]);
+  const mentionFieldRef = useRef<HTMLInputElement>(null);
+
+  function rememberMentions(items: ComposerMention[]) {
+    mentionsRef.current = items;
+    if (mentionFieldRef.current) mentionFieldRef.current.value = items.map((item) => item.id).join(",");
+  }
+
+  function chooseMention(bot: BotMark) {
+    const field = fieldRef.current;
+    const query = picker;
+    if (!field || !query) return;
+    const caret = field.selectionStart ?? field.value.length;
+    const next = `${field.value.slice(0, query.start)}@${bot.name} ${field.value.slice(caret)}`;
+    field.value = next;
+    const cursor = query.start + bot.name.length + 2;
+    field.setSelectionRange(cursor, cursor);
+    const kept = mentionsInBody(
+      next,
+      mentionsRef.current.some((item) => item.id === bot.id)
+        ? mentionsRef.current
+        : [...mentionsRef.current, { id: bot.id, name: bot.name }],
+    );
+    rememberMentions(kept);
+    setPicker(null);
+    setPickIndex(0);
+    writeDraft(clinicId, chatId, next);
+    setReady(next.trim().length > 0);
+    fitField(field);
+  }
+  const pickerBots = picker
+    ? bots.filter((bot) => bot.name.toLocaleLowerCase("it").includes(picker.query.toLocaleLowerCase("it")))
+    : [];
+  if (pickIndex > 0 && pickIndex >= pickerBots.length) setPickIndex(0);
   const [state, action, pending] = useActionState<FormState & { failed?: number }, FormData>(
     async (previous, formData) => {
       const result = await sendMessage(clinicId, chatId, previous, formData);
@@ -629,8 +721,10 @@ function MessageComposer({
         const snapshot = field?.value ?? "";
         const body = snapshot.trim();
         if (!body) return;
+        const kept = mentionsInBody(snapshot, mentionsRef.current);
+        rememberMentions(kept);
         sentSnapshot.current = snapshot;
-        onWaitingRef.current?.(true);
+        onWaitingRef.current?.(bots.length === 1 || kept.length > 0);
         const id = `pending-${crypto.randomUUID()}`;
         outgoingId.current = id;
         flushSync(() => {
@@ -648,6 +742,28 @@ function MessageComposer({
       className="flex flex-col gap-2 px-4 pb-3"
     >
       {state.error ? <p className="px-4 text-sm text-teal">{state.error}</p> : null}
+      {picker && pickerBots.length > 0 ? (
+        <ul className="max-h-48 overflow-y-auto rounded-2xl border border-line bg-paper p-1" role="listbox">
+          {pickerBots.map((bot, index) => (
+            <li key={bot.id}>
+              <button
+                type="button"
+                role="option"
+                aria-selected={index === pickIndex}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => chooseMention(bot)}
+                className={`flex w-full items-center gap-2 rounded-xl px-2 py-1.5 text-left text-sm ${
+                  index === pickIndex ? "bg-background" : ""
+                }`}
+              >
+                <BotGlyph color={bot.color} emoji={bot.emoji} plain className="h-6 w-6" />
+                <span className="truncate">{bot.name}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      <input ref={mentionFieldRef} type="hidden" name="mentionIds" defaultValue="" />
       {replyTo ? (
         <div className="flex items-stretch gap-2 rounded-2xl border border-line bg-paper px-3 py-2">
           <span className="w-0.5 shrink-0 rounded-full bg-ink" />
@@ -678,11 +794,39 @@ function MessageComposer({
           disabled={pending && !desktop}
           onInput={(event) => {
             const field = event.currentTarget;
+            const kept = mentionsInBody(field.value, mentionsRef.current);
+            rememberMentions(kept);
+            const nextPicker = mentionQuery(field.value, field.selectionStart ?? field.value.length);
+            setPicker(nextPicker);
+            setPickIndex(0);
             writeDraft(clinicId, chatId, field.value);
             setReady(field.value.trim().length > 0);
             fitField(field);
           }}
           onKeyDown={(event) => {
+            if (picker && pickerBots.length > 0) {
+              if (event.key === "ArrowDown") {
+                event.preventDefault();
+                setPickIndex((index) => (index + 1) % pickerBots.length);
+                return;
+              }
+              if (event.key === "ArrowUp") {
+                event.preventDefault();
+                setPickIndex((index) => (index - 1 + pickerBots.length) % pickerBots.length);
+                return;
+              }
+              if (event.key === "Escape") {
+                event.preventDefault();
+                setPicker(null);
+                return;
+              }
+              if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+                event.preventDefault();
+                const bot = pickerBots[pickIndex];
+                if (bot) chooseMention(bot);
+                return;
+              }
+            }
             if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
             event.preventDefault();
             if (!pending && event.currentTarget.value.trim()) formRef.current?.requestSubmit();
@@ -825,30 +969,21 @@ function MessageVotes({
   );
 }
 
-function speakerName(message: { mine: boolean; botId: string | null }, bot: BotMark | null) {
+function speakerName(message: { mine: boolean; authorName: string | null; authorBot: BotMark | null }) {
   if (message.mine) return "Tu";
-  if (bot && message.botId === bot.id) return bot.name;
+  if (message.authorBot) return message.authorBot.name;
+  if (message.authorName) return message.authorName;
   return "Messaggio";
 }
 
-function ReplyQuote({
-  reply,
-  mine,
-  bot,
-}: {
-  reply: ChatReply;
-  mine: boolean;
-  bot: BotMark | null;
-}) {
+function ReplyQuote({ reply, mine }: { reply: ChatReply; mine: boolean }) {
   return (
     <button
       type="button"
       onClick={() => focusMessage(reply.id)}
       className={`mb-2 block w-full rounded-xl px-2 py-1 text-left ${mine ? "bg-white/10" : "bg-background"}`}
     >
-      {bot && !reply.mine ? null : (
-        <span className="block text-xs font-medium">{speakerName(reply, bot)}</span>
-      )}
+      <span className="block text-xs font-medium">{speakerName(reply)}</span>
       <span className={`line-clamp-2 text-xs ${mine ? "text-paper/80" : "text-muted"}`}>{reply.excerpt}</span>
     </button>
   );
@@ -909,7 +1044,7 @@ function ChatTurn({
   clinicId,
   chatId,
   message,
-  bot,
+  named,
   entered,
   error,
   onReply,
@@ -917,7 +1052,7 @@ function ChatTurn({
   clinicId: string;
   chatId: string;
   message: ChatMessage;
-  bot: BotMark | null;
+  named: boolean;
   entered: boolean;
   error?: string | null;
   onReply: (reply: ReplyDraft) => void;
@@ -1025,7 +1160,7 @@ function ChatTurn({
         onClick={() =>
           onReply({
             id: message.id,
-            label: bot && !message.mine ? "" : speakerName(message, bot),
+            label: speakerName(message),
             excerpt: markdownToPlainText(message.body).slice(0, 180),
           })
         }
@@ -1061,6 +1196,9 @@ function ChatTurn({
             : "w-fit max-w-[min(36rem,100%)] items-start self-start"
       } ${entered ? (message.mine ? "msg-enter-mine" : "msg-enter-theirs") : ""}`}
     >
+      {named && !message.mine ? (
+        <p className="px-1 text-xs text-muted">{speakerName(message)}</p>
+      ) : null}
       {showSteps ? <AgentSteps steps={message.steps} /> : null}
       <div className="flex min-w-0 items-center">
         {message.mine ? gestures : null}
@@ -1069,10 +1207,10 @@ function ChatTurn({
             message.mine ? "bg-ink text-paper" : "bg-paper"
           }`}
         >
-          {message.replyTo ? <ReplyQuote reply={message.replyTo} mine={message.mine} bot={bot} /> : null}
+          {message.replyTo ? <ReplyQuote reply={message.replyTo} mine={message.mine} /> : null}
           <Markdown
             source={message.body}
-            lead={bot && message.botId === bot.id ? <BotLead bot={bot} /> : undefined}
+            lead={message.authorBot ? <BotLead bot={message.authorBot} /> : undefined}
           />
         </div>
         {message.mine ? null : gestures}
@@ -1151,6 +1289,8 @@ export function ClinicShell({
   canManageIntegrations,
   webhookVerifyToken,
   currentUserId,
+  clinicPeople,
+  myBots,
   recency: initialRecency,
   confirmations,
 }: {
@@ -1187,6 +1327,8 @@ export function ClinicShell({
   canManageIntegrations: boolean;
   webhookVerifyToken: string;
   currentUserId: string;
+  clinicPeople: ChatPerson[];
+  myBots: BotMark[];
   recency: ClinicRecency;
   confirmations: BotActionRequest[];
 }) {
@@ -1197,6 +1339,7 @@ export function ClinicShell({
   const [channelDraft, setChannelDraft] = useState<ChatDraft | null>(null);
   const [botOpen, setBotOpen] = useState(false);
   const [botDraft, setBotDraft] = useState<BotDraft | null>(null);
+  const [seatsChatId, setSeatsChatId] = useState<string | null>(null);
   const [listOpen, setListOpen] = useState(false);
   const [navCollapsed, setNavCollapsed] = useState(false);
   const [thread, setThread] = useState(messages);
@@ -1261,8 +1404,8 @@ export function ClinicShell({
   const shownMessagesRef = useRef<ChatMessage[]>([]);
   const [draftChatId, setDraftChatId] = useState(activeChatId);
   const [waiting, setWaiting] = useState(false);
-  const [live, setLive] = useState<LiveReply | null>(null);
-  const [trace, setTrace] = useState("");
+  const [lives, setLives] = useState<LiveReply[]>([]);
+  const livesRef = useRef<LiveReply[]>([]);
   const [entered, setEntered] = useState<Set<string>>(new Set());
   const [outgoing, setOutgoing] = useState<Outgoing[]>([]);
   const badgeRef = useRef<HTMLParagraphElement>(null);
@@ -1321,49 +1464,28 @@ export function ClinicShell({
     waitBaseline.current !== null &&
     lastBotMessage !== null &&
     lastBotMessage.id !== waitBaseline.current;
-  const draftSaved =
-    draftChatId === shownActiveId && live !== null && liveDraftSettled(live, shownMessages);
+  const openLives =
+    draftChatId === shownActiveId ? lives.filter((item) => !liveDraftSettled(item, shownMessages)) : [];
   if (draftChatId !== shownActiveId) {
     setDraftChatId(shownActiveId);
     setWaiting(false);
-    setLive(null);
-    if (trace) setTrace("");
+    if (lives.length) setLives([]);
     waitBaseline.current = null;
     stickToBottom.current = true;
-  } else if (replyLanded || draftSaved) {
+  } else if (replyLanded) {
     replyCaret.current += 1;
     waitBaseline.current = null;
     if (waiting) setWaiting(false);
-    if (live) setLive(null);
-    if (trace) setTrace("");
   }
-  const replySettled = replyLanded || draftSaved;
-  const visibleTrace = draftChatId === shownActiveId && !replySettled ? trace : "";
-  const visibleLive = draftChatId === shownActiveId && !replySettled ? live : null;
-  const visibleWaiting = draftChatId === shownActiveId && waiting && !replySettled;
+  if (draftChatId === shownActiveId && openLives.length !== lives.length) setLives(openLives);
+  const visibleLives = draftChatId === shownActiveId ? openLives : [];
+  const liveKey = visibleLives
+    .map((item) => `${item.botId}:${item.phase}:${item.updatedAt}:${item.body.length}:${item.trace.length}`)
+    .join("|");
+  const visibleWaiting = draftChatId === shownActiveId && waiting && !replyLanded;
   const active = visibleChats.find((chat) => chat.id === shownActiveId) ?? null;
-  const streamBody =
-    visibleLive?.phase === "writing" && visibleLive.body.trim() ? visibleLive.body : "";
-  const streamMarker = streamBody ? takeReplyMarker(streamBody) : null;
-  const savedReplyTarget = streamMarker
-    ? (shownMessages.find((message) => message.id === streamMarker.id) ?? null)
-    : null;
   const waitingReply = pendingOutgoing.filter((item) => !item.error);
-  const streamTarget =
-    savedReplyTarget ??
-    (streamMarker && !savedReplyTarget && waitingReply.length === 1
-      ? outgoingMessage(waitingReply[0])
-      : null);
-  const streamEmojiReply = Boolean(streamMarker && isChatEmoji(streamMarker.body));
-  const streamText = streamEmojiReply
-    ? ""
-    : streamMarker && savedReplyTarget
-      ? streamMarker.body
-      : streamBody;
-  const showThinking =
-    Boolean(active?.bot) &&
-    !streamText.trim() &&
-    (visibleWaiting || visibleLive?.phase === "thinking" || (streamEmojiReply && Boolean(streamBody)));
+  const showThinking = visibleWaiting && visibleLives.length === 0 && (active?.bots.length ?? 0) > 0;
   const rows = placeByRecency(visibleChats, [
     { id: agendaListId, at: shownRecency.agendaAt },
     { id: patientsListId, at: shownRecency.patientsAt },
@@ -1481,64 +1603,81 @@ export function ClinicShell({
     };
   }, [opened, activeId, agendaOpen, patientsOpen, settingsOpen, clinicId]);
 
+  useLayoutEffect(() => {
+    livesRef.current = lives;
+  }, [lives]);
+
   useEffect(() => {
-    const botId = active?.bot?.id;
-    if (opened || !activeId || !botId || agendaOpen || patientsOpen || settingsOpen) return;
+    if (opened || !activeId || agendaOpen || patientsOpen || settingsOpen) return;
 
     const supabase = createClient();
     let stopped = false;
     const channel = supabase.channel(`draft:${clinicId}:${activeId}`);
+    const seenAt = new Map<string, string>();
+    const dropTimers = new Map<string, number>();
 
-    let seenAt = "";
-    const liveRef: { current: LiveReply | null } = { current: null };
-    let dropTimer = 0;
-    const apply = (row: { bot_id?: string; phase?: string; body?: string; updated_at?: string } | null, removed: boolean) => {
-      window.clearTimeout(dropTimer);
+    const commit = (next: LiveReply[]) => {
+      livesRef.current = next;
+      setLives(next);
+    };
+    const drop = (botId: string) => {
+      commit(livesRef.current.filter((item) => item.botId !== botId));
+    };
+
+    const apply = (
+      row: { bot_id?: string; phase?: string; body?: string; updated_at?: string } | null,
+      removed: boolean,
+    ) => {
+      const botId = row?.bot_id;
+      if (!botId) return;
+      const pending = dropTimers.get(botId);
+      if (pending) {
+        window.clearTimeout(pending);
+        dropTimers.delete(botId);
+      }
       if (removed) {
-        const previous = liveRef.current;
+        const previous = livesRef.current.find((item) => item.botId === botId) ?? null;
         const hold =
           previous !== null &&
           previous.phase === "writing" &&
           previous.body.trim().length > 0 &&
           !liveDraftSettled(previous, shownMessagesRef.current);
         if (!hold || !previous) {
-          liveRef.current = null;
-          setLive(null);
-          dropTimer = window.setTimeout(() => {
-            if (liveRef.current) return;
-            setTrace("");
-          }, 1600);
+          drop(botId);
           return;
         }
         const stamp = previous.updatedAt;
-        dropTimer = window.setTimeout(() => {
-          const current = liveRef.current;
-          if (!current || current.updatedAt !== stamp) return;
-          liveRef.current = null;
-          setLive(null);
-          setTrace("");
-        }, 1600);
+        dropTimers.set(
+          botId,
+          window.setTimeout(() => {
+            dropTimers.delete(botId);
+            const current = livesRef.current.find((item) => item.botId === botId);
+            if (!current || current.updatedAt !== stamp) return;
+            drop(botId);
+          }, 1600),
+        );
         return;
       }
-      if (!row || row.bot_id !== botId) return;
       const updatedAt = typeof row.updated_at === "string" ? row.updated_at : "";
-      if (updatedAt && seenAt && updatedAt < seenAt) return;
-      if (updatedAt) seenAt = updatedAt;
+      const previousAt = seenAt.get(botId) ?? "";
+      if (updatedAt && previousAt && updatedAt < previousAt) return;
+      if (updatedAt) seenAt.set(botId, updatedAt);
       const phase: LiveReply["phase"] = row.phase === "writing" ? "writing" : "thinking";
       const rawBody = typeof row.body === "string" ? row.body : "";
-      if (phase === "thinking" && rawBody.trim()) setTrace(rawBody);
-      else if (phase === "thinking") setTrace("");
-      setLive((current) => {
-        if (updatedAt && current?.updatedAt && updatedAt < current.updatedAt) return current;
-        const body = phase === "writing" ? rawBody : "";
-        const next: LiveReply = { botId, phase, body, updatedAt };
-        if (liveDraftSettled(next, shownMessagesRef.current)) {
-          liveRef.current = null;
-          return null;
-        }
-        liveRef.current = next;
-        return next;
-      });
+      const next: LiveReply = {
+        botId,
+        phase,
+        body: phase === "writing" ? rawBody : "",
+        trace: phase === "thinking" ? rawBody : "",
+        updatedAt,
+      };
+      if (liveDraftSettled(next, shownMessagesRef.current)) {
+        drop(botId);
+        return;
+      }
+      const current = livesRef.current.find((item) => item.botId === botId);
+      if (current && updatedAt && current.updatedAt && updatedAt < current.updatedAt) return;
+      commit([...livesRef.current.filter((item) => item.botId !== botId), next]);
     };
 
     channel.on(
@@ -1550,7 +1689,7 @@ export function ClinicShell({
         filter: `chat_id=eq.${activeId}`,
       },
       (payload) => {
-        if (payload.eventType === "DELETE") apply(null, true);
+        if (payload.eventType === "DELETE") apply(payload.old, true);
         else apply(payload.new, false);
       },
     );
@@ -1567,10 +1706,9 @@ export function ClinicShell({
             .from("chat_drafts")
             .select("bot_id, phase, body, updated_at")
             .eq("chat_id", activeId)
-            .eq("bot_id", botId)
-            .maybeSingle()
             .then(({ data: existing }) => {
-              if (!stopped && existing) apply(existing, false);
+              if (stopped) return;
+              for (const row of existing ?? []) apply(row, false);
             });
         });
       });
@@ -1578,10 +1716,10 @@ export function ClinicShell({
 
     return () => {
       stopped = true;
-      window.clearTimeout(dropTimer);
+      for (const timer of dropTimers.values()) window.clearTimeout(timer);
       void supabase.removeChannel(channel);
     };
-  }, [opened, activeId, agendaOpen, patientsOpen, settingsOpen, clinicId, active?.bot?.id]);
+  }, [opened, activeId, agendaOpen, patientsOpen, settingsOpen, clinicId]);
 
   useEffect(() => {
     const supabase = createClient();
@@ -1736,7 +1874,7 @@ export function ClinicShell({
     if (!thread) return;
     if (stickToBottom.current) thread.scrollTop = thread.scrollHeight;
     syncDayBadge(thread, badgeRef.current, setDayLabel);
-  }, [shownActiveId, visibleMessages, showThinking, streamBody, sending, visibleTrace]);
+  }, [shownActiveId, visibleMessages, showThinking, sending, liveKey]);
 
   useEffect(() => {
     const thread = threadRef.current;
@@ -1815,6 +1953,8 @@ export function ClinicShell({
             excerpt: input.replyTo.excerpt,
             mine: target?.mine ?? false,
             botId: target?.botId ?? null,
+            authorName: target?.authorName ?? null,
+            authorBot: target?.authorBot ?? null,
           }
         : null,
       error: null,
@@ -1834,7 +1974,6 @@ export function ClinicShell({
     if (!next) {
       waitBaseline.current = null;
       setWaiting(false);
-      setLive(null);
       return;
     }
     waitBaseline.current = lastBotMessage?.id ?? "";
@@ -1993,23 +2132,13 @@ export function ClinicShell({
                       } ${selected ? "text-paper" : "hover:bg-line"}`}
                     >
                       <span className="flex h-12 w-12 shrink-0 self-center">
-                        {chat.bot ? (
-                          <BotGlyph
-                            color={chat.bot.color}
-                            emoji={chat.bot.emoji}
-                            animate={selected}
-                            plain
-                            className="h-full w-full"
-                          />
-                        ) : (
-                          <ChannelMark
-                            color={chat.color}
-                            emoji={chat.emoji}
-                            animate={selected}
-                            plain
-                            className="h-full w-full"
-                          />
-                        )}
+                        <ChannelMark
+                          color={chat.color}
+                          emoji={chat.emoji}
+                          animate={selected}
+                          plain
+                          className="h-full w-full"
+                        />
                       </span>
                       <span
                         className={`flex min-w-0 flex-1 flex-col justify-center ${railClosed ? "md:sr-only" : ""}`}
@@ -2032,29 +2161,22 @@ export function ClinicShell({
                         chatId={chat.id}
                         name={chatName(chat)}
                         onRemoved={onChatRemoved}
+                        onPeople={() => {
+                          setSearchOpen(false);
+                          setMenuOpen(false);
+                          setSeatsChatId(chat.id);
+                        }}
                         onEdit={() => {
                           setSearchOpen(false);
                           setMenuOpen(false);
-                          if (chat.bot) {
-                            setBotDraft({
-                              botId: chat.bot.id,
-                              chatId: chat.id,
-                              name: chat.bot.name,
-                              color: chat.bot.color,
-                              emoji: chat.bot.emoji,
-                            });
-                            setBotOpen(true);
-                            setChannelOpen(false);
-                          } else {
-                            setChannelDraft({
-                              chatId: chat.id,
-                              title: chat.title ?? "",
-                              color: chat.color,
-                              emoji: chat.emoji,
-                            });
-                            setChannelOpen(true);
-                            setBotOpen(false);
-                          }
+                          setChannelDraft({
+                            chatId: chat.id,
+                            title: chat.title ?? "",
+                            color: chat.color,
+                            emoji: chat.emoji,
+                          });
+                          setChannelOpen(true);
+                          setBotOpen(false);
                         }}
                       />
                     </div>
@@ -2128,13 +2250,7 @@ export function ClinicShell({
           />
         ) : active ? (
         <>
-        <ChatTitle
-          label={dayLabel}
-          badgeRef={badgeRef}
-          bot={active.bot}
-          color={active.color}
-          emoji={active.emoji}
-        />
+        <ChatTitle label={dayLabel} badgeRef={badgeRef} color={active.color} emoji={active.emoji} />
 
         <div className="mx-auto flex min-h-0 w-full max-w-4xl flex-1 flex-col">
         <div
@@ -2169,15 +2285,15 @@ export function ClinicShell({
                   clinicId={clinicId}
                   chatId={active.id}
                   message={entry.message}
-                  bot={active.bot}
+                  named={active.people.length > 1 || active.bots.length > 1}
                   entered={entered.has(entry.message.id)}
                   onReply={setReplyTo}
                 />
               ),
             )
-          ) : shownHasEvents || !active.bot ? null : (
+          ) : shownHasEvents || active.bots.length !== 1 ? null : (
             <div className="max-w-[min(36rem,100%)] min-w-0 self-start wrap-anywhere rounded-2xl bg-paper px-4 py-3 text-sm leading-6">
-              <Markdown source={botGreeting} lead={<BotLead bot={active.bot} />} />
+              <Markdown source={botGreeting} lead={<BotLead bot={active.bots[0]} />} />
             </div>
           )}
           {sending ? (
@@ -2186,47 +2302,61 @@ export function ClinicShell({
               <span className="h-4 w-4 animate-spin rounded-full border-2 border-line border-t-ink motion-reduce:animate-none" />
             </div>
           ) : null}
-          {showThinking && active.bot ? (
+          {showThinking ? (
             <div role="status" aria-live="polite" className="flex w-full max-w-[min(36rem,100%)] flex-col items-start gap-2 self-start">
               <p className="flex items-center gap-2 py-1 text-sm text-muted">
-                <BotGlyph color={active.bot.color} emoji={active.bot.emoji} plain className="h-5 w-5" />
+                {active.bots.length === 1 ? (
+                  <BotGlyph color={active.bots[0].color} emoji={active.bots[0].emoji} plain className="h-5 w-5" />
+                ) : null}
                 <span>
                   sto elaborando
                   <span className="elaborating-dots" aria-hidden="true" />
                 </span>
               </p>
-              {visibleTrace ? <LiveTrace text={visibleTrace} /> : null}
-            </div>
-          ) : visibleTrace ? (
-            <div className="w-full max-w-[min(36rem,100%)] self-start">
-              <LiveTrace text={visibleTrace} />
             </div>
           ) : null}
-          {(streamText.trim() || (streamTarget && !streamEmojiReply)) && active.bot ? (
-            <div
-              role="status"
-              aria-live="polite"
-              className="flex w-fit max-w-[min(36rem,100%)] min-w-0 flex-col self-start"
-            >
-              <div className="max-w-full min-w-0 wrap-anywhere rounded-2xl bg-paper px-4 py-3 text-sm leading-6">
-                {streamTarget ? (
-                  <ReplyQuote
-                    reply={{
-                      id: streamTarget.id,
-                      excerpt: markdownToPlainText(streamTarget.body).slice(0, 180),
-                      mine: streamTarget.mine,
-                      botId: streamTarget.botId,
-                    }}
-                    mine={false}
-                    bot={active.bot}
-                  />
+          {visibleLives.map((live) => {
+            const view = liveDraftView(live, shownMessages, waitingReply);
+            const bot = active.bots.find((item) => item.id === live.botId) ?? null;
+            return (
+              <div key={live.botId} className="flex w-full max-w-[min(36rem,100%)] flex-col items-start gap-2 self-start">
+                {view.thinking ? (
+                  <div role="status" aria-live="polite" className="flex w-full flex-col items-start gap-2">
+                    <p className="flex items-center gap-2 py-1 text-sm text-muted">
+                      {bot ? <BotGlyph color={bot.color} emoji={bot.emoji} plain className="h-5 w-5" /> : null}
+                      <span>
+                        sto elaborando
+                        <span className="elaborating-dots" aria-hidden="true" />
+                      </span>
+                    </p>
+                    {view.trace ? <LiveTrace text={view.trace} /> : null}
+                  </div>
                 ) : null}
-                {streamText.trim() ? (
-                  <Markdown source={streamText} lead={<BotLead bot={active.bot} animate />} />
+                {view.text.trim() || view.target ? (
+                  <div role="status" aria-live="polite" className="flex w-fit max-w-full min-w-0 flex-col">
+                    <div className="max-w-full min-w-0 wrap-anywhere rounded-2xl bg-paper px-4 py-3 text-sm leading-6">
+                      {view.target ? (
+                        <ReplyQuote
+                          reply={{
+                            id: view.target.id,
+                            excerpt: markdownToPlainText(view.target.body).slice(0, 180),
+                            mine: view.target.mine,
+                            botId: view.target.botId,
+                            authorName: view.target.authorName,
+                            authorBot: view.target.authorBot,
+                          }}
+                          mine={false}
+                        />
+                      ) : null}
+                      {view.text.trim() && bot ? (
+                        <Markdown source={view.text} lead={<BotLead bot={bot} animate />} />
+                      ) : null}
+                    </div>
+                  </div>
                 ) : null}
               </div>
-            </div>
-          ) : null}
+            );
+          })}
           </div>
         </div>
 
@@ -2234,9 +2364,10 @@ export function ClinicShell({
           key={active.id}
           clinicId={clinicId}
           chatId={active.id}
+          bots={active.bots}
           replyTo={replyTo?.id ? replyTo : null}
           onClearReply={() => setReplyTo(null)}
-          onWaiting={active.bot ? noteWaiting : undefined}
+          onWaiting={active.bots.length > 0 ? noteWaiting : undefined}
           caretEpoch={replyCaret.current}
           onOutgoing={beginOutgoing}
           onOutgoingSettled={settleOutgoing}
@@ -2245,6 +2376,40 @@ export function ClinicShell({
         </>
         ) : null}
       </section>
+      ) : null}
+      {seatsChatId ? (
+        <ChatSeats
+          clinicId={clinicId}
+          chatId={seatsChatId}
+          people={visibleChats.find((chat) => chat.id === seatsChatId)?.people ?? []}
+          bots={visibleChats.find((chat) => chat.id === seatsChatId)?.bots ?? []}
+          colleagues={clinicPeople.filter(
+            (person) =>
+              !(visibleChats.find((chat) => chat.id === seatsChatId)?.people ?? []).some(
+                (seat) => seat.id === person.id,
+              ),
+          )}
+          myBots={myBots}
+          currentUserId={currentUserId}
+          onEditBot={(bot) => {
+            setBotDraft({
+              botId: bot.id,
+              chatId: seatsChatId,
+              name: bot.name,
+              color: bot.color,
+              emoji: bot.emoji,
+            });
+            setSeatsChatId(null);
+            setBotOpen(true);
+            setChannelOpen(false);
+          }}
+          onLeft={() => {
+            onChatRemoved(seatsChatId);
+            setSeatsChatId(null);
+            router.refresh();
+          }}
+          onClose={() => setSeatsChatId(null)}
+        />
       ) : null}
       <ChatDialog
         key={channelDraft ? `chat-${channelDraft.chatId}` : channelOpen ? "chat-create-open" : "chat-create-closed"}

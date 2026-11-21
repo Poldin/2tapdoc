@@ -1,13 +1,21 @@
 "use client";
 
-import { Pencil, Trash } from "lucide-react";
+import { Pencil, Trash, Users } from "lucide-react";
 
-export function ChatActions({ onEdit, onDelete }: { onEdit: () => void; onDelete: () => void }) {
+export function ChatActions({
+  onEdit,
+  onPeople,
+  onDelete,
+}: {
+  onEdit: () => void;
+  onPeople: () => void;
+  onDelete: () => void;
+}) {
   return (
     <div
       role="menu"
       aria-label="Chat"
-      className="absolute top-7 right-0 z-30 w-40 rounded-2xl border border-line bg-paper p-1 text-ink shadow-sm"
+      className="absolute top-7 right-0 z-30 w-44 rounded-2xl border border-line bg-paper p-1 text-ink shadow-sm"
     >
       <button
         type="button"
@@ -17,6 +25,15 @@ export function ChatActions({ onEdit, onDelete }: { onEdit: () => void; onDelete
       >
         <Pencil className="h-4 w-4" strokeWidth={2} />
         Modifica
+      </button>
+      <button
+        type="button"
+        role="menuitem"
+        onClick={onPeople}
+        className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm hover:bg-background"
+      >
+        <Users className="h-4 w-4" strokeWidth={2} />
+        Persone
       </button>
       <button
         type="button"

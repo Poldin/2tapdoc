@@ -15,7 +15,9 @@ function carrySession(from: NextResponse, to: NextResponse) {
 export async function updateSession(request: NextRequest) {
   const path = request.nextUrl.pathname;
   // Signing out clears cookies on its own response. Refreshing the session here would write them back.
-  if (path === "/auth/sign-out") return NextResponse.next({ request });
+  if (path === "/auth/sign-out" || path === "/auth/account-deleted") {
+    return NextResponse.next({ request });
+  }
 
   let supabaseResponse = NextResponse.next({ request });
 

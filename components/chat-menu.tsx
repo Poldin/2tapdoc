@@ -11,6 +11,7 @@ export function ChatMenu({
   chatId,
   name,
   onEdit,
+  onPeople,
   onRemoved,
 }: {
   selected: boolean;
@@ -18,6 +19,7 @@ export function ChatMenu({
   chatId: string;
   name: string;
   onEdit: () => void;
+  onPeople: () => void;
   onRemoved: (chatId: string) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -65,6 +67,10 @@ export function ChatMenu({
           onEdit={() => {
             setOpen(false);
             onEdit();
+          }}
+          onPeople={() => {
+            setOpen(false);
+            onPeople();
           }}
           onDelete={() => {
             setOpen(false);

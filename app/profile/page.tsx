@@ -2,8 +2,10 @@ import { Suspense } from "react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
+import { AccountDangerZone } from "@/components/account-danger-zone";
 import { PasskeySettings } from "@/components/passkey-settings";
 import { PasswordForm } from "@/components/password-form";
+import { ProfileBillingSection } from "@/components/profile-billing-section";
 import { getSessionUser } from "@/lib/auth/session";
 import { createClient } from "@/lib/supabase/server";
 
@@ -27,7 +29,7 @@ async function ProfileScreen() {
   const supabase = await createClient();
   const { data: memberships } = await supabase
     .from("memberships")
-    .select("clinic_id, clinics(name)")
+    .select("clinic_id, clinics(name), clinic_roles(is_admin)")
     .eq("user_id", user.id)
     .order("created_at", { ascending: false });
 
@@ -35,6 +37,17 @@ async function ProfileScreen() {
     const clinic = membership.clinics as { name: string } | { name: string }[] | null;
     const name = Array.isArray(clinic) ? clinic[0]?.name : clinic?.name;
     if (!name) return [];
+    return [{ id: membership.clinic_id, name }];
+  });
+
+  const adminClinics = (memberships ?? []).flatMap((membership) => {
+    const clinic = membership.clinics as { name: string } | { name: string }[] | null;
+    const name = Array.isArray(clinic) ? clinic[0]?.name : clinic?.name;
+    if (!name) return [];
+    const mineRole = membership.clinic_roles as { is_admin: boolean } | { is_admin: boolean }[] | null;
+    const isAdmin = Boolean((Array.isArray(mineRole) ? mineRole[0] : mineRole)?.is_admin);
+    if (!isAdmin) return [];
+    // Quando Stripe sarà collegato, leggere plan_slug / stripe_subscription_id dalla riga clinics.
     return [{ id: membership.clinic_id, name }];
   });
   const initial = (user.email.trim()[0] || "?").toUpperCase();
@@ -58,9 +71,9 @@ async function ProfileScreen() {
         </div>
       </div>
 
-      <h2 className="mt-10 text-sm text-muted">Studi</h2>
+      <h2 className="mt-10 text-sm text-muted">Cliniche</h2>
       {clinics.length === 0 ? (
-        <p className="mt-3 text-sm">Non hai ancora uno studio.</p>
+        <p className="mt-3 text-sm">Non fai ancora parte di nessuna clinica.</p>
       ) : (
         <ul className="mt-3 flex flex-col gap-2">
           {clinics.map((clinic) => (
@@ -76,6 +89,8 @@ async function ProfileScreen() {
         </ul>
       )}
 
+      <ProfileBillingSection adminClinics={adminClinics} />
+
       <PasswordForm />
       <PasskeySettings />
 
@@ -84,6 +99,8 @@ async function ProfileScreen() {
           Esci
         </button>
       </form>
+
+      <AccountDangerZone accountEmail={user.email.trim()} />
     </main>
   );
 }

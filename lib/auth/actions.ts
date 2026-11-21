@@ -2,8 +2,9 @@
 
 import { redirect } from "next/navigation";
 import { passwordError } from "@/lib/auth/password";
-import { createClient } from "@/lib/supabase/server";
 import { getSessionUser } from "@/lib/auth/session";
+import { createServiceRoleClient } from "@/lib/supabase/admin";
+import { createClient } from "@/lib/supabase/server";
 
 export type AuthResult = { error?: string; needsCode?: boolean; email?: string };
 
@@ -123,5 +124,28 @@ export async function setPassword(password: string, confirm: string): Promise<Au
   const { error } = await supabase.auth.updateUser({ password });
   if (error) return { error: "Non è stato possibile salvare la password." };
   return {};
+}
+
+export async function deleteAccount(emailConfirmation: string): Promise<AuthResult> {
+  const user = await getSessionUser();
+  if (!user) return { error: "La sessione è scaduta. Accedi di nuovo." };
+
+  const sessionEmail = cleanEmail(user.email);
+  const typed = cleanEmail(emailConfirmation);
+  if (!emailPattern.test(typed)) return { error: "Inserisci un indirizzo email valido." };
+  if (typed !== sessionEmail) return { error: "L’email non coincide con quella dell’account." };
+
+  const admin = createServiceRoleClient();
+  if (!admin) {
+    return {
+      error:
+        "Eliminazione account non disponibile: manca la chiave di servizio nel server. Contatta il supporto.",
+    };
+  }
+
+  const { error } = await admin.auth.admin.deleteUser(user.id);
+  if (error) return { error: "Non è stato possibile eliminare l’account. Riprova o contatta il supporto." };
+
+  redirect("/auth/account-deleted");
 }
 

@@ -375,7 +375,7 @@ export const clinicoKnowledge = `
 Conoscenza Clinico (prodotto reale, da usare quando chiedono info su Clinico, prezzi, privacy, funzioni):
 - Clinico è l'assistente AI per studi dentistici e medici. Canale principale: WhatsApp (integrazione ufficiale in arrivo). Altri canali arriveranno.
 - Colleghi AI: Ginevra (richieste pazienti), Franco (agenda), Roberta (email/WhatsApp), Sofia (promemoria/richiami), Marco (memoria paziente). La segreteria decide regole e conferma: nulla parte senza di lei.
-- Piani (IVA esclusa, fatturato mensilmente, disdici quando vuoi): Free €0/mese (uso AI e funzionalità limitate, gratis per sempre); Studio €29/mese (€14,50 AI, €5 WhatsApp); Clinica €79/mese (€39,50 AI, €10 WhatsApp, assistenza prioritaria); Gruppo €149/mese (€74,50 AI, €20 WhatsApp, assistenza prioritaria, più sedi).
+- Piani (IVA esclusa, fatturato mensilmente, disdici quando vuoi): Free €0/mese (uso AI e funzionalità limitate, gratis per sempre); Studio €28/mese (€14,48 AI, €5 WhatsApp); Clinica €78/mese (€38,48 AI, €10 WhatsApp, assistenza prioritaria); Gruppo €148/mese (€73,48 AI, €20 WhatsApp, assistenza prioritaria, più sedi).
 - Compliance: orientato a GDPR e AI Act; dati ospitati in Europa; modelli Mistral in UE; i dati pazienti non servono ad addestrare modelli pubblici; l'assistente si presenta come AI e non dà pareri clinici. Non inventare certificazioni o audit: se chiedono dettagli formali, dì che sono disponibili su richiesta e rimanda a Privacy sul sito.
 - Non inventare prezzi diversi da quelli sopra. Non promettere integrazioni già live se non lo sono.
 `;

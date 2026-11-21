@@ -31,8 +31,11 @@ type PreviewEvent = {
   created_at: string;
 };
 
+type SeatBot = BotMark & { owner_user_id?: string };
+
 type SeatRow = {
-  bots: BotMark | BotMark[] | null;
+  user_id: string | null;
+  bots: SeatBot | SeatBot[] | null;
 };
 
 type ChatRow = {
@@ -45,13 +48,13 @@ type ChatRow = {
   chat_participants: SeatRow[] | null;
 };
 
-function soleBot(seats: SeatRow[] | null) {
-  const bots = (seats ?? []).flatMap((seat) => {
+function seatBots(seats: SeatRow[] | null): BotMark[] {
+  return (seats ?? []).flatMap((seat) => {
     const bot = seat.bots;
     const row = Array.isArray(bot) ? bot[0] : bot;
-    return row ? [row] : [];
+    if (!row?.id || !row.name || !row.color || !row.emoji) return [];
+    return [{ id: row.id, name: row.name, color: row.color, emoji: row.emoji }];
   });
-  return bots.length === 1 ? bots[0] : null;
 }
 
 export default async function ClinicPage({
@@ -101,17 +104,61 @@ export default async function ClinicPage({
   const { data: rows } = await supabase
     .from("chats")
     .select(
-      "id, title, color, emoji, created_at, chat_events(seq, kind, payload, created_at), chat_participants(bots(id, name, color, emoji)), chat_clinics!inner(clinic_id)",
+      "id, title, color, emoji, created_at, chat_events(seq, kind, payload, created_at), chat_participants(user_id, bots(id, name, color, emoji)), chat_clinics!inner(clinic_id)",
     )
     .eq("chat_clinics.clinic_id", id)
     .order("seq", { referencedTable: "chat_events", ascending: false })
     .limit(1, { referencedTable: "chat_events" });
 
-  const chats = ((rows ?? []) as ChatRow[])
+  const chatRows = (rows ?? []) as ChatRow[];
+  const [{ data: memberRows }, { data: myBotRows }] = await Promise.all([
+    supabase.from("memberships").select("user_id").eq("clinic_id", id),
+    supabase
+      .from("bots")
+      .select("id, name, color, emoji, bot_clinics!inner(clinic_id)")
+      .eq("owner_user_id", user.id)
+      .eq("bot_clinics.clinic_id", id),
+  ]);
+  const memberIds = [
+    ...new Set(
+      (memberRows ?? []).flatMap((row) => (typeof row.user_id === "string" ? [row.user_id] : [])),
+    ),
+  ];
+  const seatUserIds = chatRows.flatMap((row) =>
+    (row.chat_participants ?? []).flatMap((seat) => (seat.user_id ? [seat.user_id] : [])),
+  );
+  const profileIds = [...new Set([...memberIds, ...seatUserIds])];
+  const { data: profileRows } =
+    profileIds.length > 0
+      ? await supabase.from("profiles").select("id, email, name").in("id", profileIds)
+      : { data: [] };
+  const profileName = new Map(
+    ((profileRows ?? []) as { id: string; email: string | null; name: string | null }[]).map((profile) => {
+      const name = profile.name?.trim();
+      const email = profile.email?.trim();
+      return [profile.id, name || email || "Qualcuno"] as const;
+    }),
+  );
+  const clinicPeople = memberIds.map((userId) => ({
+    id: userId,
+    name: profileName.get(userId) ?? "Qualcuno",
+  }));
+  const myBots: BotMark[] = ((myBotRows ?? []) as { id: string; name: string; color: string; emoji: string }[])
+    .flatMap((bot) =>
+      bot.id && bot.name && bot.color && bot.emoji
+        ? [{ id: bot.id, name: bot.name, color: bot.color, emoji: bot.emoji }]
+        : [],
+    )
+    .sort((a, b) => a.name.localeCompare(b.name, "it"));
+
+  const chats = chatRows
     .map((row) => {
       const latest = [...(row.chat_events ?? [])].sort((a, b) => Number(b.seq) - Number(a.seq))[0];
       const previewBody = latest?.kind === "message" ? messageBody(latest.payload) : null;
       const previewSource = previewBody;
+      const people = (row.chat_participants ?? []).flatMap((seat) =>
+        seat.user_id ? [{ id: seat.user_id, name: profileName.get(seat.user_id) ?? "Qualcuno" }] : [],
+      );
       return {
         id: row.id,
         title: row.title,
@@ -119,7 +166,8 @@ export default async function ClinicPage({
         emoji: row.emoji,
         preview: previewSource ? markdownToPlainText(previewSource) : null,
         activityAt: latest?.created_at ?? row.created_at,
-        bot: soleBot(row.chat_participants),
+        people,
+        bots: seatBots(row.chat_participants),
         hasEvents: Boolean(latest),
       };
     })
@@ -494,14 +542,15 @@ export default async function ClinicPage({
     );
   }
 
-  const list: ChatListItem[] = chats.map(({ id: chatId, title, color, emoji, preview, activityAt, bot }) => ({
+  const list: ChatListItem[] = chats.map(({ id: chatId, title, color, emoji, preview, activityAt, people, bots }) => ({
     id: chatId,
     title,
     color,
     emoji,
     preview,
     activityAt,
-    bot,
+    people,
+    bots,
   }));
   const thread = threadPromise ? await threadPromise : { messages: [], hasOlder: false, nextCursor: null };
 
@@ -554,6 +603,8 @@ export default async function ClinicPage({
       canManageAgenda={canManageAgenda}
       canManageIntegrations={canManageIntegrations}
       currentUserId={user.id}
+      clinicPeople={clinicPeople}
+      myBots={myBots}
       recency={recency}
       confirmations={confirmations}
     />

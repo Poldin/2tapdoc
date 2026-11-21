@@ -67,3 +67,5 @@ Le integrazioni dello studio stanno in Impostazioni. La riga è la stessa per tu
 2. Le funzioni che garantiscono l’esecuzione, poche e affidabili, prima di allargare la superficie.
 3. L’AI come interfaccia: capisce la richiesta, legge nel perimetro dell’utente, invoca le funzioni certe, e dice cosa è successo.
 4. La UI, solo dove l’interazione in linguaggio naturale ha bisogno di essere vista, confermata o corretta.
+
+Che cosa costruire adesso, e le note prese mentre lo si implementa, stanno in `next.md`. L’ordine operativo è lì: funzioni certe e `chat_events`, poi i file dei tool, poi il tool di render e il catalogo, poi log e metriche, infine router e memoria. Si aggiorna a ogni passo.

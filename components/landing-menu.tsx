@@ -1,9 +1,21 @@
 "use client";
 
-import { useRef, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 
 export function LandingMenu({ children }: { children: ReactNode }) {
   const detailsRef = useRef<HTMLDetailsElement>(null);
+
+  useEffect(() => {
+    function handlePointerDown(event: PointerEvent) {
+      const el = detailsRef.current;
+      if (!el?.open) return;
+      const target = event.target;
+      if (target instanceof Node && el.contains(target)) return;
+      el.removeAttribute("open");
+    }
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () => document.removeEventListener("pointerdown", handlePointerDown);
+  }, []);
 
   return (
     <details ref={detailsRef} className="relative lg:hidden">

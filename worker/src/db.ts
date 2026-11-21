@@ -710,6 +710,10 @@ function parseTurn(value: unknown): Turn | null {
     const reactions = Array.isArray(item.reactions)
       ? item.reactions.filter((entry): entry is string => typeof entry === "string" && entry.length > 0)
       : [];
+    const addressed =
+      typeof item.addressed === "boolean"
+        ? item.addressed
+        : item.role === "user" && !item.content.startsWith("Altro bot: ");
     return {
       role: item.role,
       content: item.content,
@@ -718,6 +722,7 @@ function parseTurn(value: unknown): Turn | null {
       replyToId: typeof item.replyToId === "string" ? item.replyToId : null,
       replyExcerpt: typeof item.replyExcerpt === "string" ? item.replyExcerpt : null,
       reactions,
+      addressed,
     };
   });
 

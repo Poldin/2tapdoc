@@ -7,6 +7,13 @@ import { createClient } from "@/lib/supabase/server";
 /** First screen of a chat, and each older page opened from the button. */
 export const chatPageSize = 40;
 
+export type ThreadBot = {
+  id: string;
+  name: string;
+  color: string;
+  emoji: string;
+};
+
 export type ThreadMessage = {
   id: string;
   seq: number;
@@ -14,9 +21,18 @@ export type ThreadMessage = {
   createdAt: string;
   mine: boolean;
   botId: string | null;
+  authorName: string | null;
+  authorBot: ThreadBot | null;
   preferredAt: string | null;
   reaction: "up" | "down" | null;
-  replyTo: { id: string; excerpt: string; mine: boolean; botId: string | null } | null;
+  replyTo: {
+    id: string;
+    excerpt: string;
+    mine: boolean;
+    botId: string | null;
+    authorName: string | null;
+    authorBot: ThreadBot | null;
+  } | null;
   emojis: { emoji: string; mine: boolean; botId: string | null }[];
   steps: AgentStep[];
 };
@@ -122,6 +138,31 @@ export async function loadChatThread(
     }
   }
 
+  const authors = [...byId.values()];
+  const userIds = [...new Set(authors.flatMap((row) => (row.user_id ? [row.user_id] : [])))];
+  const botIds = [...new Set(authors.flatMap((row) => (row.bot_id ? [row.bot_id] : [])))];
+  const [{ data: profileRows }, { data: botRows }] = await Promise.all([
+    userIds.length > 0
+      ? supabase.from("profiles").select("id, name").in("id", userIds)
+      : Promise.resolve({ data: [] as { id: string; name: string | null }[] }),
+    botIds.length > 0
+      ? supabase.from("bots").select("id, name, color, emoji").in("id", botIds)
+      : Promise.resolve({ data: [] as ThreadBot[] }),
+  ]);
+  const names = new Map(
+    (profileRows ?? []).map((profile) => [profile.id, profile.name?.trim() || "Qualcuno"]),
+  );
+  const bots = new Map(
+    (botRows ?? []).flatMap((bot) => {
+      if (!bot.id || !bot.name || !bot.color || !bot.emoji) return [];
+      return [[bot.id, { id: bot.id, name: bot.name, color: bot.color, emoji: bot.emoji } as ThreadBot] as const];
+    }),
+  );
+  const authorOf = (row: StoredMessage) => ({
+    authorName: row.user_id ? (names.get(row.user_id) ?? "Qualcuno") : null,
+    authorBot: row.bot_id ? (bots.get(row.bot_id) ?? null) : null,
+  });
+
   const ids = visible.map((row) => row.id);
   const reactionByEvent = new Map<string, "up" | "down">();
   const emojiByEvent = new Map<string, ThreadMessage["emojis"]>();
@@ -159,6 +200,7 @@ export async function loadChatThread(
         createdAt: row.created_at,
         mine: row.user_id === userId,
         botId: row.bot_id ?? null,
+        ...authorOf(row),
         preferredAt: row.preferred_at ?? null,
         reaction: reactionByEvent.get(row.id) ?? null,
         replyTo: target
@@ -167,6 +209,7 @@ export async function loadChatThread(
               excerpt: markdownToPlainText(takeReplyMarker(target.body)?.body ?? target.body).slice(0, 180),
               mine: target.user_id === userId,
               botId: target.bot_id ?? null,
+              ...authorOf(target),
             }
           : null,
         emojis: emojiByEvent.get(row.id) ?? [],
