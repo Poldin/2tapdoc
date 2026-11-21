@@ -59,6 +59,7 @@ export type FormState = {
   sent?: number;
   created?: CreatedChat;
   integrationId?: string;
+  integrationAccount?: string;
   removed?: string;
   decided?: string;
 };
@@ -1605,14 +1606,17 @@ export async function createIntegration(clinicId: string, _state: FormState, for
   if (!uuidPattern.test(clinicId)) return { error: "Studio non valido." };
   if (!(await clinicMember(clinicId, user.id))) return { error: "Non fai parte di questo studio." };
   const provider = String(formData.get("provider") ?? "");
-  if (provider !== "whatsapp") return { error: "Integrazione sconosciuta." };
+  if (provider !== "whatsapp" && provider !== "public_page") return { error: "Integrazione sconosciuta." };
 
   const supabase = await createClient();
   const { data: rpcId, error } = await supabase.rpc("create_integration", {
     p_clinic_id: clinicId,
     p_provider: provider,
   });
-  if (error) return { error: "Non è stato possibile aggiungere l'integrazione." };
+  if (error) {
+    if (error.message.includes("già attiva")) return { error: "La pagina pubblica è già attiva." };
+    return { error: "Non è stato possibile aggiungere l'integrazione." };
+  }
 
   let integrationId = typeof rpcId === "string" && uuidPattern.test(rpcId) ? rpcId : undefined;
   if (!integrationId) {
@@ -1627,8 +1631,21 @@ export async function createIntegration(clinicId: string, _state: FormState, for
     if (row?.id && uuidPattern.test(row.id)) integrationId = row.id;
   }
 
+  let integrationAccount: string | undefined;
+  if (integrationId) {
+    const { data: created } = await supabase
+      .from("integrations")
+      .select("account")
+      .eq("clinic_id", clinicId)
+      .eq("id", integrationId)
+      .maybeSingle();
+    const account = created?.account?.trim();
+    if (account) integrationAccount = account;
+  }
+
   revalidatePath(`/clinics/${clinicId}`);
-  return { sent: Date.now(), integrationId };
+  if (provider === "public_page" && integrationAccount) revalidatePath(`/p/${integrationAccount}`);
+  return { sent: Date.now(), integrationId, integrationAccount };
 }
 
 export async function startMastroW(
@@ -1735,6 +1752,12 @@ export async function dropIntegration(
   if (!(await clinicMember(clinicId, user.id))) return { error: "Non fai parte di questo studio." };
 
   const supabase = await createClient();
+  const { data: existing } = await supabase
+    .from("integrations")
+    .select("provider, account")
+    .eq("clinic_id", clinicId)
+    .eq("id", integrationId)
+    .maybeSingle();
   const { data, error } = await supabase
     .from("integrations")
     .delete()
@@ -1743,6 +1766,9 @@ export async function dropIntegration(
     .select("id");
   if (error || !data?.length) return { error: "Non è stato possibile rimuovere l'integrazione." };
   revalidatePath(`/clinics/${clinicId}`);
+  if (existing?.provider === "public_page" && existing.account?.trim()) {
+    revalidatePath(`/p/${existing.account.trim()}`);
+  }
   return { sent: Date.now() };
 }
 

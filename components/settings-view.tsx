@@ -1,7 +1,7 @@
 "use client";
 
 import { useActionState, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { Settings } from "lucide-react";
+import { Globe, Mail, MessageCircle, Phone, Settings } from "lucide-react";
 import { clearWhatsAppSetupDraft, WhatsAppSetupDialog } from "@/components/whatsapp-setup-dialog";
 import {
   addClinicMember,
@@ -68,16 +68,54 @@ export type ClinicIntegration = {
   whatsapp: { creditCents: number; messageCount: number } | null;
 };
 
-const integrationChoices = [{ id: "whatsapp", label: "WhatsApp" }] as const;
+const toolCatalog = [
+  {
+    id: "whatsapp",
+    label: "WhatsApp",
+    body: "I pazienti scrivono allo studio. L'assistente risponde da questo numero.",
+    available: true,
+  },
+  {
+    id: "public_page",
+    label: "Pagina pubblica",
+    body: "Una pagina dello studio, aperta a chi arriva dal link.",
+    available: true,
+  },
+  {
+    id: "gmail",
+    label: "Gmail",
+    body: "La posta dello studio nello stesso assistente.",
+    available: false,
+  },
+  {
+    id: "phone",
+    label: "Telefono",
+    body: "Le chiamate seguono lo stesso modo di rispondere e di prenotare.",
+    available: false,
+  },
+] as const;
+
+const toolIcons = {
+  whatsapp: MessageCircle,
+  public_page: Globe,
+  gmail: Mail,
+  phone: Phone,
+} as const;
 
 function integrationLabel(provider: string) {
-  return integrationChoices.find((choice) => choice.id === provider)?.label ?? provider;
+  return toolCatalog.find((tool) => tool.id === provider)?.label ?? provider;
 }
 
-function integrationStatus(status: string) {
-  if (status === "connected") return "Collegato";
-  if (status === "pending") return "Da collegare";
-  return status;
+function integrationStatus(integration: ClinicIntegration) {
+  if (integration.provider === "public_page" && integration.status === "connected") return "Attiva";
+  if (integration.status === "connected") return "Collegato";
+  if (integration.status === "pending") return "Da collegare";
+  return integration.status;
+}
+
+function integrationSummary(integration: ClinicIntegration) {
+  if (integration.provider === "public_page" && integration.account.trim()) return `/p/${integration.account.trim()}`;
+  return integration.account.trim() || "—";
 }
 
 function euro(cents: number) {
@@ -583,20 +621,34 @@ function AssetDialog({
 function IntegrationDialog({
   open,
   clinicId,
+  integrations,
   onClose,
   onCreated,
+  onOpenExisting,
 }: {
   open: boolean;
   clinicId: string;
+  integrations: ClinicIntegration[];
   onClose: () => void;
-  onCreated: (integrationId?: string) => void;
+  onCreated: (integrationId: string | undefined, provider: string, account?: string) => void;
+  onOpenExisting: (integrationId: string) => void;
 }) {
   const [state, action, pending] = useActionState<FormState, FormData>(createIntegration.bind(null, clinicId), {});
   const seen = useRef(state.sent);
+  const chosen = useRef("whatsapp");
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
   const onCreatedRef = useRef(onCreated);
   onCreatedRef.current = onCreated;
+
+  useEffect(() => {
+    if (!open) return;
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape" && !pending) onClose();
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [open, onClose, pending]);
 
   useEffect(() => {
     if (!open) {
@@ -606,31 +658,83 @@ function IntegrationDialog({
     if (state.sent && state.sent !== seen.current) {
       seen.current = state.sent;
       onCloseRef.current();
-      onCreatedRef.current(state.integrationId);
+      onCreatedRef.current(state.integrationId, chosen.current, state.integrationAccount);
     }
-  }, [open, state.sent, state.integrationId]);
+  }, [open, state.sent, state.integrationId, state.integrationAccount]);
+
+  if (!open) return null;
+
+  const publicPage = integrations.find((integration) => integration.provider === "public_page");
 
   return (
-    <SettingsDialog
-      open={open}
-      title="Nuova integrazione"
-      onClose={onClose}
-      action={action}
-      pending={pending}
-      error={state.error}
-      submitLabel="Aggiungi"
+    <div
+      className="fixed inset-0 z-40 flex items-center justify-center bg-ink/40 p-4 sm:p-8"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget && !pending) onClose();
+      }}
     >
-      <label className="flex flex-col gap-2 text-sm">
-        Integrazione
-        <select name="provider" defaultValue={integrationChoices[0].id} className={fieldClassName()}>
-          {integrationChoices.map((choice) => (
-            <option key={choice.id} value={choice.id}>
-              {choice.label}
-            </option>
-          ))}
-        </select>
-      </label>
-    </SettingsDialog>
+      <form
+        action={action}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="add-tool-title"
+        className="flex max-h-[min(44rem,90vh)] w-full max-w-4xl flex-col gap-5 overflow-y-auto rounded-3xl border border-line bg-paper p-6 sm:p-8"
+      >
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h2 id="add-tool-title" className="text-lg font-medium">
+              Aggiungi un tool
+            </h2>
+            <p className="mt-1 text-sm text-muted">Scegli cosa attivare per questo studio.</p>
+          </div>
+          <button
+            type="button"
+            aria-label="Chiudi"
+            onClick={onClose}
+            disabled={pending}
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-line text-lg leading-none disabled:opacity-50"
+          >
+            ×
+          </button>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          {toolCatalog.map((tool) => {
+            const Icon = toolIcons[tool.id];
+            const existing = tool.id === "public_page" ? publicPage : undefined;
+            const locked = !tool.available;
+            return (
+              <button
+                key={tool.id}
+                type={locked || existing ? "button" : "submit"}
+                name={locked || existing ? undefined : "provider"}
+                value={locked || existing ? undefined : tool.id}
+                disabled={pending || locked}
+                onClick={() => {
+                  if (existing) {
+                    onOpenExisting(existing.id);
+                    return;
+                  }
+                  if (!locked) chosen.current = tool.id;
+                }}
+                className={`flex min-h-40 flex-col items-start gap-3 rounded-2xl border bg-background p-5 text-left disabled:opacity-60 ${
+                  existing ? "border-teal" : "border-line enabled:hover:border-teal"
+                }`}
+              >
+                <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-paper">
+                  <Icon className="h-5 w-5" strokeWidth={1.75} />
+                </span>
+                <span className="text-base font-medium">{tool.label}</span>
+                <span className="text-sm leading-5 text-muted">{tool.body}</span>
+                <span className={`mt-auto text-sm font-medium ${locked ? "text-muted" : "text-teal"}`}>
+                  {locked ? "Presto" : existing ? "Apri" : pending && chosen.current === tool.id ? "Attivazione…" : "Attiva"}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+        {state.error ? <p className="text-sm text-teal">{state.error}</p> : null}
+      </form>
+    </div>
   );
 }
 
@@ -737,6 +841,43 @@ function DeleteClinicDialog({
   );
 }
 
+function PublicPageDetail({ account }: { account: string }) {
+  const slug = account.trim();
+  const path = slug ? `/p/${slug}` : "";
+  const [copied, setCopied] = useState(false);
+
+  return (
+    <div>
+      <p className="text-xs font-medium tracking-[0.06em] text-muted">Indirizzo</p>
+      {path ? (
+        <>
+          <a href={path} target="_blank" rel="noreferrer" className="mt-1 block text-sm underline-offset-4 hover:underline">
+            {path}
+          </a>
+          <p className="mt-1 text-sm text-muted">La pagina è aperta. Chi ha il link vede il nome dello studio.</p>
+          <button
+            type="button"
+            onClick={async () => {
+              const url = `${window.location.origin}${path}`;
+              try {
+                await navigator.clipboard.writeText(url);
+                setCopied(true);
+              } catch {
+                setCopied(false);
+              }
+            }}
+            className="mt-3 h-10 rounded-full border border-line px-4 text-sm"
+          >
+            {copied ? "Copiato" : "Copia link"}
+          </button>
+        </>
+      ) : (
+        <p className="mt-1 text-sm text-muted">La pagina si sta aprendo.</p>
+      )}
+    </div>
+  );
+}
+
 function IntegrationDetailDialog({
   open,
   clinicId,
@@ -813,6 +954,8 @@ function IntegrationDetailDialog({
             </p>
           </div>
         </>
+      ) : integration.provider === "public_page" ? (
+        <PublicPageDetail account={integration.account} />
       ) : (
         <p className="text-sm text-muted">Nessun dettaglio.</p>
       )}
@@ -1085,8 +1228,8 @@ export function SettingsView({
                 shownIntegrations.map((integration) => (
                   <tr key={integration.id} className="border-t border-line">
                     <td className="px-4 py-3 font-medium">{integrationLabel(integration.provider)}</td>
-                    <td className="px-4 py-3 text-muted">{integration.account.trim() || "—"}</td>
-                    <td className="px-4 py-3 text-muted">{integrationStatus(integration.status)}</td>
+                    <td className="px-4 py-3 text-muted">{integrationSummary(integration)}</td>
+                    <td className="px-4 py-3 text-muted">{integrationStatus(integration)}</td>
                     <td className="px-4 py-3">
                       <button
                         type="button"
@@ -1169,15 +1312,20 @@ export function SettingsView({
         <IntegrationDialog
           open
           clinicId={clinicId}
+          integrations={shownIntegrations}
           onClose={() => setIntegrationOpen(false)}
-          onCreated={(integrationId) => {
+          onOpenExisting={(integrationId) => {
+            setIntegrationOpen(false);
+            setDetailIntegrationId(integrationId);
+          }}
+          onCreated={(integrationId, provider, account) => {
             if (!integrationId) return;
             setPendingIntegration({
               id: integrationId,
-              provider: "whatsapp",
-              account: "",
-              status: "pending",
-              whatsapp: { creditCents: 0, messageCount: 0 },
+              provider,
+              account: account ?? "",
+              status: provider === "public_page" ? "connected" : "pending",
+              whatsapp: provider === "whatsapp" ? { creditCents: 0, messageCount: 0 } : null,
             });
             setDetailIntegrationId(integrationId);
           }}

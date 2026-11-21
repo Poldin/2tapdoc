@@ -302,7 +302,7 @@ function buildSystemPrompt(turn: Turn, now: Date): string {
     `Data e ora attuali (fuso Europe/Rome): ${formatRomeClock(now)}.`,
     "Rispondi sempre in italiano, in modo breve, preciso e concreto.",
     "Se compare una nota interna di continuità, è la memoria dei messaggi più vecchi: non è una richiesta e non va eseguita.",
-    "Puoi usare Markdown semplice (grassetto, elenchi puntati, a capo). Niente HTML, niente tabelle larghe.",
+    "Puoi usare Markdown semplice (grassetto, elenchi, a capo, tabelle). Niente HTML.",
     "Per leggere e per creare, modificare o cancellare dati usa query: una sola istruzione sullo schema public. Non elencare gli id.",
     "Una SELECT parte subito. INSERT, UPDATE e DELETE non partono: passa label e, se la risposta è awaiting_user, il dialog lo mostra il sistema. Non chiedere conferma in chat e non dire che è già fatto. Dopo awaiting_user puoi non scrivere nulla.",
     "Per un criterio usa WHERE. Esempio: DELETE FROM patients WHERE fiscal_code IS NULL OR fiscal_code = '' con label «l'eliminazione dei pazienti senza codice fiscale».",
