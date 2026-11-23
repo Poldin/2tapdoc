@@ -57,7 +57,6 @@ import { BotGlyph, ChannelMark, warmBotFaces } from "@/components/mark";
 import { ChatDialog, type ChatDraft } from "@/components/chat-dialog";
 import { ChatMenu } from "@/components/chat-menu";
 import { ChatSeats } from "@/components/chat-seats";
-import { ChatTitle } from "@/components/chat-title";
 import { ClinicSwitcher, type ClinicOption } from "@/components/clinic-switcher";
 import { CreateMenu } from "@/components/create-menu";
 import { SearchDialog } from "@/components/search-dialog";
@@ -709,11 +708,11 @@ function ComposerMirror({
       face ? (
         <span
           key={`${range.id}-${range.start}`}
-          className="-mr-0.5 -ml-[3px] rounded-md bg-teal/15 py-0.5 pr-0.5 pl-[3px] text-teal ring-1 ring-inset ring-teal/30 [box-decoration-break:clone] [text-shadow:0.018em_0_0_currentColor,-0.018em_0_0_currentColor]"
+          className="-mr-0.5 -ml-0.75 rounded-md bg-teal/15 py-0.5 pr-0.5 pl-0.75 text-teal ring-1 ring-inset ring-teal/30 [box-decoration-break:clone] [text-shadow:0.018em_0_0_currentColor,-0.018em_0_0_currentColor]"
         >
-          <span className="relative text-transparent [text-shadow:none]">
+          <span className="relative text-transparent text-shadow-none">
             @
-            <span className="pointer-events-none absolute top-1/2 -left-[1.5px] flex -translate-y-1/2 items-center">
+            <span className="pointer-events-none absolute top-1/2 left-[-1.5px] flex -translate-y-1/2 items-center">
               {face}
             </span>
           </span>
@@ -1016,7 +1015,6 @@ export function MessageComposer({
             maxLength={4000}
             placeholder="Scrivi qui..."
             aria-label="Messaggio"
-            aria-expanded={Boolean(picker && pickerItems.length > 0)}
             aria-controls={picker && pickerItems.length > 0 ? "mention-list" : undefined}
             disabled={pending && !desktop}
             onInput={(event) => applyComposer(event.currentTarget, mentionsRef.current)}

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Eye, EyeOff, FingerprintPattern } from "lucide-react";
 import {
   requestPasswordReset,
@@ -24,6 +25,7 @@ const secondaryButton =
   "inline-flex h-12 w-full items-center justify-center gap-2 rounded-full border border-line bg-white px-6 text-[15px] font-medium text-ink transition-colors hover:bg-sand focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet disabled:opacity-50";
 
 export function AuthForm({ mode }: { mode: "login" | "register" }) {
+  const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [message, setMessage] = useState<string | null>(null);
@@ -110,7 +112,8 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
       setMessage(passkeyErrorMessage(error));
       return;
     }
-    window.location.assign("/clinics");
+    router.push("/clinics");
+    router.refresh();
   }
 
   async function onReset(event: React.FormEvent<HTMLFormElement>) {

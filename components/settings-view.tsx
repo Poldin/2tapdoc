@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useRouter } from "next/navigation";
 import { Globe, Mail, MessageCircle, Phone, Settings } from "lucide-react";
 import { clearWhatsAppSetupDraft, WhatsAppSetupDialog } from "@/components/whatsapp-setup-dialog";
 import {
@@ -749,6 +750,7 @@ function DeleteClinicDialog({
   clinicName: string;
   onClose: () => void;
 }) {
+  const router = useRouter();
   const [confirmation, setConfirmation] = useState("");
   const [error, setError] = useState<string>();
   const [pending, setPending] = useState(false);
@@ -785,7 +787,8 @@ function DeleteClinicDialog({
           try {
             const result = await deleteClinic(clinicId, confirmation);
             if (result.removed) {
-              window.location.assign("/clinics");
+              router.push("/clinics");
+              router.refresh();
               return;
             }
             setError(result.error ?? "Non è stato possibile eliminare la clinica.");

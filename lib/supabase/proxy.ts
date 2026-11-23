@@ -12,6 +12,10 @@ function carrySession(from: NextResponse, to: NextResponse) {
   return to;
 }
 
+function isServerAction(request: NextRequest) {
+  return request.headers.has("next-action");
+}
+
 export async function updateSession(request: NextRequest) {
   const path = request.nextUrl.pathname;
   // Signing out clears cookies on its own response. Refreshing the session here would write them back.
@@ -19,6 +23,7 @@ export async function updateSession(request: NextRequest) {
     return NextResponse.next({ request });
   }
 
+  const serverAction = isServerAction(request);
   let supabaseResponse = NextResponse.next({ request });
 
   const supabase = createServerClient(
@@ -37,9 +42,12 @@ export async function updateSession(request: NextRequest) {
           cookiesToSet.forEach(({ name, value, options }) =>
             supabaseResponse.cookies.set(name, value, options),
           );
-          Object.entries(headers).forEach(([key, value]) =>
-            supabaseResponse.headers.set(key, value),
-          );
+          // Cache headers on a server action replace the RSC payload the client is waiting for.
+          if (!serverAction) {
+            Object.entries(headers).forEach(([key, value]) =>
+              supabaseResponse.headers.set(key, value),
+            );
+          }
         },
       },
     },
@@ -51,14 +59,17 @@ export async function updateSession(request: NextRequest) {
   const isPrivate = path.startsWith("/clinics") || path.startsWith("/profile");
   const isAuthScreen = path === "/login" || path === "/register";
 
-  if (!signedIn && isPrivate) {
+  // A normal redirect is an HTML page. Server actions must answer with the RSC
+  // payload, or the client throws "An unexpected response was received from the server."
+  // The action itself sends the user to login when the session is missing.
+  if (!signedIn && isPrivate && !serverAction) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     url.search = "";
     return carrySession(supabaseResponse, NextResponse.redirect(url));
   }
 
-  if (signedIn && isAuthScreen) {
+  if (signedIn && isAuthScreen && !serverAction) {
     const url = request.nextUrl.clone();
     url.pathname = "/clinics";
     url.search = "";

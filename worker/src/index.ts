@@ -10,6 +10,7 @@ import {
   failTurn,
   openDatabase,
 } from "./db.js";
+import { claimPublicJob, replyToPublicJob } from "./public-reply.js";
 import { replyToTurn, TurnInterrupted } from "./reply.js";
 import { reconcileWhatsAppSessions, stopAllWhatsAppSessions } from "./whatsapp.js";
 
@@ -86,6 +87,7 @@ async function runSession() {
   try {
     await client.connect();
     await client.query("listen bot_jobs");
+    await client.query("listen public_jobs");
     console.log("worker listening", workerId);
 
     while (running) {
@@ -94,7 +96,25 @@ async function runSession() {
 
       const turn = await claimTurn(client, workerId);
       if (!turn) {
-        await waitForWork(client);
+        const job = await claimPublicJob(client, workerId);
+        if (!job) {
+          await waitForWork(client);
+          continue;
+        }
+        console.log("claimed public", job.id);
+        try {
+          await replyToPublicJob(apiKey as string, client, workerId, job);
+          console.log("finished public", job.id);
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : "The public reply failed";
+          console.error("public reply failed", job.id, reason);
+          try {
+            await client.query("select private.fail_public_job($1, $2, $3)", [workerId, job.id, reason]);
+          } catch (failError) {
+            const message = failError instanceof Error ? failError.message : "fail failed";
+            console.error("could not record the public failure", job.id, message);
+          }
+        }
         continue;
       }
 

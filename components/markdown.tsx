@@ -157,7 +157,7 @@ function parseInline(text: string, keyPrefix: string, mentions: MentionBadge[] =
             href={href}
             target="_blank"
             rel="noreferrer"
-            className="break-words underline underline-offset-2"
+            className="wrap-break-word underline underline-offset-2"
           >
             {parseInline(label, key(), mentions, mine)}
           </a>
@@ -179,7 +179,7 @@ function parseInline(text: string, keyPrefix: string, mentions: MentionBadge[] =
           href={href}
           target="_blank"
           rel="noreferrer"
-          className="break-words underline underline-offset-2"
+          className="wrap-break-word underline underline-offset-2"
         >
           {bare[0]}
         </a>,
@@ -389,5 +389,5 @@ export function Markdown({
     blocks.push(renderParagraph(paragraph, key(), takeLead(), mentions, mine));
   }
 
-  return <div className="space-y-2 break-words [overflow-wrap:anywhere]">{blocks}</div>;
+  return <div className="space-y-2 wrap-anywhere">{blocks}</div>;
 }

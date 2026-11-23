@@ -345,7 +345,8 @@ export async function createBot(
   _state: FormState,
   formData: FormData,
 ): Promise<FormState> {
-  const user = await requireUser();
+  const user = await getSessionUser();
+  if (!user) return { error: "La sessione è scaduta. Accedi di nuovo." };
   if (!uuidPattern.test(clinicId)) return { error: "Studio non valido." };
   if (!(await clinicMember(clinicId, user.id))) return { error: "Non fai parte di questo studio." };
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Box, CalendarClock, CalendarOff, Pencil, Stethoscope, Trash, Users, type LucideIcon } from "lucide-react";
 import { createAgendaEntry, updateAgendaEntry } from "@/app/clinics/actions";
@@ -62,6 +62,7 @@ function SearchPicker({
   locked: boolean;
   onChange: (ids: string[]) => void;
 }) {
+  const listId = useId();
   const [query, setQuery] = useState("");
   const anchorRef = useRef<HTMLDivElement>(null);
   const [box, setBox] = useState<{ top: number; left: number; width: number; maxHeight: number; above: boolean } | null>(null);
@@ -133,6 +134,8 @@ function SearchPicker({
     showResults && box
       ? createPortal(
           <ul
+            id={listId}
+            role="listbox"
             style={{
               top: box.top,
               left: box.left,
@@ -140,7 +143,7 @@ function SearchPicker({
               maxHeight: box.maxHeight,
               transform: box.above ? "translateY(-100%)" : undefined,
             }}
-            className="fixed z-[60] overflow-y-auto rounded-xl border border-line bg-paper shadow-sm"
+            className="fixed z-60 overflow-y-auto rounded-xl border border-line bg-paper shadow-sm"
           >
             {matches.length === 0 ? (
               <li className="px-3 py-2 text-sm text-muted">Nessun risultato.</li>
@@ -194,7 +197,10 @@ function SearchPicker({
             }}
             placeholder={placeholder}
             aria-label={placeholder}
+            role="combobox"
+            aria-autocomplete="list"
             aria-expanded={showResults}
+            aria-controls={showResults ? listId : undefined}
             className="w-full border-0 border-b border-line bg-transparent py-1.5 text-sm outline-none focus:border-ink"
           />
         </div>

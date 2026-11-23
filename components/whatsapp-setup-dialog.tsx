@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState, useEffect, useRef, useState } from "react";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 import QRCode from "qrcode";
 import { dropIntegration, requestWhatsAppQr, startMastroW, type CreatedChat, type FormState } from "@/app/clinics/actions";
@@ -224,9 +225,12 @@ export function WhatsAppSetupDialog({
 
         <div className="flex flex-col items-center justify-center rounded-2xl border border-line bg-background p-5">
           {qrDataUrl ? (
-            <img
+            <Image
               src={qrDataUrl}
               alt="QR code per collegare WhatsApp"
+              width={224}
+              height={224}
+              unoptimized
               className="h-56 w-56 rounded-xl bg-white p-2"
             />
           ) : (
