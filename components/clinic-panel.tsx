@@ -17,6 +17,7 @@ import { leadingPlace } from "@/lib/clinic-recency";
 import { clinicIdPattern, loadClinicFrame } from "@/lib/clinic-frame";
 import { loadChatThread } from "@/lib/chat-thread";
 import { asPatient, type PatientRecord } from "@/lib/patients";
+import { parseClinicTokenAccount } from "@/lib/token-account";
 import { createClient } from "@/lib/supabase/server";
 
 type SeatBot = { id: string; name: string; color: string; emoji: string };
@@ -211,6 +212,7 @@ export async function ClinicPanel({
         integrations={settings.integrations}
         canManageIntegrations={settings.canManageIntegrations}
         webhookVerifyToken={process.env.META_WEBHOOK_VERIFY_TOKEN?.trim() ?? ""}
+        tokenAccount={settings.tokenAccount}
       />
     );
   }
@@ -238,6 +240,7 @@ async function loadSettings(clinicId: string, userId: string) {
     { data: doctorRows },
     { data: objectRows },
     { data: integrationRows },
+    { data: tokenAccountRaw },
   ] = await Promise.all([
     supabase
       .from("memberships")
@@ -267,6 +270,7 @@ async function loadSettings(clinicId: string, userId: string) {
       .select("id, provider, account, status, whatsapp_channels(credit_cents), whatsapp_messages(count)")
       .eq("clinic_id", clinicId)
       .order("created_at"),
+    supabase.rpc("clinic_token_account", { p_clinic_id: clinicId }),
   ]);
   const userIds = [...new Set((memberRows ?? []).map((row) => row.user_id as string))];
   const { data: profileRows } =
@@ -393,7 +397,16 @@ async function loadSettings(clinicId: string, userId: string) {
     flags.canManageAgenda = keys.has("agenda.write");
     flags.canManageIntegrations = keys.has("integrations.manage");
   }
-  return { clinicName: clinic?.name ?? "", members, roles, specialists, assets, integrations, ...flags };
+  return {
+    clinicName: clinic?.name ?? "",
+    members,
+    roles,
+    specialists,
+    assets,
+    integrations,
+    tokenAccount: parseClinicTokenAccount(tokenAccountRaw),
+    ...flags,
+  };
 }
 
 async function loadAgenda(clinicId: string, userId: string) {

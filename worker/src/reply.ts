@@ -1,7 +1,7 @@
 import { createHmac } from "node:crypto";
 import { createMistral } from "@ai-sdk/mistral";
-import { stepCountIs, streamText, tool } from "ai";
-import { compactContext, foldTrace, type ContextMessage } from "./context-window.js";
+import { stepCountIs, streamText, tool, type LanguageModel } from "ai";
+import { compactContext, foldTrace, summaryModelName, type ContextMessage } from "./context-window.js";
 import type pg from "pg";
 import { z } from "zod";
 import {
@@ -38,6 +38,8 @@ import {
   botUpdateChats,
   botUpdatePatients,
   listMessagesToFold,
+  modelJobOpen,
+  refuseModelJob,
   saveChatTrace,
   touchBotDraft,
   turnIsCurrent,
@@ -45,6 +47,7 @@ import {
 import { botColorIds, botFaceIds, channelSymbolIds } from "./marks.js";
 import { classifyBotSql, confirmationPhrase, readQueryDescription } from "./read-query.js";
 import { StepLog, type AgentStep } from "./steps.js";
+import { createModelMeter } from "./usage.js";
 
 export type TurnMessage = {
   role: "user" | "assistant";
@@ -364,7 +367,7 @@ function sequencedMessages(messages: TurnMessage[]): ContextMessage[] | null {
 }
 
 async function modelContext(
-  apiKey: string,
+  summaryModel: LanguageModel,
   client: pg.Client,
   workerId: string,
   turn: Turn,
@@ -384,7 +387,7 @@ async function modelContext(
         listMessagesToFold(client, workerId, turn.id, afterSeq, beforeSeq, limit),
       writeTrace: (trace, untilSeq) => saveChatTrace(client, workerId, turn.id, trace, untilSeq),
       fold: async (trace, batch) => {
-        const folded = await foldTrace(apiKey, trace, batch);
+        const folded = await foldTrace(summaryModel, trace, batch);
         prep.push({
           name: "contesto",
           input: "",
@@ -422,8 +425,14 @@ export async function replyToTurn(
   client: pg.Client,
   workerId: string,
   turn: Turn,
-): Promise<{ body: string; steps: AgentStep[] }> {
-  const prepared = await modelContext(apiKey, client, workerId, turn);
+): Promise<{ body: string; steps: AgentStep[]; budgetClosed?: boolean }> {
+  if (!(await modelJobOpen(client, workerId, "bot", turn.id))) {
+    await refuseModelJob(client, workerId, "bot", turn.id);
+    return { body: "", steps: [], budgetClosed: true };
+  }
+  const meter = createModelMeter(client, workerId, "bot", turn.id);
+  const mistral = createMistral({ apiKey });
+  const prepared = await modelContext(meter.wrap(mistral(summaryModelName())), client, workerId, turn);
   const messages = prepared.messages;
   if (turn.alertPrompt) {
     const explaining = turn.alertPrompt.startsWith("FALLIMENTO DEL TURNO PRECEDENTE");
@@ -1191,7 +1200,6 @@ export async function replyToTurn(
     return { name, description: typeof description === "string" ? description : "" };
   });
 
-  const mistral = createMistral({ apiKey });
   const modelName = process.env.MISTRAL_MODEL?.trim() || "mistral-large-4";
 
   let stepText = "";
@@ -1245,7 +1253,7 @@ export async function replyToTurn(
     await publish("thinking", steps.draft(), true);
 
     const result = streamText({
-      model: mistral(modelName),
+      model: meter.wrap(mistral(modelName)),
       system: buildSystemPrompt(turn, now),
       messages,
       tools,

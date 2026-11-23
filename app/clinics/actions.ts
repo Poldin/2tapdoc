@@ -118,6 +118,39 @@ export async function updateClinic(
   redirect(`/clinics/${clinicId}?view=settings`);
 }
 
+export async function setClinicTokenBudget(
+  clinicId: string,
+  _state: FormState,
+  formData: FormData,
+): Promise<FormState> {
+  await requireUser();
+  if (!uuidPattern.test(clinicId)) return { error: "Studio non valido." };
+
+  const raw = String(formData.get("overage") ?? "")
+    .trim()
+    .replace(/\s/g, "")
+    .replace(/\./g, "");
+  if (!/^\d+$/.test(raw)) return { error: "Indica i token extra con un numero intero." };
+  const tokens = Number(raw);
+  if (!Number.isSafeInteger(tokens) || tokens > 500_000_000) {
+    return { error: "Il budget extra può arrivare a 500 milioni di token." };
+  }
+
+  const supabase = await createClient();
+  const { error } = await supabase.rpc("set_clinic_token_budget", {
+    p_clinic_id: clinicId,
+    p_tokens: tokens,
+  });
+  if (error) {
+    const message = error.message.includes("admin")
+      ? "Solo l'admin della clinica può cambiare il budget."
+      : "Non è stato possibile aggiornare il budget.";
+    return { error: message };
+  }
+  revalidatePath(`/clinics/${clinicId}`);
+  redirect(`/clinics/${clinicId}?view=settings`);
+}
+
 export async function deleteClinic(clinicId: string, confirmation: string): Promise<FormState> {
   const user = await requireUser();
   if (!uuidPattern.test(clinicId)) return { error: "Studio non valido." };

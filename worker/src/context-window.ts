@@ -1,5 +1,4 @@
-import { createMistral } from "@ai-sdk/mistral";
-import { generateText } from "ai";
+import { generateText, type LanguageModel } from "ai";
 
 export type ContextMessage = {
   seq: number;
@@ -201,12 +200,14 @@ function takenCount(value: number | undefined) {
   return Math.min(5_000_000, Math.round(value));
 }
 
-export async function foldTrace(apiKey: string, trace: string, batch: ContextMessage[]): Promise<FoldMeasure> {
-  const mistral = createMistral({ apiKey });
-  const modelName = process.env.MISTRAL_SUMMARY_MODEL?.trim() || "mistral-small-latest";
+export function summaryModelName() {
+  return process.env.MISTRAL_SUMMARY_MODEL?.trim() || "mistral-small-latest";
+}
+
+export async function foldTrace(model: LanguageModel, trace: string, batch: ContextMessage[]): Promise<FoldMeasure> {
   const started = Date.now();
   const result = await generateText({
-    model: mistral(modelName),
+    model,
     system: foldSystem,
     prompt: formatFoldBatch(trace, batch),
     maxOutputTokens: 500,

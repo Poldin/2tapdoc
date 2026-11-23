@@ -12,6 +12,7 @@ import {
   createRole,
   deleteClinic,
   dropIntegration,
+  setClinicTokenBudget,
   updateClinic,
   updateClinicalObject,
   updateDoctor,
@@ -20,7 +21,10 @@ import {
   type CreatedChat,
   type FormState,
 } from "@/app/clinics/actions";
+import { formatTokenCount } from "@/lib/agent-steps";
 import { permissionCatalog, permissionKeys, permissionLabel } from "@/lib/permissions";
+import type { ClinicTokenAccount } from "@/lib/token-account";
+import { clinicPricingPlans } from "@/components/pricing-plans";
 
 export type ClinicMember = {
   id: string;
@@ -357,6 +361,77 @@ function ClinicNameForm({ clinicId, clinicName, canRename }: { clinicId: string;
       </div>
       {state.error ? <p className="mt-3 text-sm text-teal">{state.error}</p> : null}
     </form>
+  );
+}
+
+const renewalDate = new Intl.DateTimeFormat("it-IT", {
+  day: "numeric",
+  month: "long",
+  year: "numeric",
+  timeZone: "Europe/Rome",
+});
+
+function TokenAccountCard({ clinicId, account }: { clinicId: string; account: ClinicTokenAccount }) {
+  const [state, action, pending] = useActionState<FormState, FormData>(
+    setClinicTokenBudget.bind(null, clinicId),
+    {},
+  );
+  const [overage, setOverage] = useState(String(account.overageTokens));
+  const [seenOverage, setSeenOverage] = useState(account.overageTokens);
+  if (seenOverage !== account.overageTokens) {
+    setSeenOverage(account.overageTokens);
+    setOverage(String(account.overageTokens));
+  }
+  const planName = clinicPricingPlans.find((plan) => plan.id === account.planId)?.name ?? account.planId;
+  const cap = account.includedTokens + account.overageTokens;
+  const ratio = cap === 0 ? 1 : Math.min(1, account.usedTokens / cap);
+  const renews = renewalDate.format(new Date(account.renewsAt));
+  const dirty = overage.trim().replace(/\s/g, "").replace(/\./g, "") !== String(account.overageTokens);
+
+  return (
+    <div className="rounded-2xl bg-paper px-4 py-4">
+      <p className="text-xs font-medium tracking-[0.06em] text-muted">Consumo</p>
+      <p className="mt-2 text-base font-medium">
+        {formatTokenCount(account.usedTokens) || "0"} di {formatTokenCount(cap) || "0"}
+      </p>
+      <div className="mt-3 h-2 overflow-hidden rounded-full bg-line">
+        <div className="h-full rounded-full bg-teal" style={{ width: `${Math.round(ratio * 100)}%` }} />
+      </div>
+      <p className="mt-3 text-sm text-muted">
+        Piano {planName}, {formatTokenCount(account.includedTokens) || "0"} inclusi. Si rinnova il {renews}.
+      </p>
+      <p className="mt-1 text-sm text-muted">Comprende le risposte, i tool e la pagina pubblica.</p>
+      {account.canEdit ? (
+        <form action={action} className="mt-4 border-t border-line pt-4">
+          <label className="block text-sm">
+            Budget extra del mese
+            <input
+              name="overage"
+              inputMode="numeric"
+              value={overage}
+              onChange={(event) => setOverage(event.target.value)}
+              className={`mt-2 ${fieldClassName()}`}
+            />
+          </label>
+          <p className="mt-2 text-sm text-muted">
+            Token in più consentiti dopo quelli del piano. A zero l'uso si ferma. Al rinnovo il consumo torna a zero e
+            questo budget resta.
+          </p>
+          <button
+            type="submit"
+            disabled={pending || !dirty}
+            className="mt-3 h-10 rounded-full bg-ink px-4 text-sm text-paper disabled:opacity-50"
+          >
+            {pending ? "Salvataggio…" : "Salva"}
+          </button>
+          {state.error ? <p className="mt-3 text-sm text-teal">{state.error}</p> : null}
+        </form>
+      ) : (
+        <p className="mt-3 text-sm text-muted">
+          Budget extra: {formatTokenCount(account.overageTokens) || "0"}. Lo cambia l'admin della clinica.
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -986,6 +1061,7 @@ export function SettingsView({
   canManageAgenda,
   canManageIntegrations,
   webhookVerifyToken,
+  tokenAccount = null,
   members,
   roles = [],
   specialists = [],
@@ -1003,6 +1079,7 @@ export function SettingsView({
   canManageAgenda: boolean;
   canManageIntegrations: boolean;
   webhookVerifyToken: string;
+  tokenAccount?: ClinicTokenAccount | null;
   members: ClinicMember[];
   roles?: ClinicRole[];
   specialists?: Specialist[];
@@ -1069,6 +1146,7 @@ export function SettingsView({
           <div className="mx-auto flex w-full max-w-3xl flex-col gap-4">
             <TableHeading title="generali" pin="generali" />
             <ClinicNameForm clinicId={clinicId} clinicName={clinicName} canRename={canRename} />
+            {tokenAccount ? <TokenAccountCard clinicId={clinicId} account={tokenAccount} /> : null}
             <TableHeading
               title="Ruoli"
               onAdd={() => {

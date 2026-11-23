@@ -1,6 +1,7 @@
 "use client";
 
 import { SettingsView, type ClinicAsset, type ClinicIntegration, type ClinicMember, type ClinicRole, type Specialist } from "@/components/settings-view";
+import type { ClinicTokenAccount } from "@/lib/token-account";
 import { useClinicChrome } from "@/components/clinic-chrome";
 
 export function SettingsPanel({
@@ -19,6 +20,7 @@ export function SettingsPanel({
   integrations,
   canManageIntegrations,
   webhookVerifyToken,
+  tokenAccount,
 }: {
   clinicId: string;
   clinicName: string;
@@ -35,6 +37,7 @@ export function SettingsPanel({
   integrations: ClinicIntegration[];
   canManageIntegrations: boolean;
   webhookVerifyToken: string;
+  tokenAccount: ClinicTokenAccount | null;
 }) {
   const chrome = useClinicChrome();
   return (
@@ -54,6 +57,7 @@ export function SettingsPanel({
       integrations={integrations}
       canManageIntegrations={canManageIntegrations}
       webhookVerifyToken={webhookVerifyToken}
+      tokenAccount={tokenAccount}
       onCreatedChat={chrome?.onChatCreated}
     />
   );

@@ -1,6 +1,8 @@
 import { createMistral } from "@ai-sdk/mistral";
 import { streamText } from "ai";
 import type pg from "pg";
+import { modelJobOpen, refuseModelJob } from "./db.js";
+import { createModelMeter } from "./usage.js";
 
 type PublicMessage = { role: "user" | "assistant"; content: string };
 
@@ -115,20 +117,32 @@ async function failJob(client: pg.Client, workerId: string, jobId: string, reaso
 }
 
 export async function replyToPublicJob(apiKey: string, client: pg.Client, workerId: string, job: PublicJob) {
+  if (!(await modelJobOpen(client, workerId, "public", job.id))) {
+    await refuseModelJob(client, workerId, "public", job.id);
+    return;
+  }
   const mistral = createMistral({ apiKey });
   const modelName = process.env.MISTRAL_MODEL?.trim() || "mistral-large-4";
+  const meter = createModelMeter(client, workerId, "public", job.id);
   const result = streamText({
-    model: mistral(modelName),
+    model: meter.wrap(mistral(modelName)),
     system: promptFor(job),
     messages: job.messages,
-    maxOutputTokens: 500,
+    maxOutputTokens: 800,
     temperature: 0.3,
+    providerOptions: {
+      mistral: { reasoningEffort: "low" },
+    },
   });
 
   let body = "";
   let lastSentAt = 0;
   try {
     for await (const part of result.stream) {
+      if (part.type === "error") {
+        const reason = part.error instanceof Error ? part.error.message : "The model stream failed";
+        throw new Error(reason);
+      }
       if (part.type !== "text-delta" || !part.text) continue;
       body = (body + part.text).slice(0, 4000);
       if (Date.now() - lastSentAt < 80) continue;

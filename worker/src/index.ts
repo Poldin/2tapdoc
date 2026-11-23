@@ -121,6 +121,10 @@ async function runSession() {
       console.log("claimed", turn.id);
       try {
         const reply = await replyToTurn(apiKey as string, client, workerId, turn);
+        if (reply.budgetClosed) {
+          console.log("budget", turn.id);
+          continue;
+        }
         const posted = await completeTurn(client, workerId, turn.id, reply.body, reply.steps);
         console.log(posted ? "finished" : "interrupted", turn.id);
       } catch (error) {

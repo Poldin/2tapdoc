@@ -203,6 +203,53 @@ export async function failTurn(
   ]);
 }
 
+export type ModelSource = "bot" | "public";
+
+export async function modelJobOpen(
+  client: pg.Client,
+  workerId: string,
+  source: ModelSource,
+  jobId: string,
+): Promise<boolean> {
+  const result = await client.query<{ open: boolean }>(
+    "select private.model_job_open($1, $2, $3) as open",
+    [workerId, source, jobId],
+  );
+  return result.rows[0]?.open === true;
+}
+
+export async function refuseModelJob(
+  client: pg.Client,
+  workerId: string,
+  source: ModelSource,
+  jobId: string,
+) {
+  await client.query("select private.refuse_model_job($1, $2, $3)", [workerId, source, jobId]);
+}
+
+export async function recordModelUse(
+  client: pg.Client,
+  workerId: string,
+  source: ModelSource,
+  jobId: string,
+  callKey: string,
+  model: string,
+  inputTokens: number,
+  outputTokens: number,
+  tools: string[],
+) {
+  await client.query("select private.record_model_use($1, $2, $3, $4, $5, $6, $7, $8)", [
+    workerId,
+    source,
+    jobId,
+    callKey,
+    model,
+    inputTokens,
+    outputTokens,
+    tools,
+  ]);
+}
+
 export async function botSetReplyTarget(
   client: pg.Client,
   workerId: string,

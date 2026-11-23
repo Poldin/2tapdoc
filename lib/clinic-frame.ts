@@ -97,7 +97,7 @@ export async function loadClinicFrame(userId: string, clinicId: string): Promise
   cacheLife({ stale: 300 });
 
   const supabase = await createClient();
-  const [{ data: clinic }, { data: memberships }, { data: rows }, { data: memberRows }, { data: myBotRows }] =
+  const [clinicResult, { data: memberships }, { data: rows }, { data: memberRows }, { data: myBotRows }] =
     await Promise.all([
       supabase.from("clinics").select("id, name").eq("id", clinicId).maybeSingle(),
       supabase
@@ -121,6 +121,8 @@ export async function loadClinicFrame(userId: string, clinicId: string): Promise
         .eq("bot_clinics.clinic_id", clinicId),
     ]);
 
+  if (clinicResult.error) throw new Error(clinicResult.error.message);
+  const clinic = clinicResult.data;
   if (!clinic) return null;
 
   const clinics = (memberships ?? []).flatMap((membership) => {
