@@ -42,10 +42,12 @@ import { takeReplyMarker } from "@/lib/reply-marker";
 import { AgendaListItem, agendaListId } from "@/components/agenda-list-item";
 import { PatientsListItem, patientsListId } from "@/components/patients-list-item";
 import { BotActionDialog, type BotActionRequest } from "@/components/bot-action-dialog";
+import { PublicPageListItem, publicPageListId } from "@/components/public-page-list-item";
 import { SettingsListItem, settingsListId } from "@/components/settings-list-item";
 import {
   rememberAgenda,
   rememberPatients,
+  rememberPublicPage,
   rememberSettings,
   placeByRecency,
   type ClinicRecency,
@@ -1560,6 +1562,7 @@ export function ClinicShell({
   clinicPeople,
   myBots,
   recency: initialRecency,
+  publicPage,
   children,
 }: {
   clinicId: string;
@@ -1573,6 +1576,7 @@ export function ClinicShell({
   clinicPeople: ChatPerson[];
   myBots: BotMark[];
   recency: ClinicRecency;
+  publicPage: boolean;
   children: ReactNode;
 }) {
   const [searchOpen, setSearchOpen] = useState(false);
@@ -1590,13 +1594,14 @@ export function ClinicShell({
   const agendaOpen = view === "agenda";
   const patientsOpen = view === "patients";
   const settingsOpen = view === "settings";
+  const publicOpen = view === "public" && publicPage;
   const chatParam = searchParams.get("chat");
   const selectedChatId =
-    !agendaOpen && !patientsOpen && !settingsOpen && chatParam && listChatPattern.test(chatParam)
+    !agendaOpen && !patientsOpen && !settingsOpen && !publicOpen && chatParam && listChatPattern.test(chatParam)
       ? chatParam
       : null;
   const [recency, setRecency] = useState(initialRecency);
-  const recencyToken = `${clinicId}\n${initialRecency.agendaAt ?? ""}\n${initialRecency.patientsAt ?? ""}\n${initialRecency.settingsAt ?? ""}`;
+  const recencyToken = `${clinicId}\n${initialRecency.agendaAt ?? ""}\n${initialRecency.patientsAt ?? ""}\n${initialRecency.settingsAt ?? ""}\n${initialRecency.publicAt ?? ""}`;
   const [recencyTokenSeen, setRecencyTokenSeen] = useState(recencyToken);
   if (recencyTokenSeen !== recencyToken) {
     setRecencyTokenSeen(recencyToken);
@@ -1882,16 +1887,19 @@ export function ClinicShell({
     { id: agendaListId, at: shownRecency.agendaAt },
     { id: patientsListId, at: shownRecency.patientsAt },
     { id: settingsListId, at: shownRecency.settingsAt },
+    ...(publicPage ? [{ id: publicPageListId, at: shownRecency.publicAt }] : []),
   ]);
   const visibleKey = rows.map((row) => (row.kind === "chat" ? row.chat.id : row.id)).join(" ");
-  const showPanel = agendaOpen || patientsOpen || settingsOpen || Boolean(selectedChatId);
-  const selectedListId = settingsOpen
-    ? settingsListId
-    : patientsOpen
-      ? patientsListId
-      : agendaOpen
-        ? agendaListId
-        : selectedChatId;
+  const showPanel = agendaOpen || patientsOpen || settingsOpen || publicOpen || Boolean(selectedChatId);
+  const selectedListId = publicOpen
+    ? publicPageListId
+    : settingsOpen
+      ? settingsListId
+      : patientsOpen
+        ? patientsListId
+        : agendaOpen
+          ? agendaListId
+          : selectedChatId;
   const railClosed = navCollapsed && showPanel;
   const quietChatIds = useRef(new Set<string>());
   const creatingBot = useRef(false);
@@ -2135,18 +2143,20 @@ export function ClinicShell({
   }
 
   useEffect(() => {
-    if (!agendaOpen && !patientsOpen && !settingsOpen) return;
+    if (!agendaOpen && !patientsOpen && !settingsOpen && !publicOpen) return;
     const timer = window.setTimeout(() => {
       setRecency(
-        settingsOpen
-          ? rememberSettings(clinicId)
-          : patientsOpen
-            ? rememberPatients(clinicId)
-            : rememberAgenda(clinicId),
+        publicOpen
+          ? rememberPublicPage(clinicId)
+          : settingsOpen
+            ? rememberSettings(clinicId)
+            : patientsOpen
+              ? rememberPatients(clinicId)
+              : rememberAgenda(clinicId),
       );
     }, 10_000);
     return () => window.clearTimeout(timer);
-  }, [agendaOpen, patientsOpen, settingsOpen, clinicId]);
+  }, [agendaOpen, patientsOpen, settingsOpen, publicOpen, clinicId]);
 
   useLayoutEffect(() => {
     const list = listRef.current;
@@ -2375,6 +2385,17 @@ export function ClinicShell({
                     clinicId={clinicId}
                     compact={railClosed}
                     selected={selectedListId === settingsListId}
+                    onSelect={() => setListOpen(false)}
+                  />
+                );
+              }
+              if (row.kind === "pin" && row.id === publicPageListId) {
+                return (
+                  <PublicPageListItem
+                    key={publicPageListId}
+                    clinicId={clinicId}
+                    compact={railClosed}
+                    selected={selectedListId === publicPageListId}
                     onSelect={() => setListOpen(false)}
                   />
                 );

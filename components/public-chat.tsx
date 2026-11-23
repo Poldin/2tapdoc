@@ -1,20 +1,46 @@
 "use client";
 
 import { FormEvent, useEffect, useRef, useState } from "react";
-import { Send } from "lucide-react";
+import { MapPin, Phone, Send } from "lucide-react";
 import { Markdown } from "@/components/markdown";
+import { BotGlyph } from "@/components/mark";
+import { PublicCardDialog } from "@/components/public-card-dialog";
+import type { PublicPageCard } from "@/lib/public-page-card";
 
 type ChatRole = "user" | "assistant";
 type ChatItem = { role: ChatRole; content: string };
 
 const MAX_TURNS = 12;
 
-export function PublicChat({ slug, clinicName }: { slug: string; clinicName: string }) {
+function AssistantLead({ emoji, animate = false }: { emoji: string; animate?: boolean }) {
+  return (
+    <BotGlyph
+      color="teal"
+      emoji={emoji}
+      animate={animate}
+      plain
+      className="mr-1.5 h-5 w-5 align-[-0.2em]"
+    />
+  );
+}
+
+export function PublicChat({
+  slug,
+  clinicName,
+  emoji,
+  card,
+}: {
+  slug: string;
+  clinicName: string;
+  emoji: string;
+  card: PublicPageCard;
+}) {
   const opening = `Ciao, sono l'assistente di ${clinicName}. Chiedimi degli specialisti o delle sale.`;
   const [messages, setMessages] = useState<ChatItem[]>([{ role: "assistant", content: opening }]);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [cardOpen, setCardOpen] = useState(false);
   const threadRef = useRef<HTMLDivElement>(null);
   const sessionRef = useRef<string | null>(null);
   sessionRef.current = sessionId;
@@ -112,40 +138,88 @@ export function PublicChat({ slug, clinicName }: { slug: string; clinicName: str
 
   return (
     <main className="relative flex h-dvh w-full flex-col">
-      <p className="pointer-events-none absolute top-3 left-1/2 z-20 flex w-fit max-w-[calc(100%-6rem)] -translate-x-1/2 items-center rounded-full border border-line bg-paper px-3 py-1.5 text-sm font-medium">
-        <span className="truncate">{clinicName}</span>
-      </p>
+      <div className="absolute top-3 left-1/2 z-20 flex w-fit max-w-[calc(100%-1.5rem)] -translate-x-1/2 items-center gap-1.5">
+        <button
+          type="button"
+          aria-haspopup="dialog"
+          aria-expanded={cardOpen}
+          aria-label={`Scheda di ${clinicName}`}
+          onClick={() => setCardOpen(true)}
+          className="flex min-w-0 items-center gap-1 rounded-full border border-line bg-paper px-3 py-1.5 text-sm font-medium"
+        >
+          <BotGlyph color="teal" emoji={emoji} animate plain />
+          <span className="truncate">{clinicName}</span>
+        </button>
+        {card.phones[0] ? (
+          <a
+            href={`tel:${card.phones[0].replace(/[^\d+]/g, "")}`}
+            aria-label={`Chiama ${card.phones[0]}`}
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-line bg-paper text-muted transition-colors hover:bg-line"
+          >
+            <Phone className="h-4 w-4" strokeWidth={2} />
+          </a>
+        ) : null}
+        {card.address ? (
+          <a
+            href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(card.address)}`}
+            target="_blank"
+            rel="noreferrer"
+            aria-label="Apri l'indirizzo"
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-line bg-paper text-muted transition-colors hover:bg-line"
+          >
+            <MapPin className="h-4 w-4" strokeWidth={2} />
+          </a>
+        ) : null}
+      </div>
 
       <div className="mx-auto flex min-h-0 w-full max-w-4xl flex-1 flex-col">
       <div
         ref={threadRef}
-        className="flex min-h-0 flex-1 flex-col overflow-y-auto px-4 pt-14 pb-6 [-ms-overflow-style:none] scrollbar-none [&::-webkit-scrollbar]:hidden"
+        className="flex min-h-0 flex-1 flex-col overflow-x-hidden overflow-y-auto px-4 pt-14 pb-6 [-ms-overflow-style:none] scrollbar-none [&::-webkit-scrollbar]:hidden"
       >
         <div className="mt-auto flex flex-col gap-3">
-        {messages.map((message, index) =>
-          message.role === "user" ? (
-            <p
-              key={`user-${index}`}
-              className="msg-enter-mine w-fit max-w-[min(36rem,100%)] self-end rounded-2xl bg-ink px-4 py-3 text-sm leading-6 wrap-anywhere text-paper"
+        {messages.map((message, index) => {
+          const mine = message.role === "user";
+          const live = !mine && busy && index === messages.length - 1;
+          const thinking = live && !message.content;
+          return (
+            <div
+              key={`${message.role}-${index}`}
+              role={live ? "status" : undefined}
+              aria-live={live ? "polite" : undefined}
+              className={`flex min-w-0 flex-col gap-1 ${
+                mine
+                  ? "msg-enter-mine w-fit max-w-[min(36rem,100%)] items-end self-end"
+                  : "msg-enter-theirs w-fit max-w-[min(36rem,100%)] items-start self-start"
+              }`}
             >
-              {message.content}
-            </p>
-          ) : (
-            <article
-              key={`assistant-${index}`}
-              className="msg-enter-theirs flex w-fit max-w-[min(36rem,100%)] flex-col items-start gap-1 self-start"
-            >
-              <p className="px-1 text-xs text-muted">{clinicName}</p>
-              <div className="w-full rounded-2xl bg-paper px-4 py-3 text-sm leading-6 wrap-anywhere">
-                {message.content ? (
-                  <Markdown source={message.content} />
-                ) : (
-                  <span className="text-muted">…</span>
-                )}
+              <div className="flex min-w-0 items-center">
+                <div
+                  className={`max-w-full min-w-0 wrap-anywhere rounded-2xl px-4 py-3 text-sm leading-6 ${
+                    mine ? "bg-ink text-paper" : "bg-paper"
+                  }`}
+                >
+                  {mine ? (
+                    <Markdown source={message.content} mine />
+                  ) : thinking ? (
+                    <p className="text-muted">
+                      <AssistantLead emoji={emoji} animate />
+                      <span>
+                        sto elaborando
+                        <span className="elaborating-dots" aria-hidden="true" />
+                      </span>
+                    </p>
+                  ) : (
+                    <Markdown
+                      source={message.content}
+                      lead={<AssistantLead emoji={emoji} animate={live} />}
+                    />
+                  )}
+                </div>
               </div>
-            </article>
-          ),
-        )}
+            </div>
+          );
+        })}
         </div>
       </div>
 
@@ -178,6 +252,13 @@ export function PublicChat({ slug, clinicName }: { slug: string; clinicName: str
         </button>
       </form>
       </div>
+      <PublicCardDialog
+        open={cardOpen}
+        clinicName={clinicName}
+        emoji={emoji}
+        card={card}
+        onClose={() => setCardOpen(false)}
+      />
     </main>
   );
 }

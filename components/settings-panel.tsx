@@ -1,6 +1,6 @@
 "use client";
 
-import { SettingsView, type ClinicAsset, type ClinicIntegration, type ClinicMember, type ClinicRole, type Specialist } from "@/components/settings-view";
+import { SettingsView, type ClinicAsset, type ClinicBot, type ClinicIntegration, type ClinicMember, type ClinicRole, type Specialist } from "@/components/settings-view";
 import type { ClinicTokenAccount } from "@/lib/token-account";
 import { useClinicChrome } from "@/components/clinic-chrome";
 
@@ -18,6 +18,7 @@ export function SettingsPanel({
   specialists,
   assets,
   integrations,
+  bots,
   canManageIntegrations,
   webhookVerifyToken,
   tokenAccount,
@@ -35,6 +36,7 @@ export function SettingsPanel({
   specialists: Specialist[];
   assets: ClinicAsset[];
   integrations: ClinicIntegration[];
+  bots: ClinicBot[];
   canManageIntegrations: boolean;
   webhookVerifyToken: string;
   tokenAccount: ClinicTokenAccount | null;
@@ -55,6 +57,7 @@ export function SettingsPanel({
       specialists={specialists}
       assets={assets}
       integrations={integrations}
+      bots={bots}
       canManageIntegrations={canManageIntegrations}
       webhookVerifyToken={webhookVerifyToken}
       tokenAccount={tokenAccount}

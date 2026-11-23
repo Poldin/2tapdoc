@@ -32,6 +32,7 @@ export type ClinicFrame = {
   people: { id: string; name: string }[];
   myBots: { id: string; name: string; color: string; emoji: string }[];
   recency: ClinicRecency;
+  publicPage: boolean;
 };
 
 type PreviewEvent = {
@@ -97,7 +98,7 @@ export async function loadClinicFrame(userId: string, clinicId: string): Promise
   cacheLife({ stale: 300 });
 
   const supabase = await createClient();
-  const [clinicResult, { data: memberships }, { data: rows }, { data: memberRows }, { data: myBotRows }] =
+  const [clinicResult, { data: memberships }, { data: rows }, { data: memberRows }, { data: myBotRows }, { data: publicPageRow }] =
     await Promise.all([
       supabase.from("clinics").select("id, name").eq("id", clinicId).maybeSingle(),
       supabase
@@ -119,6 +120,13 @@ export async function loadClinicFrame(userId: string, clinicId: string): Promise
         .select("id, name, color, emoji, bot_clinics!inner(clinic_id)")
         .eq("owner_user_id", userId)
         .eq("bot_clinics.clinic_id", clinicId),
+      supabase
+        .from("integrations")
+        .select("id")
+        .eq("clinic_id", clinicId)
+        .eq("provider", "public_page")
+        .eq("status", "connected")
+        .maybeSingle(),
     ]);
 
   if (clinicResult.error) throw new Error(clinicResult.error.message);
@@ -171,6 +179,7 @@ export async function loadClinicFrame(userId: string, clinicId: string): Promise
     people: memberIds.map((id) => ({ id, name: profileName.get(id) ?? "Qualcuno" })),
     myBots,
     recency: clinicRecencyFromCookie(cookieStore.get("clinic_view")?.value, clinic.id),
+    publicPage: Boolean(publicPageRow?.id),
   };
 }
 

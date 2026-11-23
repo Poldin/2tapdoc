@@ -2,20 +2,25 @@ import type { Metadata } from "next";
 import { connection } from "next/server";
 import { notFound } from "next/navigation";
 import { PublicChat } from "@/components/public-chat";
+import { botFaceIds, isListed } from "@/lib/marks";
+import { parsePublicPageCard } from "@/lib/public-page-card";
 import { createClient } from "@/lib/supabase/server";
 
 const slugPattern = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 export const instant = false;
 
-async function publicClinicName(slug: string) {
+async function publicAssistant(slug: string) {
   await connection();
   if (!slugPattern.test(slug) || slug.length > 80) return null;
   const supabase = await createClient();
-  const { data, error } = await supabase.rpc("read_public_page", { p_slug: slug });
-  if (error || typeof data !== "string") return null;
-  const name = data.trim();
-  return name || null;
+  const { data, error } = await supabase.rpc("read_public_assistant", { p_slug: slug });
+  if (error || !data || typeof data !== "object" || Array.isArray(data)) return null;
+  const row = data as Record<string, unknown>;
+  const name = typeof row.name === "string" ? row.name.trim() : "";
+  if (!name) return null;
+  const face = typeof row.emoji === "string" ? row.emoji : "";
+  return { name, emoji: isListed(botFaceIds, face) ? face : "smile", ...parsePublicPageCard(row) };
 }
 
 export async function generateMetadata({
@@ -24,19 +29,31 @@ export async function generateMetadata({
   params: Promise<{ slug: string }>;
 }): Promise<Metadata> {
   const { slug } = await params;
-  const name = await publicClinicName(slug);
-  if (!name) return { title: "Pagina non disponibile", robots: { index: false, follow: false } };
+  const assistant = await publicAssistant(slug);
+  if (!assistant) return { title: "Pagina non disponibile", robots: { index: false, follow: false } };
   return {
-    title: name,
-    description: `Pagina pubblica di ${name}.`,
+    title: assistant.name,
+    description: assistant.description || `Pagina pubblica di ${assistant.name}.`,
     alternates: { canonical: `/p/${slug}` },
   };
 }
 
 export default async function PublicClinicPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
-  const name = await publicClinicName(slug);
-  if (!name) notFound();
+  const assistant = await publicAssistant(slug);
+  if (!assistant) notFound();
 
-  return <PublicChat slug={slug} clinicName={name} />;
+  return (
+    <PublicChat
+      slug={slug}
+      clinicName={assistant.name}
+      emoji={assistant.emoji}
+      card={{
+        description: assistant.description,
+        phones: assistant.phones,
+        address: assistant.address,
+        images: assistant.images,
+      }}
+    />
+  );
 }

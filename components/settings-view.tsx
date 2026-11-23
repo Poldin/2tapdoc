@@ -1,8 +1,26 @@
 "use client";
 
-import { useActionState, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useActionState, useEffect, useLayoutEffect, useRef, useState, useTransition, type ReactNode } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Globe, Mail, MessageCircle, Phone, Settings } from "lucide-react";
+import {
+  Bell,
+  FileText,
+  FolderOpen,
+  Globe,
+  IdCard,
+  List,
+  Mail,
+  MessageCircle,
+  Phone,
+  Pill,
+  Receipt,
+  RefreshCw,
+  Settings,
+  ShieldCheck,
+  Wallet,
+} from "lucide-react";
+import { BotGlyph } from "@/components/mark";
 import { clearWhatsAppSetupDraft, WhatsAppSetupDialog } from "@/components/whatsapp-setup-dialog";
 import {
   addClinicMember,
@@ -12,6 +30,7 @@ import {
   createRole,
   deleteClinic,
   dropIntegration,
+  loadClinicTokenAccount,
   setClinicTokenBudget,
   updateClinic,
   updateClinicalObject,
@@ -23,7 +42,7 @@ import {
 } from "@/app/clinics/actions";
 import { formatTokenCount } from "@/lib/agent-steps";
 import { permissionCatalog, permissionKeys, permissionLabel } from "@/lib/permissions";
-import type { ClinicTokenAccount } from "@/lib/token-account";
+import type { ClinicTokenAccount, OnDemandMode } from "@/lib/token-account";
 import { clinicPricingPlans } from "@/components/pricing-plans";
 
 export type ClinicMember = {
@@ -65,6 +84,13 @@ const sections = [
   { id: "elimina", label: "elimina" },
 ] as const;
 
+export type ClinicBot = {
+  id: string;
+  name: string;
+  color: string;
+  emoji: string;
+};
+
 export type ClinicIntegration = {
   id: string;
   provider: string;
@@ -98,6 +124,60 @@ const toolCatalog = [
     body: "Le chiamate seguono lo stesso modo di rispondere e di prenotare.",
     available: false,
   },
+  {
+    id: "reminders",
+    label: "Promemoria",
+    body: "Conferme, spostamenti e richiami degli appuntamenti.",
+    available: false,
+  },
+  {
+    id: "records",
+    label: "Cartelle",
+    body: "Nota, allegati e storia di ogni visita.",
+    available: false,
+  },
+  {
+    id: "price_list",
+    label: "Listino",
+    body: "Le prestazioni dello studio e i loro prezzi.",
+    available: false,
+  },
+  {
+    id: "register",
+    label: "Cassa",
+    body: "Incassato e da incassare, sull'appuntamento.",
+    available: false,
+  },
+  {
+    id: "invoices",
+    label: "Fatture",
+    body: "La fattura in PDF per il paziente.",
+    available: false,
+  },
+  {
+    id: "tessera_sanitaria",
+    label: "Tessera sanitaria",
+    body: "L'invio delle spese sanitarie al Sistema TS.",
+    available: false,
+  },
+  {
+    id: "reports",
+    label: "Referti",
+    body: "Il documento clinico firmato, da pubblicare sull'FSE.",
+    available: false,
+  },
+  {
+    id: "prescriptions",
+    label: "Ricette",
+    body: "Le prescrizioni del medico.",
+    available: false,
+  },
+  {
+    id: "consents",
+    label: "Consensi",
+    body: "Contatto, privacy e opposizione, sulla scheda del paziente.",
+    available: false,
+  },
 ] as const;
 
 const toolIcons = {
@@ -105,6 +185,15 @@ const toolIcons = {
   public_page: Globe,
   gmail: Mail,
   phone: Phone,
+  reminders: Bell,
+  records: FolderOpen,
+  price_list: List,
+  register: Wallet,
+  invoices: Receipt,
+  tessera_sanitaria: IdCard,
+  reports: FileText,
+  prescriptions: Pill,
+  consents: ShieldCheck,
 } as const;
 
 function integrationLabel(provider: string) {
@@ -371,65 +460,165 @@ const renewalDate = new Intl.DateTimeFormat("it-IT", {
   timeZone: "Europe/Rome",
 });
 
+const usageUpdatedAt = new Intl.DateTimeFormat("it-IT", {
+  day: "numeric",
+  month: "short",
+  hour: "2-digit",
+  minute: "2-digit",
+  timeZone: "Europe/Rome",
+});
+
+function centsToField(cents: number) {
+  return (cents / 100).toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+const onDemandModes: { id: OnDemandMode; label: string }[] = [
+  { id: "disabled", label: "Disattivato" },
+  { id: "fixed", label: "Importo fisso" },
+  { id: "unlimited", label: "Senza limite" },
+];
+
+function UsageBar({ ratio }: { ratio: number }) {
+  return (
+    <div className="mt-3 h-2 overflow-hidden rounded-full bg-line">
+      <div className="h-full rounded-full bg-teal" style={{ width: `${Math.round(Math.min(1, Math.max(0, ratio)) * 100)}%` }} />
+    </div>
+  );
+}
+
 function TokenAccountCard({ clinicId, account }: { clinicId: string; account: ClinicTokenAccount }) {
   const [state, action, pending] = useActionState<FormState, FormData>(
     setClinicTokenBudget.bind(null, clinicId),
     {},
   );
-  const [overage, setOverage] = useState(String(account.overageTokens));
-  const [seenOverage, setSeenOverage] = useState(account.overageTokens);
-  if (seenOverage !== account.overageTokens) {
-    setSeenOverage(account.overageTokens);
-    setOverage(String(account.overageTokens));
+  const [shown, setShown] = useState(account);
+  const [mode, setMode] = useState<OnDemandMode>(account.onDemand);
+  const [limit, setLimit] = useState(centsToField(account.spendLimitCents));
+  const [refreshError, setRefreshError] = useState<string | null>(null);
+  const [refreshing, startRefresh] = useTransition();
+  const [seenAccount, setSeenAccount] = useState(`${account.onDemand}:${account.spendLimitCents}:${account.usedTokens}:${account.usageUpdatedAt}`);
+  const accountKey = `${account.onDemand}:${account.spendLimitCents}:${account.usedTokens}:${account.usageUpdatedAt}`;
+  if (seenAccount !== accountKey) {
+    setSeenAccount(accountKey);
+    setShown(account);
+    setMode(account.onDemand);
+    setLimit(centsToField(account.spendLimitCents));
   }
-  const planName = clinicPricingPlans.find((plan) => plan.id === account.planId)?.name ?? account.planId;
-  const cap = account.includedTokens + account.overageTokens;
-  const ratio = cap === 0 ? 1 : Math.min(1, account.usedTokens / cap);
-  const renews = renewalDate.format(new Date(account.renewsAt));
-  const dirty = overage.trim().replace(/\s/g, "").replace(/\./g, "") !== String(account.overageTokens);
+
+  const planName = clinicPricingPlans.find((plan) => plan.id === shown.planId)?.name ?? shown.planId;
+  const includedUsed = Math.min(shown.usedTokens, shown.includedTokens);
+  const includedRatio = shown.includedTokens === 0 ? 1 : includedUsed / shown.includedTokens;
+  const renews = renewalDate.format(new Date(shown.renewsAt));
+  const rate = euro(shown.centsPerMillion);
+  const dirty =
+    mode !== shown.onDemand || (mode === "fixed" && limit !== centsToField(shown.spendLimitCents));
+  const demandRatio = shown.spendLimitCents === 0 ? 1 : shown.onDemandCents / shown.spendLimitCents;
+  const updatedLabel = shown.usageUpdatedAt
+    ? usageUpdatedAt.format(new Date(shown.usageUpdatedAt))
+    : "nessun consumo";
 
   return (
     <div className="rounded-2xl bg-paper px-4 py-4">
-      <p className="text-xs font-medium tracking-[0.06em] text-muted">Consumo</p>
-      <p className="mt-2 text-base font-medium">
-        {formatTokenCount(account.usedTokens) || "0"} di {formatTokenCount(cap) || "0"}
-      </p>
-      <div className="mt-3 h-2 overflow-hidden rounded-full bg-line">
-        <div className="h-full rounded-full bg-teal" style={{ width: `${Math.round(ratio * 100)}%` }} />
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-xs font-medium tracking-[0.06em] text-muted">Uso incluso</p>
+        <button
+          type="button"
+          onClick={() => {
+            setRefreshError(null);
+            startRefresh(async () => {
+              const result = await loadClinicTokenAccount(clinicId);
+              if (!result.account) {
+                setRefreshError(result.error ?? "Non è stato possibile aggiornare l'uso.");
+                return;
+              }
+              setShown(result.account);
+              setMode(result.account.onDemand);
+              setLimit(centsToField(result.account.spendLimitCents));
+            });
+          }}
+          disabled={refreshing}
+          title={shown.usageUpdatedAt ? `Ultimo aggiornamento: ${updatedLabel}` : "Nessun consumo in questo periodo"}
+          aria-label={
+            shown.usageUpdatedAt
+              ? `Aggiorna l'uso incluso. Ultimo aggiornamento: ${updatedLabel}`
+              : "Aggiorna l'uso incluso. Nessun consumo in questo periodo"
+          }
+          className="flex h-7 shrink-0 items-center gap-1.5 rounded-full px-2 text-xs text-muted hover:bg-background disabled:opacity-50"
+        >
+          <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? "animate-spin" : ""}`} strokeWidth={2} />
+          {updatedLabel}
+        </button>
       </div>
-      <p className="mt-3 text-sm text-muted">
-        Piano {planName}, {formatTokenCount(account.includedTokens) || "0"} inclusi. Si rinnova il {renews}.
+      {refreshError ? <p className="mt-2 text-sm text-teal">{refreshError}</p> : null}
+      <p className="mt-2 text-base font-medium">
+        {formatTokenCount(includedUsed) || "0"} di {formatTokenCount(shown.includedTokens) || "0"}
       </p>
-      <p className="mt-1 text-sm text-muted">Comprende le risposte, i tool e la pagina pubblica.</p>
-      {account.canEdit ? (
-        <form action={action} className="mt-4 border-t border-line pt-4">
-          <label className="block text-sm">
-            Budget extra del mese
-            <input
-              name="overage"
-              inputMode="numeric"
-              value={overage}
-              onChange={(event) => setOverage(event.target.value)}
+      <UsageBar ratio={includedRatio} />
+      <p className="mt-3 text-sm text-muted">
+        Piano {planName}. Si rinnova il {renews}. Comprende le risposte, i tool e la pagina pubblica.
+      </p>
+
+      <div className="mt-5 border-t border-line pt-4">
+        <p className="text-xs font-medium tracking-[0.06em] text-muted">Uso su richiesta</p>
+        <p className="mt-2 text-base font-medium">
+          {shown.onDemand === "disabled"
+            ? "Disattivato"
+            : shown.onDemand === "unlimited"
+              ? `${euro(shown.onDemandCents)} · senza limite`
+              : `${euro(shown.onDemandCents)} di ${euro(shown.spendLimitCents)}`}
+        </p>
+        {shown.onDemand === "fixed" ? <UsageBar ratio={demandRatio} /> : null}
+        <p className="mt-3 text-sm text-muted">
+          Parte quando finiscono i token del piano. Costa {rate} per milione di token.
+        </p>
+      </div>
+
+      {shown.canEdit ? (
+        <form action={action} className="mt-4 flex flex-col gap-3">
+          <label className="text-sm">
+            Limite mensile
+            <select
+              name="mode"
+              value={mode}
+              onChange={(event) => setMode(event.target.value as OnDemandMode)}
               className={`mt-2 ${fieldClassName()}`}
-            />
+            >
+              {onDemandModes.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.label}
+                </option>
+              ))}
+            </select>
           </label>
-          <p className="mt-2 text-sm text-muted">
-            Token in più consentiti dopo quelli del piano. A zero l'uso si ferma. Al rinnovo il consumo torna a zero e
-            questo budget resta.
+          {mode === "fixed" ? (
+            <label className="text-sm">
+              Importo
+              <input
+                name="euros"
+                inputMode="decimal"
+                value={limit}
+                onChange={(event) => setLimit(event.target.value)}
+                className={`mt-2 ${fieldClassName()}`}
+              />
+            </label>
+          ) : (
+            <input type="hidden" name="euros" value="0" />
+          )}
+          <p className="text-sm text-muted">
+            Disattivato ferma l'uso a fine piano. Un importo fisso è il massimo che questo mese può andare oltre. Senza
+            limite non si ferma. Al rinnovo il consumo torna a zero e il limite resta.
           </p>
           <button
             type="submit"
             disabled={pending || !dirty}
-            className="mt-3 h-10 rounded-full bg-ink px-4 text-sm text-paper disabled:opacity-50"
+            className="h-10 self-start rounded-full bg-ink px-4 text-sm text-paper disabled:opacity-50"
           >
             {pending ? "Salvataggio…" : "Salva"}
           </button>
-          {state.error ? <p className="mt-3 text-sm text-teal">{state.error}</p> : null}
+          {state.error ? <p className="text-sm text-teal">{state.error}</p> : null}
         </form>
       ) : (
-        <p className="mt-3 text-sm text-muted">
-          Budget extra: {formatTokenCount(account.overageTokens) || "0"}. Lo cambia l'admin della clinica.
-        </p>
+        <p className="mt-4 text-sm text-muted">Il limite lo cambia l'admin della clinica.</p>
       )}
     </div>
   );
@@ -698,6 +887,7 @@ function IntegrationDialog({
   open,
   clinicId,
   integrations,
+  bots,
   onClose,
   onCreated,
   onOpenExisting,
@@ -705,10 +895,13 @@ function IntegrationDialog({
   open: boolean;
   clinicId: string;
   integrations: ClinicIntegration[];
+  bots: ClinicBot[];
   onClose: () => void;
   onCreated: (integrationId: string | undefined, provider: string, account?: string) => void;
   onOpenExisting: (integrationId: string) => void;
 }) {
+  const [publicStep, setPublicStep] = useState(false);
+  const [botChoice, setBotChoice] = useState("new");
   const [state, action, pending] = useActionState<FormState, FormData>(createIntegration.bind(null, clinicId), {});
   const seen = useRef(state.sent);
   const chosen = useRef("whatsapp");
@@ -719,12 +912,21 @@ function IntegrationDialog({
 
   useEffect(() => {
     if (!open) return;
+    setPublicStep(false);
+    setBotChoice("new");
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
     function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape" && !pending) onClose();
+      if (event.key === "Escape" && !pending) {
+        if (publicStep) setPublicStep(false);
+        else onClose();
+      }
     }
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [open, onClose, pending]);
+  }, [open, onClose, pending, publicStep]);
 
   useEffect(() => {
     if (!open) {
@@ -759,9 +961,13 @@ function IntegrationDialog({
         <div className="flex items-start justify-between gap-4">
           <div>
             <h2 id="add-tool-title" className="text-lg font-medium">
-              Aggiungi un tool
+              {publicStep ? "Pagina pubblica" : "Aggiungi un tool"}
             </h2>
-            <p className="mt-1 text-sm text-muted">Scegli cosa attivare per questo studio.</p>
+            <p className="mt-1 text-sm text-muted">
+              {publicStep
+                ? "Informazioni, scambi e criticità della pagina arrivano a un bot dello studio."
+                : "Scegli cosa attivare per questo studio."}
+            </p>
           </div>
           <button
             type="button"
@@ -773,7 +979,67 @@ function IntegrationDialog({
             ×
           </button>
         </div>
-        <div className="grid gap-3 sm:grid-cols-2">
+        {publicStep ? (
+          <fieldset className="flex flex-col gap-2">
+            <legend className="text-sm text-muted">Bot di riferimento</legend>
+            <input type="hidden" name="provider" value="public_page" />
+            <label
+              className={`flex cursor-pointer items-center gap-3 rounded-2xl border p-4 ${
+                botChoice === "new" ? "border-teal" : "border-line"
+              }`}
+            >
+              <input
+                type="radio"
+                name="bot"
+                value="new"
+                checked={botChoice === "new"}
+                onChange={() => setBotChoice("new")}
+                className="accent-teal"
+              />
+              <span>
+                <span className="block text-sm font-medium">Creane uno nuovo</span>
+                <span className="mt-1 block text-sm text-muted">Parte con lo stesso volto della pagina.</span>
+              </span>
+            </label>
+            {bots.map((bot) => (
+              <label
+                key={bot.id}
+                className={`flex cursor-pointer items-center gap-3 rounded-2xl border p-4 ${
+                  botChoice === bot.id ? "border-teal" : "border-line"
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="bot"
+                  value={bot.id}
+                  checked={botChoice === bot.id}
+                  onChange={() => setBotChoice(bot.id)}
+                  className="accent-teal"
+                />
+                <BotGlyph color={bot.color} emoji={bot.emoji} plain className="h-8 w-8" />
+                <span className="min-w-0 truncate text-sm font-medium">{bot.name}</span>
+              </label>
+            ))}
+            <div className="mt-2 flex flex-wrap gap-2">
+              <button
+                type="button"
+                disabled={pending}
+                onClick={() => setPublicStep(false)}
+                className="h-10 rounded-full border border-line px-4 text-sm disabled:opacity-50"
+              >
+                Indietro
+              </button>
+              <button
+                type="submit"
+                disabled={pending}
+                className="h-10 rounded-full bg-ink px-4 text-sm text-paper disabled:opacity-50"
+              >
+                {pending ? "Attivazione…" : "Attiva"}
+              </button>
+            </div>
+          </fieldset>
+        ) : null}
+        <div className={`grid gap-3 sm:grid-cols-2 ${publicStep ? "hidden" : ""}`}>
           {toolCatalog.map((tool) => {
             const Icon = toolIcons[tool.id];
             const existing = tool.id === "public_page" ? publicPage : undefined;
@@ -781,13 +1047,18 @@ function IntegrationDialog({
             return (
               <button
                 key={tool.id}
-                type={locked || existing ? "button" : "submit"}
-                name={locked || existing ? undefined : "provider"}
-                value={locked || existing ? undefined : tool.id}
-                disabled={pending || locked}
+                type={locked || existing || tool.id === "public_page" ? "button" : "submit"}
+                name={locked || existing || tool.id === "public_page" ? undefined : "provider"}
+                value={locked || existing || tool.id === "public_page" ? undefined : tool.id}
+                disabled={pending || locked || publicStep}
                 onClick={() => {
                   if (existing) {
                     onOpenExisting(existing.id);
+                    return;
+                  }
+                  if (tool.id === "public_page") {
+                    chosen.current = tool.id;
+                    setPublicStep(true);
                     return;
                   }
                   if (!locked) chosen.current = tool.id;
@@ -919,43 +1190,6 @@ function DeleteClinicDialog({
   );
 }
 
-function PublicPageDetail({ account }: { account: string }) {
-  const slug = account.trim();
-  const path = slug ? `/p/${slug}` : "";
-  const [copied, setCopied] = useState(false);
-
-  return (
-    <div>
-      <p className="text-xs font-medium tracking-[0.06em] text-muted">Indirizzo</p>
-      {path ? (
-        <>
-          <a href={path} target="_blank" rel="noreferrer" className="mt-1 block text-sm underline-offset-4 hover:underline">
-            {path}
-          </a>
-          <p className="mt-1 text-sm text-muted">La pagina è aperta. Chi ha il link vede il nome dello studio.</p>
-          <button
-            type="button"
-            onClick={async () => {
-              const url = `${window.location.origin}${path}`;
-              try {
-                await navigator.clipboard.writeText(url);
-                setCopied(true);
-              } catch {
-                setCopied(false);
-              }
-            }}
-            className="mt-3 h-10 rounded-full border border-line px-4 text-sm"
-          >
-            {copied ? "Copiato" : "Copia link"}
-          </button>
-        </>
-      ) : (
-        <p className="mt-1 text-sm text-muted">La pagina si sta aprendo.</p>
-      )}
-    </div>
-  );
-}
-
 function IntegrationDetailDialog({
   open,
   clinicId,
@@ -1032,8 +1266,6 @@ function IntegrationDetailDialog({
             </p>
           </div>
         </>
-      ) : integration.provider === "public_page" ? (
-        <PublicPageDetail account={integration.account} />
       ) : (
         <p className="text-sm text-muted">Nessun dettaglio.</p>
       )}
@@ -1067,6 +1299,7 @@ export function SettingsView({
   specialists = [],
   assets = [],
   integrations = [],
+  bots = [],
   onCreatedChat,
 }: {
   clinicId: string;
@@ -1085,8 +1318,10 @@ export function SettingsView({
   specialists?: Specialist[];
   assets?: ClinicAsset[];
   integrations?: ClinicIntegration[];
+  bots?: ClinicBot[];
   onCreatedChat?: (chat: CreatedChat) => void;
 }) {
+  const router = useRouter();
   const threadRef = useRef<HTMLDivElement>(null);
   const badgeRef = useRef<HTMLParagraphElement>(null);
   const [sectionLabel, setSectionLabel] = useState<string>(sections[0].label);
@@ -1312,13 +1547,22 @@ export function SettingsView({
                     <td className="px-4 py-3 text-muted">{integrationSummary(integration)}</td>
                     <td className="px-4 py-3 text-muted">{integrationStatus(integration)}</td>
                     <td className="px-4 py-3">
-                      <button
-                        type="button"
-                        onClick={() => setDetailIntegrationId(integration.id)}
-                        className="h-8 rounded-full border border-line px-3 text-sm"
-                      >
-                        Apri
-                      </button>
+                      {integration.provider === "public_page" ? (
+                        <Link
+                          href={`/clinics/${clinicId}?view=public`}
+                          className="inline-flex h-8 items-center rounded-full border border-line px-3 text-sm"
+                        >
+                          Apri
+                        </Link>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setDetailIntegrationId(integration.id)}
+                          className="h-8 rounded-full border border-line px-3 text-sm"
+                        >
+                          Apri
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))
@@ -1394,18 +1638,29 @@ export function SettingsView({
           open
           clinicId={clinicId}
           integrations={shownIntegrations}
+          bots={bots}
           onClose={() => setIntegrationOpen(false)}
           onOpenExisting={(integrationId) => {
             setIntegrationOpen(false);
+            const chosen = shownIntegrations.find((item) => item.id === integrationId);
+            if (chosen?.provider === "public_page") {
+              router.push(`/clinics/${clinicId}?view=public`);
+              return;
+            }
             setDetailIntegrationId(integrationId);
           }}
           onCreated={(integrationId, provider, account) => {
             if (!integrationId) return;
+            if (provider === "public_page") {
+              router.push(`/clinics/${clinicId}?view=public`);
+              router.refresh();
+              return;
+            }
             setPendingIntegration({
               id: integrationId,
               provider,
               account: account ?? "",
-              status: provider === "public_page" ? "connected" : "pending",
+              status: "pending",
               whatsapp: provider === "whatsapp" ? { creditCents: 0, messageCount: 0 } : null,
             });
             setDetailIntegrationId(integrationId);

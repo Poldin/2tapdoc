@@ -80,6 +80,10 @@ body {
   height: 10px;
 }
 
+.thread-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
 .thread-scroll::-webkit-scrollbar-thumb {
   border: 3px solid transparent;
   border-radius: 999px;

@@ -7,6 +7,7 @@ import { getSessionUser } from "@/lib/auth/session";
 import { linkWhatsAppNumber, readClinicWhatsApp, subscribeWhatsApp, syncWhatsAppHistory } from "@/lib/meta-whatsapp";
 import { withClinicUser } from "@/lib/postgres";
 import { botGreeting, mastroWGreeting } from "@/lib/bot-greeting";
+import { pickBotName } from "@/lib/bot-names";
 import { botFaceIds, channelSymbolIds, isListed, markColorIds } from "@/lib/marks";
 import { isChatEmoji } from "@/lib/chat-emoji";
 import { loadChatThread } from "@/lib/chat-thread";
@@ -17,6 +18,8 @@ import {
   loadUserChatStates,
 } from "@/lib/clinic-frame";
 import { listedPermissions, roleSlug } from "@/lib/permissions";
+import { parsePublicPageBot, parsePublicPageDesk, type PublicPageDesk } from "@/lib/public-page-desk";
+import { euroToCents, parseClinicTokenAccount, type ClinicTokenAccount } from "@/lib/token-account";
 
 const uuidPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -118,6 +121,20 @@ export async function updateClinic(
   redirect(`/clinics/${clinicId}?view=settings`);
 }
 
+export async function loadClinicTokenAccount(
+  clinicId: string,
+): Promise<{ account?: ClinicTokenAccount; error?: string }> {
+  await requireUser();
+  if (!uuidPattern.test(clinicId)) return { error: "Studio non valido." };
+
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc("clinic_token_account", { p_clinic_id: clinicId });
+  if (error) return { error: "Non è stato possibile aggiornare l'uso." };
+  const account = parseClinicTokenAccount(data);
+  if (!account) return { error: "Non è stato possibile leggere l'uso." };
+  return { account };
+}
+
 export async function setClinicTokenBudget(
   clinicId: string,
   _state: FormState,
@@ -126,20 +143,18 @@ export async function setClinicTokenBudget(
   await requireUser();
   if (!uuidPattern.test(clinicId)) return { error: "Studio non valido." };
 
-  const raw = String(formData.get("overage") ?? "")
-    .trim()
-    .replace(/\s/g, "")
-    .replace(/\./g, "");
-  if (!/^\d+$/.test(raw)) return { error: "Indica i token extra con un numero intero." };
-  const tokens = Number(raw);
-  if (!Number.isSafeInteger(tokens) || tokens > 500_000_000) {
-    return { error: "Il budget extra può arrivare a 500 milioni di token." };
+  const mode = String(formData.get("mode") ?? "");
+  if (mode !== "disabled" && mode !== "fixed" && mode !== "unlimited") {
+    return { error: "Scegli un limite: disattivato, un importo, oppure senza limite." };
   }
+  const cents = mode === "fixed" ? euroToCents(String(formData.get("euros") ?? "")) : 0;
+  if (cents == null) return { error: "Indica il limite in euro, per esempio 20 o 20,50." };
 
   const supabase = await createClient();
   const { error } = await supabase.rpc("set_clinic_token_budget", {
     p_clinic_id: clinicId,
-    p_tokens: tokens,
+    p_mode: mode,
+    p_limit_cents: cents,
   });
   if (error) {
     const message = error.message.includes("admin")
@@ -373,28 +388,17 @@ async function botInClinic(clinicId: string, botId: string) {
   return Boolean(data);
 }
 
-export async function createBot(
+async function placeDirectBot(
   clinicId: string,
-  _state: FormState,
-  formData: FormData,
-): Promise<FormState> {
-  const user = await getSessionUser();
-  if (!user) return { error: "La sessione è scaduta. Accedi di nuovo." };
-  if (!uuidPattern.test(clinicId)) return { error: "Studio non valido." };
-  if (!(await clinicMember(clinicId, user.id))) return { error: "Non fai parte di questo studio." };
-
-  const name = String(formData.get("name") ?? "").trim();
-  const color = String(formData.get("color") ?? "");
-  const emoji = String(formData.get("emoji") ?? "");
-  if (!name || name.length > 40) return { error: "Dai un nome al bot, entro 40 caratteri." };
-  if (!isListed(markColorIds, color) || !isListed(botFaceIds, emoji)) {
-    return { error: "Scegli un colore e una faccia." };
-  }
-
+  userId: string,
+  name: string,
+  color: string,
+  emoji: string,
+): Promise<{ error: string } | { botId: string; created: CreatedChat }> {
   const supabase = await createClient();
   const { data: bot, error } = await supabase
     .from("bots")
-    .insert({ owner_user_id: user.id, name, color, shape: "rounded", emoji })
+    .insert({ owner_user_id: userId, name, color, shape: "rounded", emoji })
     .select("id")
     .single();
 
@@ -438,9 +442,10 @@ export async function createBot(
   });
   if (greetError) return { error: "Il bot è entrato, ma il saluto no." };
 
-  touchClinicShell(user.id, clinicId);
+  touchClinicShell(userId, clinicId);
   const activityAt = new Date().toISOString();
   return {
+    botId: bot.id,
     created: {
       id: chat.id,
       title: name,
@@ -469,6 +474,29 @@ export async function createBot(
       ],
     },
   };
+}
+
+export async function createBot(
+  clinicId: string,
+  _state: FormState,
+  formData: FormData,
+): Promise<FormState> {
+  const user = await getSessionUser();
+  if (!user) return { error: "La sessione è scaduta. Accedi di nuovo." };
+  if (!uuidPattern.test(clinicId)) return { error: "Studio non valido." };
+  if (!(await clinicMember(clinicId, user.id))) return { error: "Non fai parte di questo studio." };
+
+  const name = String(formData.get("name") ?? "").trim();
+  const color = String(formData.get("color") ?? "");
+  const emoji = String(formData.get("emoji") ?? "");
+  if (!name || name.length > 40) return { error: "Dai un nome al bot, entro 40 caratteri." };
+  if (!isListed(markColorIds, color) || !isListed(botFaceIds, emoji)) {
+    return { error: "Scegli un colore e una faccia." };
+  }
+
+  const placed = await placeDirectBot(clinicId, user.id, name, color, emoji);
+  if ("error" in placed) return { error: placed.error };
+  return { created: placed.created };
 }
 
 export async function updateChat(
@@ -1641,6 +1669,12 @@ export async function createIntegration(clinicId: string, _state: FormState, for
   if (!(await clinicMember(clinicId, user.id))) return { error: "Non fai parte di questo studio." };
   const provider = String(formData.get("provider") ?? "");
   if (provider !== "whatsapp" && provider !== "public_page") return { error: "Integrazione sconosciuta." };
+  const botChoice = String(formData.get("bot") ?? "new").trim() || "new";
+  if (provider === "public_page" && botChoice !== "new") {
+    if (!uuidPattern.test(botChoice) || !(await botInClinic(clinicId, botChoice))) {
+      return { error: "Scegli un bot dello studio." };
+    }
+  }
 
   const supabase = await createClient();
   const { data: rpcId, error } = await supabase.rpc("create_integration", {
@@ -1677,9 +1711,181 @@ export async function createIntegration(clinicId: string, _state: FormState, for
     if (account) integrationAccount = account;
   }
 
+  if (provider === "public_page") {
+    const emoji = botFaceIds[Math.floor(Math.random() * botFaceIds.length)] ?? "smile";
+    await supabase.rpc("set_public_page_face", { p_clinic_id: clinicId, p_emoji: emoji });
+    const linked =
+      botChoice === "new"
+        ? await placeDirectBot(clinicId, user.id, pickBotName(), "teal", emoji)
+        : { botId: botChoice };
+    if ("error" in linked) return { error: linked.error };
+    const { error: linkError } = await supabase.rpc("set_public_page_bot", {
+      p_clinic_id: clinicId,
+      p_bot_id: linked.botId,
+    });
+    if (linkError) return { error: publicPageError(linkError.message, "Non è stato possibile collegare il bot.") };
+  }
+
   revalidatePath(`/clinics/${clinicId}`);
+  touchClinicShell(user.id, clinicId);
   if (provider === "public_page" && integrationAccount) revalidatePath(`/p/${integrationAccount}`);
   return { sent: Date.now(), integrationId, integrationAccount };
+}
+
+function publicPageError(message: string, fallback: string) {
+  if (message.includes("Indirizzo già usato")) return "Questo indirizzo è già usato.";
+  if (message.includes("Indirizzo non valido")) return "Usa solo lettere minuscole, numeri e trattini.";
+  if (message.includes("Pagina non attiva")) return "La pagina pubblica non è attiva.";
+  if (message.includes("Permesso negato")) return "Non hai il permesso di modificare la pagina.";
+  if (message.includes("Volto non valido")) return "Scegli un volto tra quelli dei bot.";
+  if (message.includes("Bot non trovato")) return "Scegli un bot dello studio.";
+  if (message.includes("Descrizione troppo lunga")) return "La descrizione sta entro 600 caratteri.";
+  if (message.includes("Indirizzo troppo lungo")) return "L'indirizzo sta entro 200 caratteri.";
+  if (message.includes("Telefono non valido")) return "Controlla i numeri di telefono.";
+  if (message.includes("Troppi numeri")) return "Puoi indicare fino a 8 numeri.";
+  if (message.includes("Troppe immagini")) return "Puoi aggiungere fino a 8 foto.";
+  if (message.includes("Immagine non valida")) return "Questa foto non si può aggiungere.";
+  return fallback;
+}
+
+export async function readPublicPageDesk(
+  clinicId: string,
+): Promise<{ desk: PublicPageDesk } | { error: string }> {
+  const user = await requireUser();
+  if (!uuidPattern.test(clinicId)) return { error: "Studio non valido." };
+  if (!(await clinicMember(clinicId, user.id))) return { error: "Non fai parte di questo studio." };
+
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc("read_public_page_desk", { p_clinic_id: clinicId });
+  if (error) return { error: publicPageError(error.message, "Non riesco a leggere la pagina pubblica.") };
+  const desk = parsePublicPageDesk(data);
+  if (!desk) return { error: "La pagina pubblica non è attiva." };
+  const { data: botRow } = await supabase.rpc("read_public_page_bot", { p_clinic_id: clinicId });
+  return { desk: { ...desk, bot: parsePublicPageBot(botRow) } };
+}
+
+export async function renamePublicPage(
+  clinicId: string,
+  _state: FormState,
+  formData: FormData,
+): Promise<FormState> {
+  const user = await requireUser();
+  if (!uuidPattern.test(clinicId)) return { error: "Studio non valido." };
+  if (!(await clinicMember(clinicId, user.id))) return { error: "Non fai parte di questo studio." };
+
+  const supabase = await createClient();
+  const { data: current } = await supabase
+    .from("integrations")
+    .select("account")
+    .eq("clinic_id", clinicId)
+    .eq("provider", "public_page")
+    .maybeSingle();
+  const previous = current?.account?.trim() ?? "";
+  const { data, error } = await supabase.rpc("rename_public_page", {
+    p_clinic_id: clinicId,
+    p_slug: String(formData.get("slug") ?? ""),
+  });
+  if (error || typeof data !== "string") {
+    return { error: publicPageError(error?.message ?? "", "Non è stato possibile aggiornare l'indirizzo.") };
+  }
+
+  revalidatePath(`/clinics/${clinicId}`);
+  touchClinicShell(user.id, clinicId);
+  if (previous) revalidatePath(`/p/${previous}`);
+  revalidatePath(`/p/${data}`);
+  return { sent: Date.now(), integrationAccount: data };
+}
+
+export async function setPublicPageFace(clinicId: string, emoji: string): Promise<FormState> {
+  const user = await requireUser();
+  if (!uuidPattern.test(clinicId)) return { error: "Studio non valido." };
+  if (!(await clinicMember(clinicId, user.id))) return { error: "Non fai parte di questo studio." };
+  if (!isListed(botFaceIds, emoji)) return { error: "Scegli un volto tra quelli dei bot." };
+
+  const supabase = await createClient();
+  const { data: current } = await supabase
+    .from("integrations")
+    .select("account")
+    .eq("clinic_id", clinicId)
+    .eq("provider", "public_page")
+    .maybeSingle();
+  const { error } = await supabase.rpc("set_public_page_face", {
+    p_clinic_id: clinicId,
+    p_emoji: emoji,
+  });
+  if (error) return { error: publicPageError(error.message, "Non è stato possibile aggiornare il volto.") };
+
+  revalidatePath(`/clinics/${clinicId}`);
+  touchClinicShell(user.id, clinicId);
+  const slug = current?.account?.trim();
+  if (slug) revalidatePath(`/p/${slug}`);
+  return { sent: Date.now() };
+}
+
+async function touchPublicPage(clinicId: string, userId: string) {
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("integrations")
+    .select("account")
+    .eq("clinic_id", clinicId)
+    .eq("provider", "public_page")
+    .maybeSingle();
+  revalidatePath(`/clinics/${clinicId}`);
+  touchClinicShell(userId, clinicId);
+  const slug = data?.account?.trim();
+  if (slug) revalidatePath(`/p/${slug}`);
+}
+
+export async function setPublicPageCard(
+  clinicId: string,
+  input: { description: string; phones: string[]; address: string },
+): Promise<FormState> {
+  const user = await requireUser();
+  if (!uuidPattern.test(clinicId)) return { error: "Studio non valido." };
+  if (!(await clinicMember(clinicId, user.id))) return { error: "Non fai parte di questo studio." };
+
+  const supabase = await createClient();
+  const { error } = await supabase.rpc("set_public_page_card", {
+    p_clinic_id: clinicId,
+    p_description: input.description,
+    p_phones: input.phones,
+    p_address: input.address,
+  });
+  if (error) return { error: publicPageError(error.message, "Non è stato possibile aggiornare la scheda.") };
+  await touchPublicPage(clinicId, user.id);
+  return { sent: Date.now() };
+}
+
+export async function attachPublicPageImage(clinicId: string, path: string): Promise<FormState> {
+  const user = await requireUser();
+  if (!uuidPattern.test(clinicId)) return { error: "Studio non valido." };
+  if (!(await clinicMember(clinicId, user.id))) return { error: "Non fai parte di questo studio." };
+
+  const supabase = await createClient();
+  const { error } = await supabase.rpc("attach_public_page_image", {
+    p_clinic_id: clinicId,
+    p_path: path,
+  });
+  if (error) return { error: publicPageError(error.message, "Non è stato possibile aggiungere la foto.") };
+  await touchPublicPage(clinicId, user.id);
+  return { sent: Date.now() };
+}
+
+export async function detachPublicPageImage(clinicId: string, path: string): Promise<FormState> {
+  const user = await requireUser();
+  if (!uuidPattern.test(clinicId)) return { error: "Studio non valido." };
+  if (!(await clinicMember(clinicId, user.id))) return { error: "Non fai parte di questo studio." };
+
+  const supabase = await createClient();
+  const { error: storageError } = await supabase.storage.from("public-page").remove([path]);
+  if (storageError) return { error: "Non è stato possibile togliere la foto." };
+  const { error } = await supabase.rpc("detach_public_page_image", {
+    p_clinic_id: clinicId,
+    p_path: path,
+  });
+  if (error) return { error: publicPageError(error.message, "Non è stato possibile togliere la foto.") };
+  await touchPublicPage(clinicId, user.id);
+  return { sent: Date.now() };
 }
 
 export async function startMastroW(
@@ -1800,6 +2006,7 @@ export async function dropIntegration(
     .select("id");
   if (error || !data?.length) return { error: "Non è stato possibile rimuovere l'integrazione." };
   revalidatePath(`/clinics/${clinicId}`);
+  touchClinicShell(user.id, clinicId);
   if (existing?.provider === "public_page" && existing.account?.trim()) {
     revalidatePath(`/p/${existing.account.trim()}`);
   }

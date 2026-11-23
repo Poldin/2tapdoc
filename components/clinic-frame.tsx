@@ -37,6 +37,7 @@ export async function ClinicFrame({
       clinicPeople={frame.people}
       myBots={frame.myBots}
       recency={frame.recency}
+      publicPage={frame.publicPage}
     >
       {children}
     </ClinicShell>

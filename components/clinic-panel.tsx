@@ -4,6 +4,7 @@ import { AgendaView, type AgendaAppointment, type AgendaBlock, type AgendaLane }
 import { ChatThread } from "@/components/chat-thread-panel";
 import { PatientPage } from "@/components/patient-page";
 import { PatientsView } from "@/components/patients-view";
+import { PublicPageDesk } from "@/components/public-page-desk";
 import { SettingsPanel } from "@/components/settings-panel";
 import {
   type ClinicAsset,
@@ -18,6 +19,7 @@ import { clinicIdPattern, loadClinicFrame } from "@/lib/clinic-frame";
 import { loadChatThread } from "@/lib/chat-thread";
 import { asPatient, type PatientRecord } from "@/lib/patients";
 import { parseClinicTokenAccount } from "@/lib/token-account";
+import { parseClinicBots } from "@/lib/public-page-desk";
 import { createClient } from "@/lib/supabase/server";
 
 type SeatBot = { id: string; name: string; color: string; emoji: string };
@@ -58,9 +60,10 @@ export async function ClinicPanel({
   const agendaOpen = view === "agenda";
   const patientsOpen = view === "patients";
   const settingsOpen = view === "settings";
-  const chatId = !agendaOpen && !patientsOpen && !settingsOpen && chat && clinicIdPattern.test(chat) ? chat : null;
+  const publicOpen = view === "public";
+  const chatId = !agendaOpen && !patientsOpen && !settingsOpen && !publicOpen && chat && clinicIdPattern.test(chat) ? chat : null;
 
-  if (!agendaOpen && !patientsOpen && !settingsOpen && !chatId) {
+  if (!agendaOpen && !patientsOpen && !settingsOpen && !publicOpen && !chatId) {
     const path = await landingPath(user.id, id);
     if (path) redirect(path);
     return null;
@@ -193,6 +196,34 @@ export async function ClinicPanel({
     return <PatientsView clinicId={id} patients={patients} canWrite={canWritePatients} />;
   }
 
+  if (publicOpen) {
+    const { data: integration } = await supabase
+      .from("integrations")
+      .select("id, status")
+      .eq("clinic_id", id)
+      .eq("provider", "public_page")
+      .maybeSingle();
+    if (!integration || integration.status !== "connected") redirect(`/clinics/${id}?view=settings`);
+    const { data: mine } = await supabase
+      .from("memberships")
+      .select("clinic_role_id, clinic_roles(is_admin)")
+      .eq("clinic_id", id)
+      .eq("user_id", user.id)
+      .maybeSingle();
+    const mineRole = mine?.clinic_roles as { is_admin: boolean } | { is_admin: boolean }[] | null;
+    const admin = Boolean((Array.isArray(mineRole) ? mineRole[0] : mineRole)?.is_admin);
+    let canManage = admin;
+    if (!admin && mine?.clinic_role_id) {
+      const { data: perms } = await supabase
+        .from("clinic_role_permissions")
+        .select("permission_key")
+        .eq("clinic_role_id", mine.clinic_role_id)
+        .eq("permission_key", "integrations.manage");
+      canManage = Boolean(perms?.length);
+    }
+    return <PublicPageDesk clinicId={id} integrationId={integration.id} canManage={canManage} />;
+  }
+
   if (settingsOpen) {
     const settings = await loadSettings(id, user.id);
     return (
@@ -210,6 +241,7 @@ export async function ClinicPanel({
         specialists={settings.specialists}
         assets={settings.assets}
         integrations={settings.integrations}
+        bots={settings.bots}
         canManageIntegrations={settings.canManageIntegrations}
         webhookVerifyToken={process.env.META_WEBHOOK_VERIFY_TOKEN?.trim() ?? ""}
         tokenAccount={settings.tokenAccount}
@@ -241,6 +273,7 @@ async function loadSettings(clinicId: string, userId: string) {
     { data: objectRows },
     { data: integrationRows },
     { data: tokenAccountRaw },
+    { data: clinicBots },
   ] = await Promise.all([
     supabase
       .from("memberships")
@@ -271,6 +304,7 @@ async function loadSettings(clinicId: string, userId: string) {
       .eq("clinic_id", clinicId)
       .order("created_at"),
     supabase.rpc("clinic_token_account", { p_clinic_id: clinicId }),
+    supabase.rpc("list_clinic_bots", { p_clinic_id: clinicId }),
   ]);
   const userIds = [...new Set((memberRows ?? []).map((row) => row.user_id as string))];
   const { data: profileRows } =
@@ -404,6 +438,7 @@ async function loadSettings(clinicId: string, userId: string) {
     specialists,
     assets,
     integrations,
+    bots: parseClinicBots(clinicBots),
     tokenAccount: parseClinicTokenAccount(tokenAccountRaw),
     ...flags,
   };

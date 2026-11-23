@@ -2,6 +2,7 @@ export type ClinicRecency = {
   agendaAt: string | null;
   patientsAt: string | null;
   settingsAt: string | null;
+  publicAt: string | null;
 };
 
 const cookieName = "clinic_view";
@@ -10,9 +11,10 @@ export const emptyClinicRecency: ClinicRecency = {
   agendaAt: null,
   patientsAt: null,
   settingsAt: null,
+  publicAt: null,
 };
 
-type Entry = { a?: unknown; p?: unknown; s?: unknown };
+type Entry = { a?: unknown; p?: unknown; s?: unknown; u?: unknown };
 
 function asIso(value: unknown) {
   return typeof value === "string" && value.length >= 20 ? value : null;
@@ -20,7 +22,12 @@ function asIso(value: unknown) {
 
 function fromEntry(entry: Entry | undefined): ClinicRecency {
   if (!entry || typeof entry !== "object") return emptyClinicRecency;
-  return { agendaAt: asIso(entry.a), patientsAt: asIso(entry.p), settingsAt: asIso(entry.s) };
+  return {
+    agendaAt: asIso(entry.a),
+    patientsAt: asIso(entry.p),
+    settingsAt: asIso(entry.s),
+    publicAt: asIso(entry.u),
+  };
 }
 
 export function clinicRecencyFromCookie(raw: string | undefined, clinicId: string): ClinicRecency {
@@ -53,6 +60,7 @@ function toEntry(recency: ClinicRecency): Entry {
     ...(recency.agendaAt ? { a: recency.agendaAt } : {}),
     ...(recency.patientsAt ? { p: recency.patientsAt } : {}),
     ...(recency.settingsAt ? { s: recency.settingsAt } : {}),
+    ...(recency.publicAt ? { u: recency.publicAt } : {}),
   };
 }
 
@@ -78,13 +86,18 @@ export function rememberSettings(clinicId: string): ClinicRecency {
   return remember(clinicId, "settingsAt");
 }
 
+export function rememberPublicPage(clinicId: string): ClinicRecency {
+  return remember(clinicId, "publicAt");
+}
+
 export function leadingPlace(recency: ClinicRecency, newestChatAt: string | null) {
   const floor = newestChatAt ?? "";
   const ranked = [
     recency.agendaAt && recency.agendaAt > floor ? { view: "agenda" as const, at: recency.agendaAt } : null,
     recency.patientsAt && recency.patientsAt > floor ? { view: "patients" as const, at: recency.patientsAt } : null,
     recency.settingsAt && recency.settingsAt > floor ? { view: "settings" as const, at: recency.settingsAt } : null,
-  ].filter((item): item is { view: "agenda" | "patients" | "settings"; at: string } => item !== null);
+    recency.publicAt && recency.publicAt > floor ? { view: "public" as const, at: recency.publicAt } : null,
+  ].filter((item): item is { view: "agenda" | "patients" | "settings" | "public"; at: string } => item !== null);
   ranked.sort((a, b) => b.at.localeCompare(a.at));
   return ranked[0]?.view ?? null;
 }
